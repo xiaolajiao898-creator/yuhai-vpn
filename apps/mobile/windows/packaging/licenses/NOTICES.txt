@@ -15,6 +15,13 @@
    许可证：WireGuard LLC Prebuilt Binaries License。该许可证允许把 wintun.dll
    随仅通过其公开 API 使用它的软件一起再分发。Xray 通过该 API 加载此动态库。
 
+3. Inno Setup 简体中文界面翻译
+   安装向导的简体中文文案来自 Zhenghan Yang（Kira）的翻译，提交
+   1ff90acc4ed4aee82b1cda43253243deee3daed4。
+   源码：https://github.com/kira-96/Inno-Setup-Chinese-Simplified-Translation
+   许可证：MIT。原文见后文，并安装为 licenses/LICENSE-ChineseSimplified-MIT.txt。
+   发行版 Inno Setup 6.7 不附带这份语言文件，所以随本仓库提供。
+
 本安装包当前未做代码签名。下载后 Windows SmartScreen 可能提示未知发布者。
 
 --------------------------------------------------------------------------------
@@ -484,3 +491,29 @@ Prebuilt Binaries License
    details, features, specifications, capabilities, functions, licensing
    terms, release dates, APIs, ABIs, general availability, or other
    characteristics of the Software.
+
+--------------------------------------------------------------------------------
+Inno Setup 简体中文翻译 LICENSE（MIT）
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2019 - 2020 kirakira
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

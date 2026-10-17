@@ -8,7 +8,7 @@ WireGuard 引擎代码还在，但节点列表里没有可用的 WireGuard 节�
 
 ## 在 Windows 上自己构建
 
-需要 Windows 10 或 11 x64、Git、Visual Studio 2022（「使用 C++ 的桌面开发」）、Flutter stable、Go 1.27.2、Inno Setup 6。
+需要 Windows 10 或 11 x64、Git、Visual Studio 2022（「使用 C++ 的桌面开发」）、Flutter stable、Go 1.27.2、Inno Setup 6。简体中文语言文件在 `windows/packaging/ChineseSimplified.isl`，安装好的 Inno Setup 不必再自带这份翻译。
 
 在仓库根目录：
 

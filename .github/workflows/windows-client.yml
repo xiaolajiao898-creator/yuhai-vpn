@@ -122,7 +122,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $release = 'apps/mobile/build/windows/x64/runner/Release'
-          foreach ($name in @('yuhai_vpn.exe', 'xray.exe', 'wintun.dll', 'licenses\NOTICES.txt', 'licenses\LICENSE-Xray-MPL-2.0.txt', 'licenses\LICENSE-wintun.txt')) {
+          foreach ($name in @('yuhai_vpn.exe', 'xray.exe', 'wintun.dll', 'licenses\NOTICES.txt', 'licenses\LICENSE-Xray-MPL-2.0.txt', 'licenses\LICENSE-wintun.txt', 'licenses\LICENSE-ChineseSimplified-MIT.txt')) {
             $path = Join-Path $release $name
             if (-not (Test-Path $path)) { throw "missing $path" }
           }
