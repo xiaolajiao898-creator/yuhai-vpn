@@ -377,12 +377,12 @@ void main() {
   test('Windows 上 Job Object 能在句柄关闭时结束子进程', () async {
     if (!Platform.isWindows) return;
     final supervisor = WindowsJobSupervisor();
-    final process = await Process.start('cmd.exe', ['/c', 'ping', '-n', '30', '127.0.0.1']);
+    // ping -t 不会自己结束。关掉 Job 句柄后它必须马上退出；Windows 上报的退出码可以是 0。
+    final process = await Process.start('cmd.exe', ['/c', 'ping', '-t', '127.0.0.1']);
     try {
       await supervisor.adopt(process.pid);
       await supervisor.release();
-      final code = await process.exitCode.timeout(const Duration(seconds: 10));
-      expect(code, isNot(0));
+      await process.exitCode.timeout(const Duration(seconds: 10));
     } finally {
       process.kill();
       await supervisor.release();

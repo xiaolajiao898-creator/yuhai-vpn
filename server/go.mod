@@ -1,6 +1,6 @@
 module github.com/yuhai-vpn/server
 
-go 1.26.0
+go 1.26.9
 
 // 首次拉取依赖：go mod tidy（版本以 tidy 解析结果为准）
 require (
@@ -46,7 +46,7 @@ require (
 	go.mongodb.org/mongo-driver/v2 v2.5.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
-	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
