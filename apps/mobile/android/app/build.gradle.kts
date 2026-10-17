@@ -1,0 +1,158 @@
+import java.net.URI
+import java.io.File
+import java.security.KeyStore
+import java.security.cert.X509Certificate
+import java.util.Base64
+import java.security.MessageDigest
+
+// 多协议候选版：独立包名与名称，和正式版并存安装、互不覆盖。仅由构建脚本设置。
+val multiprotoCandidate = System.getenv("YH_CANDIDATE") == "multiproto"
+// Xray 内核（AndroidLibXrayLite v26.9.9，LGPL-3.0，预编译 AAR）；构建前核对 SHA-256。
+val xrayAar = "libs/libv2ray.aar"
+val xrayAarSha256 = "9ecf4c921568d8f4cb8550d3bafe08ff6f1d1984f45a6ad183dcdf52ee9302de"
+
+plugins {
+    id("com.android.application")
+    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    id("dev.flutter.flutter-gradle-plugin")
+}
+
+android {
+    namespace = "com.yuhai.yuhai_vpn"
+    compileSdk = flutter.compileSdkVersion
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    defaultConfig {
+        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
+        applicationId = "com.yuhai.yuhai_vpn"
+        // You can update the following values to match your application needs.
+        // For more information, see: https://flutter.dev/to/review-gradle-config.
+        minSdk = maxOf(flutter.minSdkVersion, 26)
+        targetSdk = flutter.targetSdkVersion
+        // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION
+        // is added automatically by Flutter. (https://developer.android.com/studio/build/configure-apk-splits#configure-APK-versions)
+        // You can force using the value of versionCode by specifying the `-P force-version-code-ignoring-abi=true`
+        // flag during build.
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        manifestPlaceholders["appLabel"] = if (multiprotoCandidate) "宇海多协议测试版" else "宇海"
+        if (multiprotoCandidate) applicationIdSuffix = ".candidate"
+    }
+
+    // 原生库在安装包里压缩存放：下载体积明显变小（官网服务器带宽有限），安装时由系统解压。
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+            // Xray 内核每个架构约 35MB。候选版只带 64 位 ARM（近年安卓真机）：Flutter 插件会自行补全
+            // abiFilters，所以这里按路径排除其余架构，而不是依赖 abiFilters。
+            if (multiprotoCandidate) excludes += listOf("lib/armeabi-v7a/**", "lib/x86_64/**", "lib/x86/**")
+        }
+    }
+
+    // 内核 AAR 自带的 geoip/geosite 数据约 28MB，本项目配置不引用（分流用网段列表），不打进安装包。
+    androidResources {
+        ignoreAssetsPatterns += listOf("!geoip.dat", "!geosite.dat", "!geoip-only-cn-private.dat")
+    }
+
+    signingConfigs {
+        create("production") {
+            val location = System.getenv("YH_ANDROID_KEYSTORE")
+            if (!location.isNullOrBlank()) storeFile = file(location)
+            storePassword = System.getenv("YH_ANDROID_STORE_PASSWORD")
+            keyAlias = System.getenv("YH_ANDROID_KEY_ALIAS")
+            keyPassword = System.getenv("YH_ANDROID_KEY_PASSWORD")
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.getByName("production")
+            isDebuggable = false
+        }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    implementation("com.wireguard.android:tunnel:1.0.20260102")
+    implementation(files(xrayAar))
+    testImplementation("junit:junit:4.13.2")
+    // 本地单元测试需要真实 org.json（安卓 SDK 里的只是占位实现）。
+    testImplementation("org.json:json:20250517")
+}
+
+// Fail before packaging: runtime checks alone can still produce an unusable or
+// accidentally unsigned release. Secrets come only from the build environment.
+val verifyReleaseSecurity by tasks.registering {
+    doLast {
+        val target = project.findProperty("target")?.toString() ?: "lib/main.dart"
+        val sourceRoot = rootProject.projectDir.parentFile
+        val targetFile = if (File(target).isAbsolute) File(target) else sourceRoot.resolve(target)
+        check(targetFile.canonicalFile == sourceRoot.resolve("lib/main.dart").canonicalFile) {
+            "Release builds must use the production lib/main.dart entry point"
+        }
+        val defines = (project.findProperty("dart-defines")?.toString() ?: "")
+            .split(',').filter { it.isNotEmpty() }.map {
+                String(Base64.getDecoder().decode(it), Charsets.UTF_8)
+            }
+        val api = defines.singleOrNull { it.startsWith("YH_API_BASE=") }
+            ?.substringAfter('=') ?: error("Release requires an explicit HTTPS YH_API_BASE")
+        val uri = runCatching { URI(api) }.getOrNull()
+        val host = uri?.host?.lowercase() ?: ""
+        check(uri != null && uri.scheme == "https" && host.contains('.') &&
+            host.split('.').all { it.matches(Regex("[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")) } &&
+            !host.matches(Regex("[0-9.]+")) &&
+            listOf(".localhost", ".local", ".test", ".invalid").none(host::endsWith) &&
+            uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null &&
+            (uri.path.isNullOrEmpty() || uri.path == "/") &&
+            (uri.port == -1 || uri.port in 1..65535)) {
+            "Release API must be an HTTPS domain without credentials, query, or fragment"
+        }
+        val signing = android.signingConfigs.getByName("production")
+        check(signing.storeFile?.isFile == true &&
+            signing.storeFile?.name != "debug.keystore" &&
+            !signing.storePassword.isNullOrBlank() &&
+            !signing.keyPassword.isNullOrBlank() &&
+            !signing.keyAlias.isNullOrBlank() && signing.keyAlias != "androiddebugkey") {
+            "Release requires a production keystore and signing environment"
+        }
+        // Inspect the certificate rather than trusting a renamed debug.keystore.
+        val password = signing.storePassword!!.toCharArray()
+        try {
+            val keyStore = KeyStore.getInstance(signing.storeFile!!, password)
+            val certificate = keyStore.getCertificate(signing.keyAlias) as? X509Certificate
+            check(certificate != null &&
+                !certificate.subjectX500Principal.name.contains("CN=Android Debug", ignoreCase = true)) {
+                "A debug signing certificate cannot be used for release"
+            }
+            certificate.checkValidity()
+        } finally { password.fill('\u0000') }
+    }
+}
+val verifyXrayCore by tasks.registering {
+    doLast {
+        val aar = file(xrayAar)
+        check(aar.isFile) { "缺少 Xray 内核 $xrayAar：请用 deploy/build-android-candidate.sh 构建（会自动下载并核对）" }
+        val digest = MessageDigest.getInstance("SHA-256").digest(aar.readBytes()).joinToString("") { "%02x".format(it) }
+        check(digest == xrayAarSha256) { "Xray 内核 AAR 的 SHA-256 不符：$digest" }
+    }
+}
+tasks.configureEach {
+    if (name == "preReleaseBuild") dependsOn(verifyReleaseSecurity)
+    if (name == "preBuild") dependsOn(verifyXrayCore)
+}
+

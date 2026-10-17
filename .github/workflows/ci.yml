@@ -1,0 +1,87 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    env:
+      TEST_DATABASE_URL: postgres://yuhai_app:yuhai_app@localhost:5432/yuhai?sslmode=disable
+      TEST_MIGRATE_DATABASE_URL: postgres://yuhai_migrator:yuhai_migrator@localhost:5432/yuhai?sslmode=disable
+      TEST_REDIS_URL: redis://localhost:6379/1
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env: { POSTGRES_DB: yuhai, POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres }
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version-file: server/go.mod }
+      - name: 迁移必须在干净库上成功
+        run: |
+          psql postgres://postgres:postgres@localhost:5432/yuhai -f server/scripts/init-dev-db.sql
+          cd server && go run github.com/pressly/goose/v3/cmd/goose@latest -dir internal/db/migrations postgres "postgres://yuhai_migrator:yuhai_migrator@localhost:5432/yuhai?sslmode=disable" up
+      - name: sqlc 生成结果必须与仓库一致
+        run: cd server && go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest diff
+      - run: cd server && go vet ./... && test -z "$(gofmt -l .)"
+      - name: 全量实库 race（禁止静默跳过）
+        working-directory: server
+        run: |
+          set -o pipefail
+          go test -count=1 -race -json ./... | tee race.json
+          python3 - <<'PY'
+          import json
+          events = [json.loads(line) for line in open('race.json')]
+          # Empty command packages are represented as package-level skips by
+          # `go test`; only a skipped test means integration coverage vanished.
+          skipped = [e for e in events if e.get('Action') == 'skip' and e.get('Test')]
+          assert not skipped, f'Integration coverage skipped: {skipped}'
+          PY
+      - name: Go 依赖漏洞扫描
+        run: cd server && go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: { name: go-security-test-log, path: server/race.json }
+  admin-web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/admin-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npm run test:api
+      - run: npm run gen && git diff --exit-code -- src/api/admin.d.ts
+      - run: npm run build
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: npm ci
+      - run: npm audit --audit-level=moderate
+      - run: npm run build
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npx --yes @redocly/cli lint api/openapi/app.yaml api/openapi/node.yaml api/openapi/admin.yaml
+  mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable }
+      - run: cd apps/mobile && flutter pub get && flutter analyze && flutter test

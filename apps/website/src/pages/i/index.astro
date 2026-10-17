@@ -1,0 +1,26 @@
+---
+// 邀请落地页 /i/{邀请码}（方案 7.2、13.4）。服务器把 /i/* 重写到本页，页面在浏览器端从路径读取邀请码。
+// 与 App 实际行为一致：App 只在用户点「粘贴邀请码」后才读剪贴板，并需用户确认绑定；
+// 本页也只在用户点「复制邀请码」时写剪贴板，不自动写、不承诺「自动识别」。
+import Base from '../../layouts/Base.astro';
+---
+<Base title="邀请 · 宇海">
+  <section class="page-head">
+    <div class="wrap">
+      <span class="kicker">邀请</span>
+      <h1>朋友邀请你使用宇海</h1>
+      <p>邀请码</p>
+      <div class="invite-code" id="invite-code">——————</div>
+      <div class="actions" style="margin-top:18px">
+        <button class="btn btn-outline" type="button" id="invite-copy" hidden>复制邀请码</button>
+        <a class="btn btn-primary" href="/download/">前往下载</a>
+      </div>
+      <ol class="invite-steps">
+        <li>下载并安装宇海，用你自己的 USDT 地址注册。</li>
+        <li>打开 App 的「邀请」页，点「粘贴邀请码」或手动输入，确认绑定。</li>
+        <li>绑定需在注册后 72 小时内、首次付款之前完成，绑定后不能更改。</li>
+      </ol>
+      <p id="invite-note" style="margin-top:14px;font-size:14px" hidden>已复制。邀请奖励以 App 内当期活动规则为准；没有进行中的活动时不发放奖励。</p>
+    </div>
+  </section>
+</Base>

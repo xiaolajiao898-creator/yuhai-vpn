@@ -1,0 +1,1474 @@
+openapi: 3.1.0
+info:
+  title: 宇海加密VPN App API
+  version: 1.0.0
+  description: |
+    App 与后端的契约（方案第 11 章）。契约先行：任何接口变更先改本文件，再生成代码。
+    - 金额一律字符串，最多 6 位小数；流量为整数字节；时间为 RFC 3339 UTC。
+    - 成功响应 `{ data, request_id }`，失败响应 `{ error: { code, message, details }, request_id }`。
+    - 错误码 5 位：前 3 位 = HTTP 状态码。完整表见方案 11.7。
+    - `x-auth-level`：S0 免登录；S1 访问令牌；S2 令牌 + 设备签名 + nonce；S2-self 请求体携带公钥并自签。
+    - `x-idempotent: true` 的接口必须携带 `Idempotency-Key`。
+servers:
+  - url: https://api.example.net
+    description: 生产（经 CDN/WAF；另有签名的备用域名清单）
+  - url: http://localhost:8080
+    description: 本地
+
+tags:
+  - { name: system }
+  - { name: auth }
+  - { name: account }
+  - { name: devices }
+  - { name: plans }
+  - { name: orders }
+  - { name: ledger }
+  - { name: nodes }
+  - { name: connect }
+  - { name: invite }
+  - { name: announcements }
+
+paths:
+  /app/version:
+    get:
+      tags: [system]
+      operationId: getAppVersion
+      x-auth-level: S0
+      summary: 已发布且发布时间已到的最新版本；没有正式版本返回 404（CDN 缓存 5 分钟）
+      parameters:
+        - { name: platform, in: query, required: true, schema: { $ref: '#/components/schemas/Platform' } }
+        - { name: current_code, in: query, schema: { type: integer, minimum: 0, maximum: 2147483647, default: 0 }, description: 当前安装版本号；0表示未知且不计算强制升级，正数按最低支持版本计算 force_update }
+      responses:
+        '200': { $ref: '#/components/responses/AppVersion' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/bootstrap:
+    get:
+      tags: [system]
+      operationId: getBootstrap
+      x-auth-level: S0
+      summary: 离线 Ed25519 签名的引导配置：备用域名、证书 pin、功能开关、客服入口
+      responses:
+        '200': { $ref: '#/components/responses/Bootstrap' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      x-auth-level: S2-self
+      x-idempotent: true
+      summary: 创建匿名账户（无手机号/邮箱）。邀请码无效时仍成功，invite_bound=false
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: 注册成功。账户密钥仅此一次返回；响应 Cache-Control no-store
+          headers: { Cache-Control: { schema: { type: string, const: no-store } } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/RegisterResult' } }
+        '404': { description: 幂等重放超过 10 分钟（40401），引导恢复账户, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: device_uid 已存在（40901）或幂等键冲突, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/restore:
+    post:
+      tags: [auth]
+      operationId: restore
+      x-auth-level: S2-self
+      summary: 使用账户密钥在新设备登录
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RestoreRequest' }
+      responses:
+        '200':
+          description: 成功，返回令牌（不再返回账户密钥）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/RestoreResult' } }
+        '401': { description: 账户密钥无效（40104，不区分原因）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 设备已满（40902），details 含 restore_ticket 与 devices, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/restore/replace-device:
+    post:
+      tags: [auth]
+      operationId: restoreReplaceDevice
+      x-auth-level: S2-self
+      x-idempotent: true
+      summary: 恢复时设备已满，移除一台后继续
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/DeviceInfo'
+                - type: object
+                  required: [restore_ticket, remove_device_id]
+                  properties:
+                    restore_ticket: { type: string }
+                    remove_device_id: { type: string }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/RestoreResult' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/address/register:
+    post:
+      tags: [auth]
+      operationId: registerWithAddress
+      x-auth-level: S2-self
+      x-idempotent: true
+      summary: 用自己的 TRON（TRC20）地址 + 自设密码注册
+      description: >-
+        账号就是用户自己的 TRON 地址，不返回账户密钥。地址只存 HMAC 查找键与加密副本。
+        同一地址只能注册一次（40909）。密码至少 8 位且同时包含字母和数字。幂等语义同 /v1/auth/register。
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddressRegisterRequest' }
+      responses:
+        '201':
+          description: 注册成功并登录当前设备
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/AddressRegisterResult' } }
+        '409': { description: 地址已注册（40909）或幂等键冲突（40901）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/address/login:
+    post:
+      tags: [auth]
+      operationId: loginWithPassword
+      x-auth-level: S2-self
+      summary: 地址 + 密码登录到当前设备
+      description: 地址未注册与密码错误返回同一个 40113。按 IP 与按地址分别限流。设备已满时与 /v1/auth/restore 相同返回 40902 + restore_ticket。
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordLoginRequest' }
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/RestoreResult' } }
+        '401': { description: 地址或密码错误（40113）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 设备已满（40902）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/password-reset/start:
+    post:
+      tags: [auth]
+      operationId: startPasswordReset
+      x-auth-level: S0
+      summary: 忘记密码：发起找回，获取转账地址与精确金额
+      description: >-
+        返回官方收款地址与本次挑战的精确 TRX 金额（1 TRX + 随机零头），30 分钟内有效。
+        用户须从注册地址转出恰好该金额。未配置官方地址时返回 50303。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [address]
+              properties:
+                address: { type: string, description: 注册时的 TRON 地址 }
+      responses:
+        '200':
+          description: 挑战已创建
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/ResetStartResult' } }
+        '404': { description: 地址未注册（40401）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/password-reset/complete:
+    post:
+      tags: [auth]
+      operationId: completePasswordReset
+      x-auth-level: S2-self
+      summary: 忘记密码：链上确认转账后设置新密码并登录当前设备
+      description: >-
+        还没查到转账时返回 40910，客户端每隔几秒重试。成功后旧设备全部下线、全部令牌作废，只登录发起设备。
+        同一笔链上交易只能使用一次；转账必须晚于挑战创建时间且金额精确匹配。
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetCompleteRequest' }
+      responses:
+        '200':
+          description: 已重设并登录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/RestoreResult' } }
+        '409': { description: 还没查到转账（40910）或已完成/交易已使用（40901）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/account/password:
+    post:
+      tags: [account]
+      operationId: changePassword
+      x-auth-level: S2
+      summary: 修改登录密码（需要原密码）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [old_password, new_password]
+              properties:
+                old_password: { type: string }
+                new_password: { type: string, minLength: 8, maxLength: 128 }
+      responses:
+        '200': { description: 已修改, content: { application/json: { schema: { $ref: '#/components/schemas/Envelope' } } } }
+        '401': { description: 原密码错误（40113）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/refresh:
+    post:
+      tags: [auth]
+      operationId: refreshToken
+      x-auth-level: S2
+      summary: 轮换刷新令牌。旧令牌重放 → 整个令牌族作废（40103）
+      parameters:
+        - $ref: '#/components/parameters/DeviceId'
+        - $ref: '#/components/parameters/Timestamp'
+        - $ref: '#/components/parameters/Nonce'
+        - $ref: '#/components/parameters/Signature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties: { refresh_token: { type: string } }
+      responses:
+        '200':
+          description: 新令牌对
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/Tokens' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      x-auth-level: S2
+      x-idempotent: true
+      summary: 退出当前设备（设备记录一并移除）
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '204': { description: 已退出 }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/me:
+    get:
+      tags: [account]
+      operationId: getMe
+      x-auth-level: S1
+      summary: 首页聚合：权益、余额、待支付订单、安全提醒、公告未读数
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/Me' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/account/backup-ack:
+    post:
+      tags: [account]
+      operationId: acknowledgeBackup
+      x-auth-level: S2
+      x-idempotent: true
+      summary: 标记账户密钥已备份
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '204': { description: OK }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/account/secret/reset:
+    post:
+      tags: [account]
+      operationId: resetAccountSecret
+      x-auth-level: S2
+      x-idempotent: true
+      summary: 重置账户密钥（客户端先完成生物认证）。其他设备与全部令牌失效
+      description: |
+        账户密钥是这套匿名账户唯一的凭证：谁拿到它谁就是账户主人。重置就是**换锁**，
+        因此这里做的事比「生成一个新字符串」多：
+
+        - `users.secret_lookup` 换成新密钥的 HMAC，旧密钥立刻在 `POST /v1/auth/restore` 上失效（40104）。
+        - `users.secret_version` +1。访问令牌里带着签发时的版本号，鉴权中间件逐个请求比对，
+          所以**全部旧访问令牌当场失效**（40108）——不需要也没有「令牌黑名单」。
+        - 本账户其余 ACTIVE 设备全部下线（连接凭证一并吊销），并记一条
+          `REVOKE_BY_SECRET_RESET` 绑定日志。发起设备保留，否则用户点一次重置就把自己锁在门外。
+        - 本账户**所有**登录会话（含发起设备的）作废，然后只给发起设备重新签发一对令牌。
+          响应里的 `tokens` 就是这一对，客户端必须整体替换本地令牌。
+        - `backup_acknowledged` 复位为 false：新密钥用户还没抄下来，`GET /v1/me` 应当重新提示备份。
+
+        **新密钥只在这一次响应里出现**，服务端只留 HMAC，任何人（包括后台客服）事后都查不回来。
+        幂等记录里那份副本是整体加密保存的，10 分钟后由 worker 清空；超过 10 分钟再拿同一个
+        `Idempotency-Key` 重试返回 40401，此时只能换一个新的 `Idempotency-Key` 再重置一次
+        （会再换一把密钥）——**不会**出现「同一把密钥再给你看一遍」。
+
+        错误：发起设备已被移除 40107；账户已停用 40305；同一 `Idempotency-Key` 配不同请求体，
+        或该键已被别的接口用掉，40901；每账户每天 3 次，超出 42901。
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      responses:
+        '200':
+          description: 新密钥仅此一次返回
+          headers: { Cache-Control: { schema: { type: string, const: no-store } } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [account_secret, tokens, server_time]
+                        properties:
+                          account_secret: { $ref: '#/components/schemas/AccountSecret' }
+                          tokens: { $ref: '#/components/schemas/Tokens' }
+                          server_time: { $ref: '#/components/schemas/Timestamp' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/devices:
+    get:
+      tags: [devices]
+      operationId: listDevices
+      x-auth-level: S1
+      responses:
+        '200':
+          description: 设备列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [devices, device_limit]
+                        properties:
+                          devices: { type: array, items: { $ref: '#/components/schemas/Device' } }
+                          device_limit: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/devices/{device_id}:
+    delete:
+      tags: [devices]
+      operationId: removeDevice
+      x-auth-level: S2
+      x-idempotent: true
+      summary: 移除设备（客户端先生物认证）
+      description: |
+        仅允许移除当前账户的其他设备。设备、连接凭证和登录会话在同一事务内吊销。
+        重复移除自己已移除的设备仍返回 204；不存在或属于其他账户的设备统一返回 40401。
+        当前设备返回 40001，请使用退出登录。日志使用 revoke:{device_id} 幂等键，只记录一次。
+      parameters:
+        - { name: device_id, in: path, required: true, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '204': { description: 已移除，或此前已移除 }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/devices/current/wg-key:
+    put:
+      tags: [devices]
+      operationId: putWireGuardKey
+      x-auth-level: S2
+      x-idempotent: true
+      summary: |
+        上传本设备 WireGuard 公钥；私钥永不离开设备。
+        首次上传时服务端从隧道地址池为本设备分配一个 /32 地址；重复上传同一把公钥不做任何改动。
+        换一把公钥即为轮换：地址保持不变，旧公钥立即失效（节点按清单在下一次同步中删除旧 peer）。
+        隧道地址**永不回收**：设备被移除后其地址仍占位，避免新设备拿到旧地址后收到残留 peer 的流量。
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [wg_pubkey]
+              properties: { wg_pubkey: { type: string, description: Base64 32 字节 } }
+      responses:
+        '204': { description: 已保存（首次上传、轮换、重复上传同一把公钥，均为 204） }
+        '400': { description: 40001 公钥格式非法（必须是 Base64 编码的 32 字节）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '401': { description: 40107 设备已被移除, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 40901 该公钥已被另一台设备占用, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '503': { description: 50304 隧道地址池已耗尽（需运维扩容，不是客户端错误）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/plans:
+    get:
+      tags: [plans]
+      operationId: listPlans
+      x-auth-level: S1
+      summary: 在售套餐，按类型分组
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [plans, topup]
+                        properties:
+                          plans: { type: array, items: { $ref: '#/components/schemas/Plan' } }
+                          topup:
+                            type: object
+                            required: [min, max]
+                            properties: { min: { $ref: '#/components/schemas/Amount' }, max: { $ref: '#/components/schemas/Amount' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/plans/quote:
+    post:
+      tags: [plans]
+      operationId: quotePlan
+      x-auth-level: S2
+      summary: 报价与折算明细，10 分钟有效；下单只引用 quote_id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_code]
+              properties: { plan_code: { type: string } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/Quote' } }
+        '422': { description: 套餐已下架或改价（42202）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/orders:
+    post:
+      tags: [orders]
+      operationId: createOrder
+      x-auth-level: S2
+      x-idempotent: true
+      summary: 创建套餐订单或充值订单。USDT 订单分配唯一尾数金额
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateOrderRequest' }
+      responses:
+        '201':
+          description: 订单已创建（余额支付时直接 COMPLETED）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/Order' } }
+        '402': { description: 余额不足（40201）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 待支付订单过多（40906）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '410': { description: 报价已过期或已使用（41001）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '503': { description: 收款槽位不足（50301）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    get:
+      tags: [orders]
+      operationId: listOrders
+      x-auth-level: S1
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: 订单列表（游标分页）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/Order' } }
+                          next_cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/orders/{order_no}:
+    get:
+      tags: [orders]
+      operationId: getOrder
+      x-auth-level: S1
+      summary: 订单详情（支付页每 3 秒轮询，支持 If-None-Match / 304）
+      parameters:
+        - { name: order_no, in: path, required: true, schema: { type: string } }
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          headers: { ETag: { schema: { type: string } } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/Order' } }
+        '304': { description: 状态未变化 }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/orders/{order_no}/cancel:
+    post:
+      tags: [orders]
+      operationId: cancelOrder
+      x-auth-level: S2
+      x-idempotent: true
+      parameters:
+        - { name: order_no, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: 已取消（金额锁保留到冷却期结束）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/Order' } }
+        '409': { description: 订单状态不允许（40905）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/balance/ledger:
+    get:
+      tags: [ledger]
+      operationId: listBalanceLedger
+      x-auth-level: S1
+      parameters: [ { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' } ]
+      responses:
+        '200': { $ref: '#/components/responses/LedgerPage' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/entitlements/ledger:
+    get:
+      tags: [ledger]
+      operationId: listEntitlementLedger
+      x-auth-level: S1
+      parameters: [ { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' } ]
+      responses:
+        '200': { $ref: '#/components/responses/LedgerPage' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/traffic/daily:
+    get:
+      tags: [ledger]
+      operationId: getDailyTraffic
+      x-auth-level: S1
+      summary: 当前账户每日流量（UTC 自然日）
+      description: |
+        仅查询鉴权账户。包含 UTC 当日，按日期升序补齐无流量日期，设备按数值 ID 升序。
+        同一设备跨节点的上传与下载分别汇总；已移除设备的历史流量保留。
+        by_device.bytes 是该设备当天上传与下载总和，空日 by_device 为 []。
+        字节数以及所选期间总字节数不超过 9007199254740991；异常计数返回错误，不截断或环绕。
+        响应禁止缓存。
+      parameters:
+        - { name: days, in: query, description: '查询天数，省略时为 30；仅接受单个 1 至 90 的十进制整数', schema: { type: integer, minimum: 1, maximum: 90, default: 30 } }
+      responses:
+        '200':
+          description: 每日用量与设备分布
+          headers:
+            Cache-Control: { schema: { type: string, enum: [no-store] } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [days]
+                        properties:
+                          days:
+                            type: array
+                            minItems: 1
+                            maxItems: 90
+                            items:
+                              type: object
+                              required: [date, up_bytes, down_bytes, by_device]
+                              properties:
+                                date: { type: string, format: date, description: 'UTC 自然日，YYYY-MM-DD' }
+                                up_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 }
+                                down_bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 }
+                                by_device:
+                                  type: array
+                                  items:
+                                    type: object
+                                    required: [device_id, bytes]
+                                    properties: { device_id: { type: string }, bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/nodes:
+    get:
+      tags: [nodes]
+      operationId: listNodes
+      x-auth-level: S1
+      summary: 节点列表（不含凭证）。无权节点只返回展示信息
+      description: |
+        可用表示候选线路：须为ONLINE、有启用入站、有效证书登记、同一证书的最新心跳，
+        接收时间在读取时0至90秒内且样本发送时间不早于90秒（允许最多5秒时钟超前）、配置版本大于0且快照checksum完整；不代表隧道已验证连通。
+        仅暴露启用入站与最新心跳ready_protocols的交集；缺失就绪协议或空交集为NOT_READY。
+        不再将缺少真实入站的节点替换为MOCK。无权/未准备节点不返回主机、负载和协议。
+        读取使用只读一致快照，最多1000条；超限失败，不返回不完整列表。
+        ETag覆盖返回字段及当时可用性，心跳超时即使无数据库写入也会改变版本。
+        仅允许私有缓存并每次重新验证；接口仍需登录。
+      parameters:
+        - { name: If-None-Match, in: header, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: OK
+          headers: { ETag: { schema: { type: string } } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [version, nodes]
+                        properties:
+                          version: { type: string }
+                          nodes: { type: array, items: { $ref: '#/components/schemas/Node' } }
+        '304': { description: 未变化 }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/connect/profiles:
+    post:
+      tags: [connect]
+      operationId: getConnectProfiles
+      x-auth-level: S2
+      summary: |
+        获取 1–5 个节点的连接配置（只含**本设备自己**的材料）。
+        当前仅实现 WIREGUARD 出站；客户端声明的其它协议即便节点就绪，也按
+        unavailable.reason=PROTOCOL_UNSUPPORTED 返回，绝不返回填不满的出站。
+        等级不够是**单个节点**不可用（reason=TIER），不是整体 403。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [node_ids, protocols]
+              properties:
+                node_ids: { type: array, minItems: 1, maxItems: 5, items: { type: string } }
+                protocols: { type: array, minItems: 1, items: { $ref: '#/components/schemas/Protocol' } }
+      responses:
+        '200':
+          description: OK（Cache-Control no-store）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/ConnectProfiles' } }
+        '401': { description: 40107 设备已被移除（跨用户取材料同样按此处理，不泄露设备是否存在）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '403': { description: 40301 无套餐 / 40303 流量用完 / 40305 账户不可用, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '503': { description: 所选节点全部不可用（50302），不退化成返回空列表, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/egress:
+    get:
+      tags: [connect]
+      operationId: listEgress
+      x-auth-level: S1
+      summary: |
+        出口列表（外购代理 / 自建多协议节点）。编号形如 "e123"，与 WireGuard 节点的纯数字编号区分，
+        客户端据此选择引擎（e 开头走 Xray 内核）。**不含主机、端口与任何凭据**；
+        等级不够的出口只给展示信息（locked_reason=TIER）。出口没有心跳，服务端不声称其连通性。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [egress]
+                        properties:
+                          egress: { type: array, maxItems: 1000, items: { $ref: '#/components/schemas/EgressView' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/connect/egress:
+    post:
+      tags: [connect]
+      operationId: connectEgress
+      x-auth-level: S2
+      summary: |
+        为本设备生成所选出口的完整 Xray 内核配置（含凭据，Cache-Control no-store）。
+        权益判定与 /v1/connect/profiles 同一套；设备必须属于本人且未被移除。
+        配置里 TLS 校验从不关闭；出口不支持 UDP 时 UDP 被丢弃（DNS 改走 DoH），并在 notice 里如实提示。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [egress_id]
+              properties:
+                egress_id: { type: string, pattern: '^e[1-9][0-9]*$' }
+      responses:
+        '200':
+          description: OK（Cache-Control no-store）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/EgressProfile' } }
+        '401': { description: 40107 设备已被移除, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '403': { description: 40301 无套餐 / 40302 等级不够 / 40303 流量用完 / 40305 账户不可用, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '503': { description: 50302 出口不存在、已停用或登记内容无效, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/connect/quality:
+    post:
+      tags: [connect]
+      operationId: reportConnectQuality
+      x-auth-level: S2
+      summary: 连接质量上报（仅用户开启“帮助改进连接质量”后调用）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [node_id, protocol, result]
+              properties:
+                node_id: { type: string }
+                protocol: { $ref: '#/components/schemas/Protocol' }
+                result: { type: string, enum: [OK, HANDSHAKE_TIMEOUT, AUTH_REJECTED, NETWORK_UNAVAILABLE] }
+                handshake_ms: { type: integer }
+                network_type: { type: string, enum: [WIFI, CELLULAR, OTHER] }
+      responses:
+        '204': { description: OK }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/invite:
+    get:
+      tags: [invite]
+      operationId: getInvite
+      x-auth-level: S1
+      summary: 我的邀请码、链接、统计、规则说明、可否绑定
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/InviteInfo' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/invite/bind:
+    post:
+      tags: [invite]
+      operationId: bindInvite
+      x-auth-level: S2
+      x-idempotent: true
+      summary: 绑定邀请人（手动或剪贴板）。风控拦截统一 40304
+      description: |
+        注册后 72 小时内且首次付费前，仅可绑定一次。邀请码去除两端空白后转大写。
+        相同 UUID 幂等键与相同规范化参数重试返回初次成功；同一键不同参数返回 40901。
+        每个账户 24 小时最多提交 5 次，失败和幂等重试也计入；可通过查询接口核实绑定结果。
+        绑定成功不代表已经获得奖励，奖励以实际启用的规则及发放流水为准。
+      parameters: [ { $ref: '#/components/parameters/IdempotencyKey' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code, method]
+              properties:
+                code: { type: string, minLength: 6, maxLength: 6 }
+                method: { type: string, enum: [MANUAL, CLIPBOARD] }
+      responses:
+        '200':
+          description: 已绑定，返回奖励规则文字说明（不返回邀请人账户号）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [bound, reward_description]
+                        properties: { bound: { type: boolean }, reward_description: { type: string } }
+        '404': { description: 邀请码不存在（40402）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '403': { description: 风控拦截（40304），不返回内部原因, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 40901 幂等冲突 / 40903 已绑定 / 40904 超出窗口或已付费, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '422': { description: 不能绑定自己（42201）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/invite/rewards:
+    get:
+      tags: [invite]
+      operationId: listInviteRewards
+      x-auth-level: S1
+      parameters: [ { $ref: '#/components/parameters/Limit' }, { $ref: '#/components/parameters/Cursor' } ]
+      responses:
+        '200':
+          description: 奖励记录
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [items, next_cursor]
+                        properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/InviteReward' } }
+                          next_cursor: { type: [string, 'null'] }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/announcements:
+    get:
+      tags: [announcements]
+      operationId: listAnnouncements
+      x-auth-level: S1
+      responses:
+        '200':
+          description: 公告列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items:
+                            type: array
+                            items:
+                              type: object
+                              required: [id, title, body, published_at]
+                              properties:
+                                id: { type: string }
+                                title: { type: string }
+                                body: { type: string }
+                                published_at: { $ref: '#/components/schemas/Timestamp' }
+        default: { $ref: '#/components/responses/Error' }
+
+components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: 客户端生成的 UUIDv4；同一业务操作重试时保持不变
+      schema: { type: string, format: uuid }
+    DeviceId: { name: X-Device-Id, in: header, required: true, schema: { type: string, format: uuid } }
+    Timestamp: { name: X-Timestamp, in: header, required: true, description: Unix 秒，与服务器偏差 ≤ 300 秒, schema: { type: string } }
+    Nonce: { name: X-Nonce, in: header, required: true, description: '128 bit 随机数（无填充 Base64url 22 字符）；兼容旧开发客户端的规范小写 UUID v4，10 分钟内不可重复', schema: { type: string, minLength: 22, maxLength: 36 } }
+    Signature: { name: X-Signature, in: header, required: true, description: YH1-ECDSA-P256-SHA256 签名（Base64 DER）, schema: { type: string } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
+    Cursor: { name: cursor, in: query, schema: { type: string } }
+
+  responses:
+    Error:
+      description: 错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    AppVersion:
+      description: 版本信息
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - properties: { data: { $ref: '#/components/schemas/AppVersion' } }
+    Bootstrap:
+      description: 签名的引导配置
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - properties: { data: { $ref: '#/components/schemas/Bootstrap' } }
+    LedgerPage:
+      description: 流水（游标分页）
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - properties:
+                  data:
+                    type: object
+                    required: [items, next_cursor]
+                    properties:
+                      items: { type: array, items: { $ref: '#/components/schemas/LedgerEntry' } }
+                      next_cursor: { type: [string, 'null'] }
+
+  schemas:
+    EgressView:
+      type: object
+      required: [id, name, country_code, city, region, protocol, supports_udp, available, locked_reason]
+      properties:
+        id: { type: string, pattern: '^e[1-9][0-9]*$' }
+        name: { type: string }
+        country_code: { type: string }
+        city: { type: string }
+        region: { type: string }
+        protocol: { type: string, enum: [SOCKS5, HTTP, HTTPS, SHADOWSOCKS, TROJAN, VLESS, VMESS, HYSTERIA2] }
+        supports_udp: { type: boolean }
+        available: { type: boolean }
+        locked_reason: { type: string, nullable: true, enum: [TIER, PROTOCOL_UNSUPPORTED, null] }
+    EgressProfile:
+      type: object
+      required: [egress_id, protocol, supports_udp, core, core_version, expires_at, config, notice]
+      properties:
+        egress_id: { type: string }
+        protocol: { type: string }
+        supports_udp: { type: boolean }
+        core: { type: string, enum: [xray] }
+        core_version: { type: string, example: '26.9.9' }
+        expires_at: { type: string, format: date-time }
+        config: { type: object, description: 交给 Xray 内核的完整配置（tun 入站 + 出口 + DoH + 路由），客户端原样使用 }
+        notice: { type: string, description: 能力提示（如不支持 UDP），为空表示无 }
+    Envelope:
+      type: object
+      required: [data, request_id]
+      properties:
+        data: { type: object }
+        request_id: { type: string }
+    ErrorEnvelope:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: integer, description: 5 位错误码，前 3 位 = HTTP 状态码 }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+        request_id: { type: string }
+
+    Amount:
+      type: string
+      pattern: '^[0-9]+(\.[0-9]{1,6})?$'
+      description: USDT 金额字符串，最多 6 位小数；服务端按 micro-USDT 整数解析
+      examples: ['167.604300']
+    Timestamp: { type: string, format: date-time, description: RFC 3339 UTC }
+    Platform: { type: string, enum: [ANDROID, IOS] }
+    Protocol: { type: string, enum: [MOCK, VLESS_REALITY, TROJAN, SHADOWSOCKS_2022, WIREGUARD, HYSTERIA2] }
+    AccountSecret:
+      type: string
+      pattern: '^YH-[0-9A-HJKMNP-TV-Z]{4}(-[0-9A-HJKMNP-TV-Z]{4}){4}$'
+      examples: ['YH-7KQ2-MX9R-TAHD-4PWN-3E8C']
+
+    DeviceInfo:
+      type: object
+      required: [device_uid, device_pubkey, platform, app_version]
+      properties:
+        device_uid: { type: string, format: uuid }
+        device_pubkey: { type: string, description: P-256 公钥 SPKI Base64 }
+        platform: { $ref: '#/components/schemas/DevicePlatform' }
+        model: { type: string, maxLength: 64 }
+        os_version: { type: string, maxLength: 32 }
+        app_version: { type: string, maxLength: 32, examples: ['1.0.0+100'] }
+        fingerprint_hash: { type: string, description: 设备指纹哈希，仅用于风控 }
+    DevicePlatform:
+      type: string
+      enum: [ANDROID, IOS, WINDOWS, MACOS]
+    AddressRegisterRequest:
+      allOf:
+        - $ref: '#/components/schemas/DeviceInfo'
+        - type: object
+          required: [address, password]
+          properties:
+            address: { type: string, description: TRON 地址，T 开头 34 位 Base58Check }
+            password: { type: string, minLength: 8, maxLength: 128 }
+            invite:
+              type: object
+              required: [code, method]
+              properties:
+                code: { type: string }
+                method: { type: string, enum: [APK_CHANNEL, CLIPBOARD, MANUAL] }
+    AddressRegisterResult:
+      type: object
+      required: [account_no, login_address, invite_code, invite_bound, device_id, tokens, server_time]
+      properties:
+        account_no: { type: string, description: 内部编号，客服查询用 }
+        login_address: { type: string }
+        invite_code: { type: string }
+        invite_bound: { type: boolean }
+        device_id: { type: string }
+        tokens: { $ref: '#/components/schemas/Tokens' }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
+    PasswordLoginRequest:
+      allOf:
+        - $ref: '#/components/schemas/DeviceInfo'
+        - type: object
+          required: [address, password]
+          properties:
+            address: { type: string }
+            password: { type: string }
+    ResetStartResult:
+      type: object
+      required: [challenge_id, pay_to, amount, amount_sun, expires_at]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        pay_to: { type: string, description: 官方收款 TRON 地址 }
+        amount: { type: string, description: TRX，6 位小数，须精确转账此金额, examples: ['1.004372'] }
+        amount_sun: { type: integer, format: int64 }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+    ResetCompleteRequest:
+      allOf:
+        - $ref: '#/components/schemas/DeviceInfo'
+        - type: object
+          required: [challenge_id, new_password]
+          properties:
+            challenge_id: { type: string, format: uuid }
+            new_password: { type: string, minLength: 8, maxLength: 128 }
+    RegisterRequest:
+      allOf:
+        - $ref: '#/components/schemas/DeviceInfo'
+        - type: object
+          properties:
+            invite:
+              type: object
+              required: [code, method]
+              properties:
+                code: { type: string }
+                method: { type: string, enum: [APK_CHANNEL, CLIPBOARD, MANUAL] }
+    RestoreRequest:
+      allOf:
+        - $ref: '#/components/schemas/DeviceInfo'
+        - type: object
+          required: [account_secret]
+          properties:
+            account_secret: { type: string, description: 允许大小写与有无连字符，服务端规范化 }
+    Tokens:
+      type: object
+      required: [access_token, access_expires_at, refresh_token, refresh_expires_at]
+      properties:
+        access_token: { type: string }
+        access_expires_at: { $ref: '#/components/schemas/Timestamp' }
+        refresh_token: { type: string }
+        refresh_expires_at: { $ref: '#/components/schemas/Timestamp' }
+    RegisterResult:
+      type: object
+      required: [account_no, account_secret, invite_code, invite_bound, device_id, tokens, server_time]
+      properties:
+        account_no: { type: string, pattern: '^[1-9][0-9]{9}$' }
+        account_secret: { $ref: '#/components/schemas/AccountSecret' }
+        invite_code: { type: string }
+        invite_bound: { type: boolean }
+        device_id: { type: string }
+        tokens: { $ref: '#/components/schemas/Tokens' }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
+    RestoreResult:
+      type: object
+      required: [account_no, device_id, tokens, server_time]
+      properties:
+        account_no: { type: string }
+        device_id: { type: string }
+        tokens: { $ref: '#/components/schemas/Tokens' }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
+
+    Device:
+      type: object
+      required: [id, platform, is_current, created_at]
+      properties:
+        id: { type: string }
+        display_name: { type: string }
+        platform: { $ref: '#/components/schemas/DevicePlatform' }
+        model: { type: string }
+        is_current: { type: boolean }
+        last_seen_at: { $ref: '#/components/schemas/Timestamp' }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    Entitlement:
+      type: object
+      required: [can_connect, tier, device_limit, device_count, traffic_packs]
+      properties:
+        can_connect: { type: boolean }
+        blocked_reason: { type: [string, 'null'], enum: [NO_PLAN, EXPIRED, QUOTA_EXHAUSTED, SUSPENDED, null] }
+        tier: { type: integer }
+        plan_name: { type: string }
+        expire_at: { type: [string, 'null'], format: date-time }
+        period_quota_bytes: { type: [integer, 'null'] }
+        period_used_bytes: { type: integer }
+        period_reset_at: { type: [string, 'null'], format: date-time }
+        traffic_packs:
+          type: array
+          items:
+            type: object
+            required: [id, remaining_bytes, expire_at]
+            properties:
+              id: { type: string }
+              remaining_bytes: { type: integer }
+              expire_at: { $ref: '#/components/schemas/Timestamp' }
+        device_limit: { type: integer }
+        device_count: { type: integer }
+    Me:
+      type: object
+      required: [account_no, status, backup_acknowledged, entitlement, balance, security_notices, announcements_unread, server_time]
+      properties:
+        account_no: { type: string }
+        login_address: { type: string, description: 登录用 TRON 地址；旧账户（账户密钥方式）不返回 }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, BANNED] }
+        backup_acknowledged: { type: boolean }
+        entitlement: { $ref: '#/components/schemas/Entitlement' }
+        balance: { $ref: '#/components/schemas/Amount' }
+        pending_order:
+          type: [object, 'null']
+          required: [order_no, status, expires_at]
+          properties:
+            order_no: { type: string }
+            status: { $ref: '#/components/schemas/OrderStatus' }
+            expires_at: { $ref: '#/components/schemas/Timestamp' }
+        security_notices:
+          type: array
+          items:
+            type: object
+            required: [id, type, created_at]
+            properties:
+              id: { type: string }
+              type: { type: string, enum: [NEW_DEVICE, SECRET_RESET, DEVICE_REMOVED] }
+              created_at: { $ref: '#/components/schemas/Timestamp' }
+              device_name: { type: string }
+        announcements_unread: { type: integer }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
+
+    Plan:
+      type: object
+      required: [code, name, type, tier, plan_version, list_price]
+      properties:
+        code: { type: string, examples: [PRO_12M] }
+        name: { type: string }
+        type: { type: string, enum: [TIME, TRAFFIC, DEVICE_ADDON, TOPUP] }
+        tier: { type: integer }
+        plan_version: { type: integer }
+        list_price: { $ref: '#/components/schemas/Amount' }
+        duration_days: { type: [integer, 'null'] }
+        quota_bytes: { type: [integer, 'null'] }
+        period_days: { type: [integer, 'null'] }
+        device_limit: { type: [integer, 'null'] }
+        badge: { type: [string, 'null'] }
+    Quote:
+      type: object
+      required: [quote_id, plan, change_type, list_price, credit, base_amount, lines, balance_available, expires_at]
+      properties:
+        quote_id: { type: string, format: uuid }
+        plan: { $ref: '#/components/schemas/Plan' }
+        change_type: { type: string, enum: [NEW, RENEW, TIER_CHANGE, ADDON, TRAFFIC_PACK] }
+        list_price: { $ref: '#/components/schemas/Amount' }
+        credit: { $ref: '#/components/schemas/Amount' }
+        base_amount: { $ref: '#/components/schemas/Amount', description: 已向上取整到 0.1 USDT }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [label, amount]
+            properties: { label: { type: string }, amount: { type: string, pattern: '^-?[0-9]+(\.[0-9]{1,6})?$' } }
+        new_expire_at: { type: [string, 'null'], format: date-time }
+        balance_available: { $ref: '#/components/schemas/Amount' }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+
+    OrderStatus: { type: string, enum: [PENDING, CONFIRMING, PAID, COMPLETED, EXPIRED, CANCELLED] }
+    CreateOrderRequest:
+      type: object
+      required: [order_type, pay_method]
+      properties:
+        order_type: { type: string, enum: [PLAN, TOPUP] }
+        quote_id: { type: string, format: uuid, description: order_type=PLAN 必填 }
+        amount: { $ref: '#/components/schemas/Amount', description: order_type=TOPUP 必填，0.1 USDT 精度 }
+        pay_method: { type: string, enum: [USDT_TRC20, BALANCE] }
+    AddressProof:
+      type: object
+      required: [key_id, valid_until, signature]
+      description: 资金系统对收款地址的离线 Ed25519 签名；客户端用内置公钥校验，失败不展示地址
+      properties:
+        key_id: { type: string }
+        valid_until: { type: integer, description: Unix 秒 }
+        signature: { type: string, description: Base64url }
+    Order:
+      type: object
+      required: [order_no, order_type, status, pay_method, base_amount, pay_amount, expires_at, server_time]
+      properties:
+        order_no: { type: string }
+        order_type: { type: string, enum: [PLAN, TOPUP] }
+        status: { $ref: '#/components/schemas/OrderStatus' }
+        status_hint: { type: [string, 'null'], enum: [EXCEPTION_REVIEW, null] }
+        pay_method: { type: string, enum: [USDT_TRC20, BALANCE] }
+        plan_name: { type: string }
+        base_amount: { $ref: '#/components/schemas/Amount' }
+        pay_amount: { $ref: '#/components/schemas/Amount', description: 含唯一尾数，用户到账数量必须严格等于此值 }
+        network: { type: string, enum: [TRON, MOCK] }
+        token: { type: string, const: USDT }
+        token_contract: { type: string }
+        receive_address: { type: string }
+        address_proof: { $ref: '#/components/schemas/AddressProof' }
+        chain:
+          type: [object, 'null']
+          properties:
+            tx_hash: { type: string }
+            detected_at: { $ref: '#/components/schemas/Timestamp' }
+            solidified: { type: boolean }
+        fulfillment_result: { type: [string, 'null'], enum: [FULFILLED, CREDITED_TO_BALANCE, null] }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+        paid_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
+
+    LedgerEntry:
+      type: object
+      required: [id, kind, created_at]
+      properties:
+        id: { type: string }
+        kind: { type: string, description: 例如 DEPOSIT / PURCHASE / INVITE_REWARD / ADMIN_ADJUST / EXPIRE }
+        amount: { type: string, description: 余额流水，带符号 }
+        days_delta: { type: integer, description: 完整天数，截断不足一天的部分 }
+        seconds_delta: { type: integer, description: 权益时长变化的精确秒数 }
+        bytes_delta: { type: integer }
+        devices_delta: { type: integer }
+        ref: { type: string, description: 关联订单号或奖励编号 }
+        note: { type: string }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    Node:
+      type: object
+      required: [id, name, country_code, region, available, is_recommended, protocols]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        country_code: { type: string, minLength: 2, maxLength: 2 }
+        city: { type: string }
+        region: { type: string, enum: [ASIA, EUROPE, AMERICAS, OCEANIA, OTHER] }
+        available: { type: boolean }
+        locked_reason: { type: [string, 'null'], enum: [TIER, MAINTENANCE, OFFLINE, NOT_READY, null] }
+        load: { type: [integer, 'null'], minimum: 0, maximum: 100 }
+        is_recommended: { type: boolean }
+        probe:
+          type: [object, 'null']
+          required: [host, port]
+          properties: { host: { type: string }, port: { type: integer } }
+        protocols: { type: array, items: { $ref: '#/components/schemas/Protocol' } }
+    Outbound:
+      type: object
+      required: [protocol]
+      description: |
+        按协议不同字段不同。当前服务端只会下发 WIREGUARD，
+        即 protocol/endpoint/server_public_key/address/dns/mtu 六项；
+        其余字段为后续协议预留，现阶段不会出现。
+      properties:
+        protocol: { $ref: '#/components/schemas/Protocol' }
+        server: { type: string }
+        port: { type: integer }
+        uuid: { type: string, format: uuid }
+        password: { type: string }
+        flow: { type: string }
+        sni: { type: string }
+        reality_public_key: { type: string }
+        short_id: { type: string }
+        utls_fingerprint: { type: string }
+        endpoint: { type: string, description: WireGuard host:port }
+        server_public_key: { type: string }
+        address: { type: string, description: WireGuard 隧道内地址 CIDR }
+        dns: { type: array, items: { type: string } }
+        mtu: { type: integer }
+    ConnectProfiles:
+      type: object
+      required: [expires_at, profiles, unavailable]
+      properties:
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+        profiles:
+          type: array
+          items:
+            type: object
+            required: [node_id, outbounds]
+            properties:
+              node_id: { type: string }
+              outbounds: { type: array, items: { $ref: '#/components/schemas/Outbound' } }
+        unavailable:
+          type: array
+          items:
+            type: object
+            required: [node_id, reason]
+            properties:
+              node_id: { type: string }
+              reason: { type: string, enum: [OFFLINE, TIER, MAINTENANCE, PROTOCOL_UNSUPPORTED] }
+
+    InviteInfo:
+      type: object
+      required: [invite_code, invite_url, stats, can_bind, binding_enabled, rewards_enabled, bind_status, rules]
+      properties:
+        invite_code: { type: string }
+        invite_url: { type: [string, 'null'], format: uri, description: 仅返回已配置的可信官网邀请链接 }
+        stats:
+          type: object
+          required: [invited, paid, rewards_pending, rewards_released]
+          properties:
+            invited: { type: integer }
+            paid: { type: integer }
+            rewards_pending: { type: integer, description: 待处理奖励记录数，包含审核中，不是金额 }
+            rewards_released: { type: integer, description: 已发放奖励记录数，不是金额 }
+        binding_enabled: { type: boolean, description: 绑定接口是否已启用 }
+        rewards_enabled: { type: boolean, default: false, description: 仅在邀请奖励总开关开启且存在当前有效的启用规则时为true；关闭不影响绑定与历史奖励查询，不代表个别奖励已获批 }
+        bind_status: { type: string, enum: [AVAILABLE, BOUND, PAID, EXPIRED, BLOCKED, DISABLED], description: 当前绑定入口状态，风控仍由提交接口最终判断 }
+        can_bind: { type: boolean, description: 入口已启用、账户有效且仍在 72 小时窗口内、未付费且未绑定 }
+        bind_deadline: { type: [string, 'null'], format: date-time }
+        rules: { type: string, description: 奖励规则文字说明 }
+    InviteReward:
+      type: object
+      required: [id, role, kind, status, created_at]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [INVITER, INVITEE] }
+        kind: { type: string, enum: [DAYS, TRAFFIC, BALANCE] }
+        days: { type: integer }
+        bytes: { type: integer }
+        amount: { $ref: '#/components/schemas/Amount' }
+        status: { type: string, enum: [PENDING, RELEASED, REVIEW, REJECTED] }
+        release_at: { type: [string, 'null'], format: date-time }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    AppVersion:
+      type: object
+      required: [platform, latest, min_supported_code, force_update]
+      properties:
+        platform: { $ref: '#/components/schemas/Platform' }
+        latest:
+          type: object
+          required: [version_name, version_code, published_at, notes]
+          properties:
+            version_name: { type: string }
+            version_code: { type: integer }
+            published_at: { $ref: '#/components/schemas/Timestamp' }
+            notes: { type: string }
+            download_url: { type: string, format: uri, description: Android APK / iOS TestFlight 链接 }
+            size_bytes: { type: integer }
+            sha256: { type: string }
+            cert_fingerprint_sha256: { type: string, description: Android 签名证书指纹 }
+        min_supported_code: { type: integer }
+        force_update: { type: boolean }
+    Bootstrap:
+      type: object
+      required: [issued_at, domains, pins, min_supported_code, features, signature, key_id]
+      description: 整体由离线 Ed25519 密钥签名；客户端只接受签名有效且 issued_at 比本地缓存新的配置
+      properties:
+        issued_at: { type: integer, description: Unix 秒 }
+        domains: { type: array, items: { type: string } }
+        pins: { type: array, items: { type: string, description: SPKI SHA-256 Base64 } }
+        min_supported_code: { type: integer }
+        features: { type: object, additionalProperties: { type: boolean } }
+        support_url: { type: string, format: uri }
+        key_id: { type: string }
+        signature: { type: string, description: Base64url }

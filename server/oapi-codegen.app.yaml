@@ -1,0 +1,7 @@
+package: appgen
+generate:
+  gin-server: true
+  strict-server: true
+  models: true
+  embedded-spec: true
+output: internal/httpx/gen/appgen/app.gen.go

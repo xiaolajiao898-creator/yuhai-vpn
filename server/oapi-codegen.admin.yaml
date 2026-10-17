@@ -1,0 +1,7 @@
+package: admingen
+generate:
+  gin-server: true
+  strict-server: true
+  models: true
+  embedded-spec: true
+output: internal/httpx/gen/admingen/admin.gen.go

@@ -1,0 +1,27 @@
+---
+// 生活方式横幅：有授权/生成记录的图片才显示；否则显示同尺寸的抽象静态回退（不含人物、不含文字）。
+// 手机端用 4:5 裁剪；「减少数据」偏好下只用静态回退。图片不是真实用户，也不作为任何安全证据。
+import { usableImage, lifestyleImages } from '../data/lifestyle-images';
+const { id, tone = 'sea' } = Astro.props as { id: string; tone?: 'sea' | 'dawn' | 'mist' };
+const img = usableImage(id);
+const meta = lifestyleImages.find((i) => i.id === id);
+const dev = import.meta.env.DEV;
+---
+<figure class={`lifestyle tone-${tone}`} data-image-id={id} data-image-status={img ? 'ready' : 'fallback'}>
+  {img && img.files ? (
+    <picture>
+      <source media="(prefers-reduced-data: reduce)" srcset="data:," />
+      <source media="(max-width: 720px)" type="image/avif" srcset={img.files.mobileAvif} />
+      <source media="(max-width: 720px)" type="image/webp" srcset={img.files.mobileWebp} />
+      <source type="image/avif" srcset={img.files.desktopAvif} />
+      <source type="image/webp" srcset={img.files.desktopWebp} />
+      <img src={img.files.fallbackJpg} alt={img.alt} width={img.files.width} height={img.files.height}
+           loading="lazy" decoding="async" style={`object-position:${img.crop.focal}`} />
+    </picture>
+  ) : (
+    <div class="lifestyle-fallback" role="presentation">
+      {dev && meta && <span class="lifestyle-todo">图片待授权/生成：{meta.id}（{meta.rights.status}）</span>}
+    </div>
+  )}
+  <slot />
+</figure>

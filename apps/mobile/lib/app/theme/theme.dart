@@ -1,0 +1,111 @@
+import 'package:flutter/material.dart';
+
+import 'tokens.dart';
+
+ThemeData buildDeepSeaTheme() {
+  const scheme = ColorScheme.dark(
+    surface: YhColors.bg,
+    onSurface: YhColors.ink,
+    surfaceContainerHighest: YhColors.soft,
+    primary: YhColors.accent,
+    onPrimary: YhColors.buttonInk,
+    secondary: YhColors.warn,
+    error: YhColors.danger,
+    outline: YhColors.line,
+    outlineVariant: YhColors.line,
+  );
+  const body = TextStyle(color: YhColors.moonlight, height: YhFont.lineHeight);
+  final text = TextTheme(
+    displayLarge: body.copyWith(fontSize: 40, fontWeight: FontWeight.w600),
+    headlineMedium: body.copyWith(fontSize: 28, fontWeight: FontWeight.w600),
+    titleLarge: body.copyWith(fontSize: 20, fontWeight: FontWeight.w500),
+    bodyLarge: body.copyWith(fontSize: 16),
+    bodyMedium: body.copyWith(fontSize: 14),
+    labelSmall: body.copyWith(fontSize: 12, color: YhColors.haze),
+  );
+  return ThemeData(
+    useMaterial3: true,
+    colorScheme: scheme,
+    scaffoldBackgroundColor: YhColors.abyss,
+    textTheme: text,
+    dividerColor: YhColors.reef,
+    dividerTheme: const DividerThemeData(color: YhColors.reef, thickness: 1),
+    splashFactory: NoSplash.splashFactory, // 无投影、无水波：层级只靠明度与 1px 描边
+    bottomSheetTheme: const BottomSheetThemeData(
+      backgroundColor: YhColors.current,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(YhRadius.sheet)),
+      ),
+    ),
+    appBarTheme: const AppBarTheme(
+      backgroundColor: YhColors.bg,
+      foregroundColor: YhColors.ink,
+      elevation: 0,
+      scrolledUnderElevation: 0,
+      centerTitle: false,
+      titleTextStyle: TextStyle(
+          color: YhColors.ink, fontSize: 18, fontWeight: FontWeight.w600),
+    ),
+    navigationBarTheme: NavigationBarThemeData(
+      backgroundColor: YhColors.paper,
+      indicatorColor: YhColors.soft,
+      surfaceTintColor: Colors.transparent,
+      iconTheme: WidgetStateProperty.resolveWith((states) => IconThemeData(
+          color: states.contains(WidgetState.selected)
+              ? YhColors.accent
+              : YhColors.sub)),
+      labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
+          fontSize: 12,
+          color: states.contains(WidgetState.selected)
+              ? YhColors.accent
+              : YhColors.sub)),
+    ),
+    cardTheme: CardThemeData(
+      color: YhColors.paper,
+      elevation: 0,
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+          side: const BorderSide(color: YhColors.line),
+          borderRadius: BorderRadius.circular(YhRadius.surface)),
+    ),
+    filledButtonTheme: FilledButtonThemeData(
+      style: FilledButton.styleFrom(
+        backgroundColor: YhColors.button,
+        foregroundColor: YhColors.buttonInk,
+        minimumSize: const Size.fromHeight(56),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(YhRadius.button)),
+        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+      ),
+    ),
+    inputDecorationTheme: InputDecorationTheme(
+      filled: true,
+      fillColor: YhColors.soft,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(YhRadius.listSelected),
+        borderSide: BorderSide.none,
+      ),
+    ),
+    pageTransitionsTheme: const PageTransitionsTheme(builders: {
+      TargetPlatform.android: _FadeSlideTransitions(),
+      TargetPlatform.iOS: _FadeSlideTransitions(),
+    }),
+  );
+}
+
+/// 页面转场：260 ms ease-out，16 pt 位移 + 淡入（方案 9.2 动效）。
+class _FadeSlideTransitions extends PageTransitionsBuilder {
+  const _FadeSlideTransitions();
+
+  @override
+  Widget buildTransitions<T>(PageRoute<T> route, BuildContext context, Animation<double> animation,
+      Animation<double> secondaryAnimation, Widget child) {
+    final curved = CurvedAnimation(parent: animation, curve: Curves.easeOut);
+    return FadeTransition(
+      opacity: curved,
+      child: SlideTransition(
+        position: Tween(begin: const Offset(0, 0.02), end: Offset.zero).animate(curved),
+        child: child,
+      ),
+    );
+  }
+}

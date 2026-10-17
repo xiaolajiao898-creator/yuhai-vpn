@@ -1,0 +1,15 @@
+# 已逐条核对的误报：公开 SHA-256 校验值、测试用 UUID/RFC6238 测试 TOTP/顺序字节测试密钥、USDT-TRC20 公开合约地址、设计文档示例值
+apps/mobile/android/app/build.gradle.kts:jfrog-identity-token:12
+apps/mobile/test/invite_binding_test.dart:generic-api-key:152
+server/internal/admin/crypto_test.go:generic-api-key:31
+.env.example:generic-api-key:25
+server/internal/admin/node_write_integration_test.go:generic-api-key:82
+server/internal/admin/admin_management_integration_test.go:generic-api-key:67
+server/internal/connect/profiles_integration_test.go:generic-api-key:36
+server/internal/order/order.go:generic-api-key:35
+server/internal/nodecontrol/enroll_integration_test.go:generic-api-key:122
+server/internal/nodecontrol/enroll_integration_test.go:generic-api-key:123
+docs/系统设计方案_v1.0.md:generic-api-key:2043
+docs/系统设计方案_v1.0.md:generic-api-key:2065
+docs/系统设计方案_v1.0.md:generic-api-key:2088
+docs/系统设计方案_v1.0.md:generic-api-key:2202

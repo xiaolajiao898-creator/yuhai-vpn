@@ -1,0 +1,383 @@
+openapi: 3.1.0
+info:
+  title: 宇海加密VPN 节点控制面 API
+  version: 1.4.0
+  description: |
+    节点 agent 与控制面的契约（方案 8.3–8.5、11.5）。除 enroll 外全部 mTLS；
+    节点身份来自客户端证书（服务端读取 node_id），请求体不携带节点身份。
+    被吊销或禁用的节点所有请求返回 40310。节点接口不经公网 CDN，只对节点出口 IP 开放。
+    当前实现 heartbeat；另有默认关闭的 wireguard/manifest 只读同步入口，其他路由尚未开放。心跳直接终止 TLS，拒绝转发头身份。
+    客户端证书须由专用节点 CA 签发，唯一 URI SAN 必须为
+    spiffe://yuhai.internal/node/<十进制正整数节点ID>，并匹配数据库登记的证书 DER SHA-256。
+    不接受 CN 回退。每次请求重新核验证书有效期、用途、节点状态和指纹。
+servers:
+  - url: https://node.example.internal/node/v1
+
+paths:
+  /enroll:
+    post:
+      operationId: enrollNode
+      summary: 首次部署：一次性令牌换取节点证书（令牌 24 小时有效、仅一次）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enroll_token, csr_pem, reality_public_key, wg_public_key, agent_version]
+              properties:
+                enroll_token: { type: string }
+                csr_pem: { type: string }
+                reality_public_key: { type: string }
+                wg_public_key: { type: string }
+                agent_version: { type: string }
+      responses:
+        '200':
+          description: 已签发
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [node_id, cert_pem, ca_chain_pem, cert_expires_at]
+                properties:
+                  node_id: { type: string }
+                  cert_pem: { type: string }
+                  ca_chain_pem: { type: string }
+                  cert_expires_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+
+  /cert/renew:
+    post:
+      operationId: renewCert
+      summary: 证书有效期过去 2/3 时用当前证书续期
+    description: |
+      身份完全来自 mTLS，没有令牌参与——这条路径只能延长已有身份的寿命，拿不到新身份。
+      CSR 里除公钥外一概不采用，签出的证书 URI SAN 仍是本节点。
+
+      **必须过了本次出示证书寿命的 2/3 才允许续期**，否则 40901；太早续等于允许无限量铸造证书。
+
+      换新证书后控制面立即换绑指纹，但保留 **24 小时重叠窗口**：旧指纹在窗口内仍被接受。
+      这是为了应对「续期成功但响应在回程丢了」——没有窗口，节点手里还是旧证书，从此永久失联。
+      若节点在窗口内拿着旧证书重试，重叠窗口既不推进也不延长，它手上那张始终有效。
+      吊销节点会把两个指纹一起清掉。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [csr_pem], properties: { csr_pem: { type: string } } }
+      responses:
+        '200':
+          description: 新证书
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cert_pem, cert_expires_at]
+                properties: { cert_pem: { type: string }, cert_expires_at: { type: string, format: date-time } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /config:
+    get:
+      operationId: getNodeConfig
+      summary: 入站列表、端口与 agent 运行参数
+    description: |
+      只回答「这台节点应该监听什么」。**不含任何用户凭证或密钥材料**——入站的 extra
+      就是后台写入时经严格白名单校验过的 public_params，结构上放不进私钥。
+
+      只返回 ENABLED 的入站：管理员把某条入站停用，节点下次取配置时它就消失。
+
+      `config_version` 是**配置内容的指纹，不是递增计数器**：内容不变则版本不变
+      （改了又改回去也一样），内容一变必定改变。节点用它判断「和我手上这份一样吗」。
+
+      agent 轮询节奏当前是全局固定值，不按节点配置。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/NodeConfig' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /users/snapshot:
+    get:
+      operationId: getUsersSnapshot
+      summary: 全量用户凭证（启动、每 30 分钟校验），仅含本节点所在组可用凭证
+    description: |
+      **尚未实现（第 18 轮刻意不做）。** 本接口要求下发 `proxy_secret` 明文，
+      而它在库里是信封加密的 `proxy_secret_enc`；node-api 进程当前**不加载**字段加密密钥，
+      这是它与 app-api 的一道隔离。为一个暂时没有消费方的功能去给节点控制面配上解密能力，
+      是拿确定的风险换不确定的收益——当前只支持 WIREGUARD，而 WireGuard 的 peer 分发走
+      `/node/v1/wireguard/manifest`，那条路径只涉及公钥，不需要任何解密。
+      接入 VLESS/Trojan 等协议时再一并设计密钥下放方案。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cursor, checksum, users]
+                properties:
+                  cursor: { type: string }
+                  checksum: { type: string, description: 对 users 按 credential_id 排序后的 SHA-256 }
+                  users: { type: array, items: { $ref: '#/components/schemas/UserMaterial' } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /users/events:
+    get:
+      operationId: getUserEvents
+      summary: 用户增量（每 10 秒）
+    description: |
+      **尚未实现**，原因同 `/users/snapshot`。
+      parameters:
+        - { name: after, in: query, required: true, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 1000, maximum: 1000 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [next_cursor, events]
+                properties:
+                  next_cursor: { type: string }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      required: [event_id, credential_id, present]
+                      properties:
+                        event_id: { type: string }
+                        credential_id: { type: string }
+                        present: { type: boolean, description: false = 移除 }
+                        material: { $ref: '#/components/schemas/UserMaterial' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /wireguard/manifest:
+    get:
+      operationId: getWireGuardManifest
+      summary: 取得仅含本节点有权设备公钥的短期全量清单
+      description: |
+        NODE_WG_MANIFEST_API_ENABLED 默认false，关闭时路由404。专用mTLS验证、实时证书指纹及ONLINE状态检查在读取前后执行。
+        请求不带body/query/压缩；X-Snapshot-Nonce须为一次性32位小写hex，响应原样回显。无304或缓存复用。
+        最多1000个设备，超量/无效数据失败而非截断。仅包含有效账户、设备、凭证和本组等级/剩余流量/时长符合要求的设备；
+        超过有效设备额度时该账户不进入名单。已撤销、到期、停用、耗尽的设备排除。
+        仅一个启用WIREGUARD入站；public_params严格仅含interface/public_key/config_version，后者为正int64字符串。
+        checksum为公开peer投影的SHA256；issued_at/expires_at租期最多30秒且不超过所含设备有效权益的最早终点。
+        配置同步只落私有文件，不修改内核、不下发私钥，不代表设备已断线。节点观察器须拒绝过期租期。
+      security: [{ nodeCertificate: [] }]
+      parameters:
+        - name: X-Snapshot-Nonce
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[a-f0-9]{32}$' }
+      responses:
+        '200':
+          description: 全新短期清单，Cache-Control为no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data, request_id]
+                properties:
+                  request_id: { type: string }
+                  data: { $ref: '#/components/schemas/WGLease' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /heartbeat:
+    post:
+      operationId: heartbeat
+      summary: 每 30 秒上报；持久化序号防止重复和乱序刷新心跳
+      description: |
+        请求体最多 4096 字节，拒绝未知字段、重复字段、null、查询参数及压缩请求体。
+        sequence 为每节点持久递增 int64 十进制字符串，重启和证书轮换不得归零。
+        最新相同序号且相同规范化内容返回 duplicate=true，不刷新最后心跳；
+        较旧序号或同序号不同内容返回 40901。仅保存最新回执，不声称保留全部历史。
+        新序号 sent_at 必须在服务器时间前 60 秒至后 5 秒内，且不得早于上一份上报。
+        新序号最快每 5 秒接受一次（过快返回 42901），正常上报周期为 30 秒。
+        认证和禁用检查优先于重复回执返回；数据库事务超时为 5 秒。
+        最新回执记录接受时的证书指纹，换证后的旧回执不能证明新证书已上报。
+        客户端必须先持久化序号/完整请求再发送，不确定响应仅原样重试；
+        明确40105表示该新序号未接收，可保留序号水位、放弃旧请求，下个周期用更高序号和新采样。
+        其他400/401/403/409停止并保留待核实请求，429或暂时故障间隔30秒原样重试。
+        心跳只更新在线人数、负载、版本和最后接收时间，绝不修改管理员设置的状态。
+        空 checksum / config_version=0 表示尚未应用配置；上报值不是已核实的执行回执。
+        ready_protocols 是已核对的协议集合，缺省空；非空须配正配置版本和完整checksum；仅报告的协议能进入App候选。
+        WireGuard观察器的snapshot_checksum仅为公开peer投影SHA256，不能与全协议users快照混用。
+        WireGuard online_count为最近180秒有握手的活跃peer估计，不是TCP连接数或计费凭据。
+        本版 actions 恒为空，不下发用户材料，不触发计费，不声称节点已同步。
+      security: [{ nodeCertificate: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [sequence, sent_at, agent_version, config_version, snapshot_checksum, online_count, cpu, mem, net_rx_bps, net_tx_bps]
+              properties:
+                sequence: { type: string, pattern: '^[1-9][0-9]{0,18}$', description: 不得超过 9223372036854775807 }
+                sent_at: { type: string, format: date-time, description: UTC Z 后缀，最多 6 位小数秒 }
+                agent_version: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$' }
+                config_version: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$', description: int64，0 表示尚未应用 }
+                snapshot_checksum: { type: string, pattern: '^([a-f0-9]{64})?$' }
+                cpu: { type: integer, minimum: 0, maximum: 100, description: CPU 百分比，向上取整 }
+                mem: { type: integer, minimum: 0, maximum: 100, description: 内存百分比，向上取整 }
+                net_rx_bps: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$', description: 非负 int64 比特每秒 }
+                net_tx_bps: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$', description: 非负 int64 比特每秒 }
+                online_count: { type: integer, minimum: 0, maximum: 10000000 }
+                ready_protocols:
+                  type: array
+                  maxItems: 5
+                  uniqueItems: true
+                  items: { type: string, enum: [VLESS_REALITY, TROJAN, SHADOWSOCKS_2022, WIREGUARD, HYSTERIA2] }
+                kernel: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._+ /()-]{0,63}$' }
+      responses:
+        '200':
+          description: 已接收或最新回执重复；server_time 是本次响应时间，received_at 是原接收时间
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [data, request_id]
+                properties:
+                  request_id: { type: string }
+                  data:
+                    type: object
+                    additionalProperties: false
+                    required: [accepted, duplicate, sequence, received_at, server_time, actions]
+                    properties:
+                      accepted: { type: boolean, const: true }
+                      duplicate: { type: boolean }
+                      sequence: { type: string }
+                      received_at: { type: string, format: date-time }
+                      server_time: { type: string, format: date-time }
+                      actions: { type: array, maxItems: 0, items: { type: string } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /traffic:
+    post:
+      operationId: reportTraffic
+      summary: 每 60 秒增量流量上报；report_id 幂等，重复返回 duplicate=true 且不累加
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [report_id, window_start, window_end, items]
+              properties:
+                report_id: { type: string, format: uuid }
+                window_start: { type: string, format: date-time }
+                window_end: { type: string, format: date-time }
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [credential_id, up_bytes, down_bytes]
+                    properties:
+                      credential_id: { type: string }
+                      up_bytes: { type: integer, minimum: 0 }
+                      down_bytes: { type: integer, minimum: 0 }
+      responses:
+        '200':
+          description: 已接收
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [accepted, duplicate]
+                properties: { accepted: { type: boolean }, duplicate: { type: boolean } }
+        default: { $ref: '#/components/responses/Error' }
+
+components:
+  securitySchemes:
+    nodeCertificate: { type: mutualTLS }
+  responses:
+    Error:
+      description: 错误
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, request_id]
+            properties:
+              error:
+                type: object
+                required: [code, message]
+                properties: { code: { type: integer }, message: { type: string } }
+              request_id: { type: string }
+  schemas:
+    WGLease:
+      type: object
+      additionalProperties: false
+      required: [schema, request_nonce, issued_at, expires_at, checksum, manifest]
+      properties:
+        schema: { type: integer, const: 1 }
+        request_nonce: { type: string, pattern: '^[a-f0-9]{32}$' }
+        issued_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        checksum: { type: string, pattern: '^[a-f0-9]{64}$' }
+        manifest:
+          type: object
+          additionalProperties: false
+          required: [schema, node_id, config_version, interface, public_key, listen_port, peers]
+          properties:
+            schema: { type: integer, const: 1 }
+            node_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+            config_version: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+            interface: { type: string, minLength: 1, maxLength: 15 }
+            public_key: { type: string, description: 非零32字节规范Base64公钥 }
+            listen_port: { type: integer, minimum: 1, maximum: 65535 }
+            peers:
+              type: array
+              maxItems: 1000
+              items:
+                type: object
+                additionalProperties: false
+                required: [credential_id, public_key, allowed_ips]
+                properties:
+                  credential_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                  public_key: { type: string }
+                  allowed_ips:
+                    type: array
+                    minItems: 1
+                    maxItems: 2
+                    items: { type: string, description: 私有IPv4 /32或ULA IPv6 /128规范主机前缀 }
+    UserMaterial:
+      type: object
+      required: [credential_id, proxy_uuid, proxy_secret]
+      properties:
+        credential_id: { type: string }
+        proxy_uuid: { type: string, format: uuid }
+        proxy_secret: { type: string }
+        wg_pubkey: { type: [string, 'null'] }
+        wg_address: { type: [string, 'null'] }
+    NodeConfig:
+      type: object
+      required: [config_version, inbounds, agent]
+      properties:
+        config_version: { type: integer }
+        inbounds:
+          type: array
+          items:
+            type: object
+            required: [id, protocol, port]
+            properties:
+              id: { type: string }
+              protocol: { type: string, enum: [VLESS_REALITY, TROJAN, SHADOWSOCKS_2022, WIREGUARD, HYSTERIA2] }
+              port: { type: integer }
+              sni: { type: string }
+              reality_dest: { type: string }
+              reality_short_ids: { type: array, items: { type: string } }
+              extra: { type: object, additionalProperties: true }
+        agent:
+          type: object
+          properties:
+            event_poll_seconds: { type: integer, default: 10 }
+            heartbeat_seconds: { type: integer, default: 30 }
+            traffic_report_seconds: { type: integer, default: 60 }
+            snapshot_verify_minutes: { type: integer, default: 30 }

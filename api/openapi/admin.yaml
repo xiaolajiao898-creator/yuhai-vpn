@@ -1,0 +1,2892 @@
+openapi: 3.1.0
+info:
+  title: 宇海加密VPN 管理后台 API
+  version: 1.0.0
+  description: |
+    仅管理区可达（方案 11.6、12.4）。Cookie 会话 + CSRF；写请求携带 X-CSRF-Token。
+    `x-admin-level`：L0 只读；L1 普通写；L2 二级验证（X-Step-Up-Token）；L3 双人审批（返回 202 + approval_id）。
+    开发工具 `/dev/*` 仅在 APP_ENV != production 且 DEV_TOOLS_ENABLED=true 时注册。
+servers:
+  - url: https://admin.example.internal/admin/v1
+
+paths:
+  /auth/login:
+    post:
+      operationId: adminLogin
+      x-admin-level: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [username, password], properties: { username: { type: string }, password: { type: string } } }
+      responses:
+        '200':
+          description: 返回 2 分钟有效的 mfa_ticket
+          content: { application/json: { schema: { type: object, required: [mfa_ticket], properties: { mfa_ticket: { type: string } } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /auth/mfa:
+    post:
+      operationId: adminMfa
+      x-admin-level: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [mfa_ticket, totp_code], properties: { mfa_ticket: { type: string }, totp_code: { type: string } } }
+      responses:
+        '200':
+          description: Set-Cookie yh_admin（HttpOnly; Secure; SameSite=Strict）
+          content: { application/json: { schema: { type: object, required: [csrf_token], properties: { csrf_token: { type: string } } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /auth/me:
+    get:
+      operationId: adminMe
+      x-admin-level: L0
+      responses:
+        '200':
+          description: 当前已验证管理员会话；Cache-Control no-store
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, username, permissions, csrf_token]
+                properties:
+                  id: { type: string }
+                  username: { type: string }
+                  permissions: { type: array, items: { type: string } }
+                  csrf_token: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /auth/logout:
+    post: { operationId: adminLogout, x-admin-level: L0, responses: { '204': { description: OK } } }
+
+  /step-up:
+    post:
+      operationId: stepUp
+      x-admin-level: L1
+      summary: 二级验证：签发绑定操作、目标路径及原始请求体的一次性令牌（5 分钟）
+      description: |
+        payload_hash 为 SHA-256("v1\n" + 大写 HTTP 方法 + "\n" + 完整请求路径（含 /admin/v1 和查询字符串）+ "\n" + 原始 UTF-8 请求体字节) 的小写十六进制。
+        无请求体用空字节；获取令牌后不得重新序列化或修改请求。action_code 必须是当前管理员具备的 L2/L3 权限。
+        每个动态口令仅可使用一次；与登录动态口令重复时请等待下一组。令牌与受保护写入在同一事务中消费。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action_code, payload_hash, totp_code]
+              additionalProperties: false
+              properties: { action_code: { type: string, maxLength: 64 }, payload_hash: { type: string, pattern: '^[a-f0-9]{64}$' }, totp_code: { type: string, pattern: '^[0-9]{6}$' } }
+      responses:
+        '200':
+          description: OK
+          content: { application/json: { schema: { type: object, required: [step_up_token, expires_at], properties: { step_up_token: { type: string }, expires_at: { type: string, format: date-time } } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /dashboard:
+    get:
+      operationId: getDashboard
+      x-admin-level: L0
+      summary: 后台总览（按调用者实际持有的能力分段）
+      description: |
+        总览是跨域视图：users / nodes / traffic / finance / invite 五段分属 users.read、nodes.read、
+        traffic.read、finance.read、invite.read 五个独立能力。
+
+        **只返回调用者实际持有能力的那几段，其余整块不出现**，并由 `sections` 列出本次包含了哪几段。
+        少一段与「那段是 0」必须能区分：首页上一个孤零零的 0 会被读成「今天没单」，
+        而真相可能是「没有资金查看权限」。没有的那段连查询都不发。
+        一段都没有时返回 40310，而不是一个空壳。
+
+        读取前后各核验一次持有的能力集合；读取期间集合发生变化返回 40310，不交出已缓冲的数字。
+
+        口径：计数一律字符串；流量窗口固定最近 7 天（含今天，UTC 自然日），要自定义区间走
+        GET /traffic/stats；`finance.orders_created_today` 的「今天」同样按 UTC 自然日切。
+        `users.devices_active` 是未撤销的设备记录数，不是在线会话数；
+        `nodes.by_status` 是登记状态，不代表心跳新鲜；`invite.rewards_in_review` 只数 REVIEW
+        （PENDING 归 worker，不是待办）。状态分布不硬编码枚举，数据库里有什么就返回什么。
+      responses:
+        '200': { description: 概览指标, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /users:
+    get:
+      operationId: listUsers
+      x-admin-level: L0
+      description: |
+        需要 users.read。每次请求开始与返回前检查当前会话及实时权限，业务读取使用只读一致性快照。
+        精确账户号查询，按 created_at、数字id倒序；不返回认证材料、IP或指纹哈希、风控原始JSON。
+        balance单位USDT，固定6位小数字符串；缺少余额记录返回null，不能解释为0。
+      parameters:
+        - { $ref: '#/components/parameters/UserPage' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: account_no, in: query, schema: { type: string, pattern: '^[1-9][0-9]{9}$' } }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, SUSPENDED, BANNED] } }
+      responses:
+        '200': { description: 用户列表, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedUserList' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /users/{id}:
+    get:
+      operationId: getUser
+      x-admin-level: L0
+      description: |
+        需要 users.read。仅公开业务字段与存储的套餐快照，不返回账户密钥、lookup/hash、会话或设备认证信息。
+        subscription不是合算后的连接权限，不包含流量包/设备加购；不存在记录为null。
+        无权限统一40310先于目标存在性检查；合法但不存在编号40401。
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { description: 用户详情, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedUserDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /users/{id}/ledgers:
+    get:
+      operationId: getUserLedgers
+      x-admin-level: L0
+      description: |
+        同时需要 users.read 与 users.ledgers.read。type必填；按created_at与数字id倒序，每页20默认/50最大。
+        所有编号及变化量为字符串；余额金额为带符号、固定6位小数USDT字符串。
+        仅返回白名单流水字段，不返回原始权益快照、备注、幂等键、operator_id或任何认证信息。
+        不存在用户40401；存在但无流水返回空items和total="0"。禁止额外user_id参数和未知/重复查询参数。
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/UserPage' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: type, in: query, required: true, schema: { type: string, enum: [balance, entitlement] } }
+      responses:
+        '200':
+          description: 余额或权益流水
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/ManagedBalanceLedgerPage' }
+                  - { $ref: '#/components/schemas/ManagedEntitlementLedgerPage' }
+        default: { $ref: '#/components/responses/Error' }
+  /users/{id}/devices:
+    get:
+      operationId: getUserDevices
+      x-admin-level: L0
+      description: |
+        仅需现有 users.read。查询开始与返回前实时核实当前会话和权限，设备总数与结果在同一只读一致性快照中读取。
+        仅指定用户的设备记录，按 created_at 与数据库数字 id 倒序；状态可省略，不能传空、未知或重复参数。
+        ACTIVE仅表示尚未撤销的绑定记录，不表示在线或当前可连接。created_at是此设备记录首次创建/绑定时间。
+        last_seen_at、revoked_at缺失时保留null，不补造时间；最后活跃时间可能因并发记录晚于撤销，不推断在线状态。
+        ACTIVE且revoked_at非null的矛盾数据返回脱敏内部错误；REVOKED允许历史撤销时间缺失。
+        不返回device_uid、公钥、指纹、IP、型号版本、凭据、会话或风险原文，也不联查认证表。
+        无权限先于目标存在性返回40310；合法不存在用户40401；已有用户无设备返回items=[]、total="0"。
+        本接口只读，不提供设备移除、会话操作或写入；未知、重复或越界查询参数返回40001。
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { $ref: '#/components/parameters/UserPage' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, REVOKED] } }
+      responses:
+        '200': { description: 指定用户设备分页；Cache-Control no-store, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedDevicePage' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /users/{id}/status:
+    post:
+      operationId: setUserStatus
+      x-admin-level: L2
+      x-permission: users.status
+      x-idempotent: true
+      summary: 停用 / 封禁 / 恢复账户
+      description: |
+        三个状态的实际效果**不一样**，不要混为一谈：
+
+        - `BANNED`：所有已认证的 App 接口一律拒绝（鉴权中间件直接挡掉），等于完全锁死。
+        - `SUSPENDED`：仍可登录、仍能看到自己的账户与订单，但**拿不到连接材料**（40305），
+          且会从各节点的 peer 清单中消失，节点下次同步后不再为其放行。
+        - `ACTIVE`：恢复。
+
+        **都不会立即切断已经建立的隧道。** 效果体现在「下一次取材料 / 下一次节点同步」，
+        要立刻断流必须在节点上操作。
+
+        本接口**不吊销登录会话**：SUSPENDED 下用户仍应能查看自己的账户，这是有意的；
+        BANNED 则由鉴权中间件拦截，吊销会话并不会让它更严格。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, status, reason]
+              properties:
+                operation_id: { type: string, format: uuid }
+                status: { type: string, enum: [ACTIVE, SUSPENDED, BANNED] }
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '204': { description: 已设置（重复提交同一 operation_id 同样返回 204） }
+        '404': { description: 40401 用户不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /users/{id}/adjustments:
+    post:
+      operationId: adjustUser
+      x-admin-level: L3
+      summary: 手工调整天数/流量/余额/设备数（双人审批）
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, delta, reason]
+              properties:
+                kind: { type: string, enum: [DAYS, TRAFFIC, BALANCE, DEVICES] }
+                delta: { type: string, description: DAYS/DEVICES 为整数，TRAFFIC 为字节，BALANCE 为带符号金额字符串 }
+                reason: { type: string }
+      responses: { '202': { $ref: '#/components/responses/Approval' }, default: { $ref: '#/components/responses/Error' } }
+  /users/{id}/secret-reset:
+    post:
+      operationId: resetUserSecret
+      x-admin-level: L2
+      summary: 重置账户密钥（需通过方案 12.4 的所有权核验，新密钥一次性展示）
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [ownership_proof, reason], properties: { ownership_proof: { type: object, additionalProperties: true }, reason: { type: string } } } } } }
+      responses: { '200': { description: 新密钥 }, default: { $ref: '#/components/responses/Error' } }
+
+  /devices:
+    get:
+      operationId: listDevices
+      x-admin-level: L0
+      summary: 设备总览（跨用户只读）
+      description: |
+        需要 users.read——与 GET /users/{id}/devices 同一个能力、同一套投影，区别只是不先选定用户。
+        同样的字段按用户一个一个翻本来就能看全，换个入口不构成新的暴露面，因此不另立 devices.read。
+        仍不返回 device_uid、公钥、指纹哈希与任何凭据。
+
+        设备记录不是在线会话：`last_seen_at` 是尽力而为的活跃痕迹，ACTIVE 只表示这条记录还没被撤销。
+        `user_id` 为精确匹配；查无此人与此人没有设备在这个入口上一律是空列表，
+        不用 404 区分（否则用户是否存在会变成可枚举的信号）。
+        筛选值非法一律 400，不静默忽略。按 created_at、id 倒序。
+      parameters:
+        - { $ref: '#/components/parameters/UserPage' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, REVOKED] } }
+        - { name: platform, in: query, schema: { type: string, enum: [ANDROID, IOS] } }
+        - { name: user_id, in: query, schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' } }
+      responses:
+        '200': { description: 设备总览, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedDeviceOverviewPage' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /devices/{id}:
+    delete:
+      operationId: revokeDevice
+      x-admin-level: L2
+      x-idempotent: true
+      summary: 撤销指定用户的设备记录及访问凭据（保留历史）
+      description: |
+        需要 devices.revoke（L2）；二次验证 action_code=devices.revoke，绑定 DELETE、实际完整路径和原始请求体。
+        operation_id 是请求体内的规范小写 UUIDv4 幂等键，不使用 Idempotency-Key 头；user_id 必须对应当前确认的用户。
+        凭据、全部登录会话/刷新令牌、绑定日志、节点撤销事件和成功审计同事务提交。权限先于目标存在性检查。
+        同一管理员相同 operation_id 和完全相同请求返回首次结果，不重复事件或成功审计；不同目标/资料返回409。
+        重放仍须有效会话、权限及未到期的二次验证，可使用本操作原令牌或新签发的同请求令牌；原令牌不能授权其他操作。
+        节点同步仅登记事件，不代表节点已收到或连接已实时断开。已撤销历史可保留 revoked_at=null，不伪造时间。
+        已发送请求遇到超时/网络或未知错误后，请使用精确设备 GET 核实；当前 REVOKED 不证明由本次操作造成。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceRevokeInput' } } } }
+      responses:
+        '200': { description: 已撤销或相同操作的首次结果；Cache-Control no-store, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceRevokeResult' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /users/{id}/devices/{device_id}:
+    get:
+      operationId: getUserDevice
+      x-admin-level: L0
+      summary: 精确核实指定用户的设备状态
+      description: 需要 users.read；按用户和设备编号同时查找，读取前后实时核实权限及会话。没有查询参数；不返回凭据，不推断当前在线或某次撤销操作是否成功。
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: device_id, in: path, required: true, schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' } }
+      responses:
+        '200': { description: 当前设备状态；Cache-Control no-store, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedDeviceDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /users/{id}/devices/{device_id}/receipts:
+    get:
+      operationId: getUserDeviceRevocationReceipts
+      x-admin-level: L0
+      summary: 查看该设备的撤销在各节点上的执行回执
+      description: >-
+        需要 users.read 与 devices.receipts，二者在同一数据库快照内核验，读取前后实时复核权限及会话。
+        confirmed 为真的唯一含义是：该节点上报的运行状态校验和与控制面重算的期望清单一致，
+        且该设备的全部凭据都不在其中，即「该节点上已不存在这些凭据」。
+        confirmed 为假只表示尚未确认，既不表示撤销失败，也不表示凭据仍在生效——
+        节点离线、未上报校验和、或尚未收敛都会落在这一侧。本接口不下发任何配置，也不改变任何状态。
+      parameters:
+        - { $ref: '#/components/parameters/Id' }
+        - { name: device_id, in: path, required: true, schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' } }
+      responses:
+        '200': { description: 各节点的确认情况；Cache-Control no-store, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceRevocationReceipts' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /plans:
+    get:
+      operationId: listPlans
+      x-admin-level: L0
+      x-permission: plans.read
+      summary: 套餐列表（只读，含草稿与已下架）
+      description: |
+        返回**全部**套餐——后台要看的正是 App 看不到的那些（DRAFT / OFF_SALE）。
+        字节数一律是字符串：套餐配额可以轻松超过 2^53，JSON number 在浏览器里会失精。
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, ON_SALE, OFF_SALE] } }
+      responses:
+        '200':
+          description: 按 sort_order、id 排序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedPlan' } }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createPlan
+      x-admin-level: L2
+      x-permission: plans.create
+      x-idempotent: true
+      summary: 新建套餐（恒为 DRAFT）
+      description: |
+        **新建的套餐一律是 DRAFT**，上架是另一个动作、另一个权限（`POST /plans/{id}/status`）。
+
+        不属于该类型的字段会被**拒绝**而不是忽略——静默忽略一个填错位置的字段，
+        等于让运维以为自己的设置生效了。三种类型各自要求：
+
+        - `TIME`：`duration_days` + `device_limit`，可选 `period_quota_bytes`（省略或 null = 不限量）
+        - `TRAFFIC`：`pack_bytes` + `validity_days` + `device_limit`
+        - `DEVICE_ADDON`：`extra_devices`
+
+        价格必须是 0.1 USDT 的整数倍（数据库约束）。
+      parameters:
+        - $ref: '#/components/parameters/StepUp'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanCreate' }
+      responses:
+        '201':
+          description: 已创建（同一 operation_id 重复提交返回首次结果）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedPlan' }
+        '409':
+          description: 40901 code 已被占用，或同一 operation_id 提交了不同内容
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /plans/{id}:
+    patch:
+      operationId: updatePlan
+      x-admin-level: L2
+      x-permission: plans.update
+      x-idempotent: true
+      summary: 修改套餐（实质改动会作废未结报价）
+      description: |
+        **真正的部分更新**：没出现的字段保持原样。`period_quota_bytes` 出现且为 `null`
+        表示「改成不限量」——这与「没提这个字段」是两件事，本接口按请求体里实际出现的键名区分。
+
+        **`code` 与 `plan_type` 不可修改。** code 是 App 与订单快照引用的稳定标识；
+        plan_type 一改，已经引用该套餐的订阅与订单就对不上了——那是一个新套餐，不是改。
+
+        **实质字段变化会让 `version` + 1**：tier、时长、配额、流量包、有效期、设备数、
+        加购台数、价格。未使用的报价（plan_quotes）记着报价当时的 plan_version，下单时比对，
+        不一致就让用户重新报价——**version 是保护未结报价的那道闸**。改价不 +1，
+        10 分钟内已拿到旧报价的用户就会按旧价格买到改过的套餐。
+
+        `name` / `badge` / `sort_order` 只影响展示，**不**改 version，也就不会打断进行中的下单。
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/StepUp'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlanPatch' }
+      responses:
+        '200':
+          description: 已修改；实质改动时 version 已 +1
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedPlan' }
+        '404':
+          description: 40401 套餐不存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /plans/{id}/status:
+    post:
+      operationId: setPlanStatus
+      x-admin-level: L2
+      x-permission: plans.status
+      x-idempotent: true
+      summary: 套餐上架 / 下架
+      description: |
+        契约此前把状态写成 `ON_SALE / OFF_SALE / HIDDEN`，与数据库实际允许的取值不一致；
+        已按数据库为准改正为 `DRAFT / ON_SALE / OFF_SALE`，其中 **DRAFT 不能作为目标状态**——
+        DRAFT 的含义是「从未售卖过」，而上过架的套餐可能已有报价与订单引用它。
+
+        允许的变更：DRAFT→ON_SALE、DRAFT→OFF_SALE、ON_SALE→OFF_SALE、OFF_SALE→ON_SALE。
+        重复设置为当前状态是幂等的（204）。
+
+        **下架不影响已购用户**：订阅带着自己的 tier / device_limit / 到期时间，不回查套餐。
+        下架只是不再卖，并让未结报价失效（下单时同时校验 `status='ON_SALE'`）。
+        本接口**不改 version**——状态本身已经是那道闸。
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/StepUp'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, status, reason]
+              properties:
+                operation_id: { type: string, format: uuid }
+                status: { type: string, enum: [ON_SALE, OFF_SALE] }
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '204':
+          description: 已设置（重复提交同一 operation_id 同样返回 204）
+        '404':
+          description: 40401 套餐不存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: 40901 不允许的状态变更
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /orders:
+    get:
+      operationId: listOrders
+      x-admin-level: L0
+      x-permission: finance.read
+      summary: 订单列表（只读，不会改变任何订单状态）
+      description: |
+        金额一律以字符串返回（固定 6 位小数），不用 JSON 数字——数字在各语言里会被读成浮点，
+        账目上这是不可接受的。严格拒绝未知、重复、空查询参数；读取前后实时核验会话与 finance.read。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - { name: status, in: query, schema: { type: string, enum: [PENDING, CONFIRMING, PAID, COMPLETED, CANCELLED, EXPIRED] } }
+        - { name: user_id, in: query, schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' } }
+        - { name: order_no, in: query, schema: { type: string, minLength: 1, maxLength: 24 }, description: 精确匹配，不做模糊 }
+      responses:
+        '200':
+          description: 按 created_at、id 倒序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedOrder' } }
+                  total: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /orders/{order_no}:
+    get:
+      operationId: getOrder
+      x-admin-level: L0
+      x-permission: finance.read
+      summary: 订单详情（含时间线与关联链上转账）
+      description: |
+        时间线只列**已经发生**的节点，不预测未来状态。关联链上转账仅在订单确实匹配到时出现。
+        `plan_snapshot` 是下单当时的套餐快照，与当前套餐配置可能不同——这正是它存在的意义。
+      parameters:
+        - { name: order_no, in: path, required: true, schema: { type: string, minLength: 1, maxLength: 24 } }
+      responses:
+        '200':
+          description: 订单详情
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [order, timeline, chain_transfer, plan_snapshot, observed_at]
+                properties:
+                  order: { $ref: '#/components/schemas/ManagedOrder' }
+                  timeline:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [event, at]
+                      properties:
+                        event: { type: string, enum: [CREATED, EXPIRES, PAID, COMPLETED] }
+                        at: { type: string, format: date-time }
+                  chain_transfer: { type: ['object', 'null'] }
+                  plan_snapshot: { type: ['object', 'null'] }
+                  observed_at: { type: string, format: date-time }
+        '404': { description: 40401 订单不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /chain-transfers:
+    get:
+      operationId: listChainTransfers
+      x-admin-level: L0
+      x-permission: finance.read
+      summary: 链上转账列表（只读）
+      description: |
+        不返回 `raw` 原始链上载荷：那是留给排查与取证的，体量大且内容取决于数据源，
+        没有理由出现在日常列表里。需要时直接查库。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - { name: match_status, in: query, schema: { type: string, enum: [UNPROCESSED, MATCHED, EXCEPTION] } }
+        - { name: tx_hash, in: query, schema: { type: string, minLength: 1, maxLength: 80 }, description: 精确匹配 }
+      responses:
+        '200':
+          description: 按 block_time、id 倒序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedChainTransfer' } }
+                  total: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /scan-cursors:
+    get:
+      operationId: listScanCursors
+      x-admin-level: L0
+      x-permission: finance.read
+      summary: 链上扫描游标（只读，无查询参数）
+      description: |
+        游标停滞通常意味着扫描进程出了问题——到账会整体停摆。这里只如实返回游标本身，
+        **不判断「是否落后」**：落后多少算异常取决于链与出块节奏，由运维或告警规则判断，
+        接口不替人下结论。
+      responses:
+        '200':
+          description: 每个收款地址一条，按 network、收款地址编号升序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, observed_at]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 500
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [receive_address_id, network, address, last_block_number,
+                                 last_block_time, last_success_at, updated_at]
+                      properties:
+                        receive_address_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                        network: { type: string }
+                        address: { type: string }
+                        last_block_number: { type: [string, 'null'], pattern: '^(0|[1-9][0-9]{0,18})$' }
+                        last_block_time: { type: string, format: date-time }
+                        last_success_at: { type: [string, 'null'], format: date-time }
+                        updated_at: { type: string, format: date-time }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+
+  /deposit-exceptions:
+    get:
+      operationId: listDepositExceptions
+      x-admin-level: L0
+      x-permission: finance.read
+      summary: 到账异常列表（只读）
+      description: |
+        `status` 的取值与数据库一致：OPEN、RESOLVED_TO_ORDER、RESOLVED_TO_BALANCE、REJECTED。
+
+        契约此前写的是 `OPEN / RESOLVED`，而库里从来没有 `RESOLVED` 这个值——
+        按它筛**永远返回零条且不报错**，看起来只是「没有已处理的」。已按库改正。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - { name: status, in: query, schema: { type: string, enum: [OPEN, RESOLVED_TO_ORDER, RESOLVED_TO_BALANCE, REJECTED] } }
+      responses:
+        '200':
+          description: 按 created_at、id 倒序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, reason, status, chain_transfer, suggested_order_no, resolution_note, resolved_at, created_at]
+                      properties:
+                        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                        reason: { type: string }
+                        status: { type: string, enum: [OPEN, RESOLVED_TO_ORDER, RESOLVED_TO_BALANCE, REJECTED] }
+                        chain_transfer: { $ref: '#/components/schemas/ManagedChainTransfer' }
+                        suggested_order_no: { type: [string, 'null'], description: 疑似匹配的订单，仅供人工核对，不代表系统已认定 }
+                        resolution_note: { type: [string, 'null'] }
+                        resolved_at: { type: [string, 'null'], format: date-time }
+                        created_at: { type: string, format: date-time }
+                  total: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /deposit-exceptions/{id}/resolve:
+    post:
+      operationId: resolveDepositException
+      x-admin-level: L3
+      x-permission: finance.deposit_exception
+      summary: 处置一笔到账异常（双人审批；这是第一个真正动用户钱的后台接口）
+      description: |
+        自动结算匹配不上时，转账会被丢进异常队列而**绝不自动入账到猜测的用户**。
+        这个接口是那条队列唯一的出路。三种处置：
+
+        | action | 做什么 | 必填 |
+        |---|---|---|
+        | TO_ORDER | 把这笔钱记到指定订单上，走**与自动结算完全相同的那一段**（订单 → PAID → 先入后扣 → 开通权益 → COMPLETED、转账 MATCHED、写 outbox） | `order_no` |
+        | TO_BALANCE | 把钱记进指定账户的余额（EXCEPTION_CREDIT），不牵扯任何订单 | `user_account_no` |
+        | REJECT | 不动钱，只留档说明为什么不处理（地址投毒、第三方误转等）。转账保持 EXCEPTION——它确实没有被记到任何人头上 | — |
+
+        不属于该动作的字段一律 40001 拒绝，不静默忽略：一张写着 `order_no` 的 REJECT
+        审批单，审批人多半会以为钱进了那张订单。
+
+        **返回 202 时钱还没有动。** 这是 L3：发起只建审批单，真正记账发生在另一名同样
+        持有 `finance.deposit_exception` 的管理员点通过时，且发起人不能审批自己的申请。
+
+        审批单的 payload 里固定着**发起时系统看到的事实**——转账编号、异常原因、金额
+        （固定 6 位小数字符串）。执行前重新核对：金额变了、转账已被自动结算认领走、
+        或异常已被处置过，一律 40908 拒绝执行而不是将错就错。
+
+        只处理 OPEN 的异常。已处置的绝不允许翻案——那等于第二次动钱。
+        同一笔异常同时只允许一张待审批单；换一种处置方式要先让旧单被审批或过期（40901）。
+
+        TO_ORDER 的两点提醒（两者都不阻止处置，但都会如实记进结果，供两位审批人判断）：
+        金额与订单应付不一致是常态（`AMOUNT_MISMATCH` 本来就是异常原因之一）；
+        付款地址与订单当初分配的地址可以不一致（用户复用旧地址是真实场景）。
+
+        错误：动作或必填字段不对 40001；异常/订单/账户不存在 40401；
+        异常已处置、订单状态不能接收到账、订单已关联转账 40905；
+        已有待审批单 40901；执行时与审批时不一致 40908。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [action, note]
+              properties:
+                action: { type: string, enum: [TO_ORDER, TO_BALANCE, REJECT] }
+                order_no: { type: string, maxLength: 24, description: 仅 TO_ORDER；其余动作携带即 400 }
+                user_account_no: { type: string, maxLength: 10, description: 仅 TO_BALANCE；其余动作携带即 400 }
+                note: { type: string, minLength: 1, maxLength: 500, description: 与其余 L3 动作的 reason 同一套校验；落进 deposit_exceptions.resolution_note }
+      responses: { '202': { $ref: '#/components/responses/Approval' }, default: { $ref: '#/components/responses/Error' } }
+
+  /receive-addresses:
+    get:
+      operationId: listReceiveAddresses
+      x-admin-level: L0
+      x-permission: finance.read
+      summary: 收款地址列表（只读，无查询参数）
+      description: |
+        **不返回地址签名本身**。签名是发给客户端验证地址归属的材料；运维核对只需要知道
+        「用的是哪个签名密钥、是否还在有效期内」，把签名原文放进后台列表没有用处，
+        只是多一个可泄露面。最多 500 条。
+      responses:
+        '200':
+          description: 按 status、id 升序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, observed_at]
+                properties:
+                  items:
+                    type: array
+                    maxItems: 500
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, network, address, label, sig_key_id, valid_until, status, created_at]
+                      properties:
+                        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                        network: { type: string }
+                        address: { type: string }
+                        label: { type: [string, 'null'] }
+                        sig_key_id: { type: string }
+                        valid_until: { type: string, format: date-time }
+                        status: { type: string }
+                        created_at: { type: string, format: date-time }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /receive-addresses/import:
+    post:
+      operationId: importReceiveAddresses
+      x-admin-level: L3
+      x-permission: finance.address_import
+      summary: 导入资金系统签名的地址包（服务端验签，双人审批后入库）
+      description: |
+        需要 finance.address_import（L3）；二次验证 action_code=finance.address_import。
+        **返回 202 时地址还没入库**——这只是建了一张审批单，真正写入发生在另一名管理员
+        在审批中心点通过的那一刻。
+
+        在这之前，往 receive_addresses 里加地址的唯一办法是把 `cmd/fundsign` 打出来的
+        INSERT 贴进 psql，而服务端**从未验过那个签名**。本接口第一次在服务端验签：
+        原文格式与 cmd/fundsign 一致（`yuhai-addr-v1|{network}|{address}|{valid_until_unix}`），
+        公钥取自 FUND_ADDRESS_PUBKEY_B64；未配置公钥时直接拒绝，不在没有验签能力的情况下放行。
+
+        **任何一条验不过就整包拒绝**，一条都不入库——半包导入会留下一批来路不明的地址，
+        而运维看到的只是「导入成功」。包内地址重复、network 非法、签名格式错误同理整包拒绝。
+
+        **导入的地址一律是 PAUSED，不是 ACTIVE**：刚进来的收款地址不该在没人看过之前就开始收钱。
+        要启用走 POST /receive-addresses/{id}/status。
+
+        同一个包（按规范化后的 payload_hash 判定）重复发起会复用仍然有效的那张待审批单；
+        别人已经发起过同一个包时返回 40901。审批通过时会**重新验一遍签名**并核对 payload_hash：
+        审批单可能在队列里放了一天，而执行才是让这些地址进入收款流程的那一刻。
+      parameters: [ { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason, package]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+                package:
+                  type: object
+                  additionalProperties: false
+                  required: [key_id, addresses]
+                  properties:
+                    key_id: { type: string, minLength: 1, maxLength: 32 }
+                    addresses:
+                      type: array
+                      minItems: 1
+                      maxItems: 50
+                      items:
+                        type: object
+                        additionalProperties: false
+                        required: [network, address, valid_until, signature]
+                        properties:
+                          network: { type: string, enum: [TRON, MOCK] }
+                          address: { type: string, minLength: 1, maxLength: 64 }
+                          label: { type: string, maxLength: 64 }
+                          valid_until: { type: string, format: date-time }
+                          signature: { type: string, description: base64url（无填充）的 Ed25519 签名 }
+      responses:
+        '202': { $ref: '#/components/responses/Approval' }
+        default: { $ref: '#/components/responses/Error' }
+  /receive-addresses/{id}/status:
+    post:
+      operationId: setReceiveAddressStatus
+      x-admin-level: L2
+      x-permission: finance.address_status
+      x-idempotent: true
+      summary: 启用或停用收款地址
+      description: |
+        需要 finance.address_status（L2）；二次验证 action_code=finance.address_status，
+        绑定 POST、实际完整路径和原始请求体；operation_id 幂等。
+
+        **状态只影响新订单的分配**：internal/order 的 pickAddress 只挑
+        `status='ACTIVE' AND valid_until > now()` 的地址。停用**不是**停止收款——
+        已经发给用户的收款地址照旧有效，链上扫描也照常进行；更不是删除，
+        orders / chain_transfers 都外键引用这张表。
+
+        两处拦截：
+
+        - **启用一个签名有效期已过的地址返回 40001**：pickAddress 会立刻跳过它，
+          启用成功只是个假象。
+        - **停用后一个可用地址返回 40901**，除非请求里带 `confirm_last_address: true`。
+          没有可用地址时下单直接返回 50301「支付通道暂不可用」；全站停收款是正当操作，
+          但不该在点错一个按钮时悄悄发生。
+
+        响应里的 `active_remaining` 是本次改动之后仍然可用的地址数量，原样给出不做判断。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason, status]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 255 }
+                status: { type: string, enum: [ACTIVE, PAUSED, RETIRED] }
+                confirm_last_address: { type: boolean }
+      responses:
+        '200': { description: 已更新；Cache-Control no-store, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedReceiveAddressStatus' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /node-groups:
+    get:
+      operationId: listNodeGroups
+      x-admin-level: L0
+      x-permission: nodes.read
+      summary: 节点分组列表（只读，无查询参数）
+      responses:
+        '200':
+          description: 按 min_tier、id 升序；最多 200 条，超出则拒绝返回不完整成功
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, observed_at]
+                properties:
+                  items: { type: array, maxItems: 200, items: { $ref: '#/components/schemas/ManagedNodeGroup' } }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createNodeGroup
+      x-admin-level: L1
+      x-permission: nodes.write
+      x-idempotent: true
+      summary: 新建节点分组
+      description: |
+        operation_id 为幂等键：同一 operation_id 重复提交返回首次结果，不会建出第二个分组。
+        min_tier 决定哪些等级的用户能看到该组下的节点，因此只接受 0–9。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, name, min_tier]
+              properties:
+                operation_id: { type: string, format: uuid }
+                name: { type: string, minLength: 1, maxLength: 64 }
+                min_tier: { type: integer, minimum: 0, maximum: 9 }
+      responses:
+        '201':
+          description: 已创建（重复提交同一 operation_id 也返回 201 与首次结果）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedNodeGroup' }
+        '409': { description: 40901 分组名已存在，或同一 operation_id 提交了不同内容, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /nodes:
+    get:
+      operationId: listNodes
+      x-admin-level: L0
+      x-permission: nodes.read
+      summary: 查看节点记录与心跳快照（不会探测或更改节点）
+      description: 严格拒绝未知、重复和空查询参数。读取前后实时核验 nodes.read；只读一致快照。心跳新鲜不代表实际隧道可用，在线数与负载为最后上报值。
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: search, in: query, schema: { type: string, minLength: 1, maxLength: 64 }, description: 节点名称的不区分大小写字面子串；不展开百分号或下划线通配符 }
+        - { name: status, in: query, schema: { type: string, enum: [ONLINE, OFFLINE, MAINTENANCE, DISABLED] } }
+        - { name: country_code, in: query, schema: { type: string, pattern: '^[A-Z]{2}$' } }
+      responses:
+        '200':
+          description: 节点分页，按 sort_order、id 升序；observed_at为本次心跳判定时间
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedNode' } }
+                  total: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createNode
+      x-admin-level: L1
+      x-permission: nodes.write
+      x-idempotent: true
+      summary: 新建节点记录（只是登记，不会去联系任何机器）
+      description: |
+        新建的节点**一律为 MAINTENANCE**，且不可在本接口指定状态：它还没有证书、没有心跳，
+        任何「立即上线」都会是假的。上线要等节点注册并开始心跳后，再用 PATCH 改状态。
+        `agent_cert_fingerprint` **不可由本接口设置**——那是节点注册流程的产物，
+        允许管理员直接写入等于允许把一个节点身份指到任意证书上。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, group_id, name, country_code, city, region, host]
+              properties:
+                operation_id: { type: string, format: uuid }
+                group_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                name: { type: string, minLength: 1, maxLength: 64 }
+                country_code: { type: string, pattern: '^[A-Z]{2}$' }
+                city: { type: string, maxLength: 64 }
+                region: { type: string, minLength: 1, maxLength: 32 }
+                host: { type: string, minLength: 1, maxLength: 255, description: 节点主机名或 IP；只登记，不做连通性探测 }
+                probe_port: { type: integer, minimum: 1, maximum: 65535, default: 443 }
+                capacity_users: { type: integer, minimum: 0, maximum: 1000000, default: 500 }
+                sort_order: { type: integer, minimum: -100000, maximum: 100000, default: 0 }
+                is_recommended: { type: boolean, default: false }
+      responses:
+        '201':
+          description: 已创建，status 恒为 MAINTENANCE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedNode' }
+        '404': { description: 40401 分组不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 40901 同一 operation_id 提交了不同内容, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /nodes/{id}:
+    get:
+      operationId: getNode
+      x-admin-level: L0
+      x-permission: nodes.read
+      summary: 查看节点与入站的有限字段，不含连接主机、证书指纹、注册令牌或协议密钥
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: 节点详情；无查询参数。sync_status仅为UNAVAILABLE，尚无节点应用回执，不能据此判断撤销已完成。最多100条入站，超出则拒绝返回不完整成功。
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [node, inbounds, observed_at, sync_status]
+                properties:
+                  node: { $ref: '#/components/schemas/ManagedNode' }
+                  inbounds:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, protocol, port, priority, status]
+                      properties:
+                        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                        protocol: { type: string, enum: [VLESS_REALITY, TROJAN, SS2022, WIREGUARD, HYSTERIA2] }
+                        port: { type: integer, minimum: 1, maximum: 65535 }
+                        priority: { type: integer }
+                        status: { type: string, enum: [ENABLED, DISABLED] }
+                  observed_at: { type: string, format: date-time }
+                  sync_status: { type: string, enum: [UNAVAILABLE] }
+        default: { $ref: '#/components/responses/Error' }
+    patch:
+      operationId: updateNode
+      x-admin-level: L1
+      x-permission: nodes.write
+      x-idempotent: true
+      summary: 修改节点记录（不会去联系节点本身）
+      description: |
+        只改数据库里的登记信息。把状态改成 ONLINE **不代表隧道可用**——
+        App 侧仍要求心跳新鲜、证书指纹一致、协议就绪，任一不满足依然不可用。
+        改成 DISABLED 会让该节点从所有用户的列表中消失，但**不会断开已建立的连接**，
+        也不会从节点上删除任何 peer。
+        至少要提供 operation_id 以外的一个字段；`agent_cert_fingerprint` 不可修改。
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id]
+              properties:
+                operation_id: { type: string, format: uuid }
+                group_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                name: { type: string, minLength: 1, maxLength: 64 }
+                country_code: { type: string, pattern: '^[A-Z]{2}$' }
+                city: { type: string, maxLength: 64 }
+                region: { type: string, minLength: 1, maxLength: 32 }
+                host: { type: string, minLength: 1, maxLength: 255 }
+                probe_port: { type: integer, minimum: 1, maximum: 65535 }
+                capacity_users: { type: integer, minimum: 0, maximum: 1000000 }
+                sort_order: { type: integer, minimum: -100000, maximum: 100000 }
+                is_recommended: { type: boolean }
+                status: { type: string, enum: [ONLINE, OFFLINE, MAINTENANCE, DISABLED] }
+      responses:
+        '200':
+          description: 修改后的节点
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedNode' }
+        '404': { description: 40401 节点或分组不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 40901 同一 operation_id 提交了不同内容, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /nodes/{id}/enroll-tokens:
+    post:
+      operationId: createEnrollToken
+      x-admin-level: L2
+      x-permission: nodes.enroll_token
+      summary: 为节点签发一次性注册令牌（24 小时、只能用一次、只展示一次）
+      description: |
+        节点拿这个令牌调用 `POST /node/v1/enroll`，用 CSR 换取客户端证书；签发成功后
+        控制面才会把该证书指纹绑到这台节点上，它也才可能开始心跳。
+
+        **令牌只在本次响应里出现一次**：服务端只存 SHA-256，之后任何人都取不回明文。
+        因此本接口**不做响应重放**——同一 operation_id 再次提交返回 40901，请用新的
+        operation_id 重新签发。丢了就重签，这比把密钥留在库里可回放要好。
+
+        为同一节点签发新令牌会让该节点此前**未使用**的令牌立即过期，任何时刻最多只有一把有效。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '201':
+          description: 已签发；token 仅此一次可见
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [operation_id, node_id, token, expires_at]
+                properties:
+                  operation_id: { type: string, format: uuid }
+                  node_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                  token: { type: string, description: 一次性注册令牌，只在本次响应出现 }
+                  expires_at: { type: string, format: date-time }
+        '401': { description: 40110 需要二次验证 / 40111 二次验证令牌无效, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '404': { description: 40401 节点不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 40901 该 operation_id 已签发过令牌（令牌不可重放，请用新的 operation_id）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /nodes/{id}/revoke:
+    post:
+      operationId: revokeNode
+      x-admin-level: L2
+      x-permission: nodes.revoke
+      summary: 吊销节点证书绑定并下线
+      description: |
+        做三件事，都是控制面这一侧的：解除该节点的证书指纹绑定、把状态置为 DISABLED、
+        让它尚未使用的注册令牌立即过期。
+
+        **不做的事同样要说清楚**：这不会去联系那台机器，不会删除它上面的任何 peer，
+        **也不会断开已经建立的隧道**。它的效果是——该节点下一次连控制面时无法通过身份校验、
+        拿不到新的清单，并从所有用户的节点列表中消失。要真正切断流量，必须在那台机器上操作。
+
+        幂等：同一 operation_id 重复提交返回同一结果；已吊销的节点再次吊销也返回 204。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '204': { description: 已解除绑定并下线（不代表已断开流量） }
+        '401': { description: 40110 需要二次验证 / 40111 二次验证令牌无效, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '404': { description: 40401 节点不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 40901 同一 operation_id 提交了不同内容, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /nodes/{id}/inbounds:
+    get:
+      operationId: listInbounds
+      x-admin-level: L0
+      x-permission: nodes.read
+      summary: 节点入站列表，含 public_params
+      description: |
+        这是**唯一**会返回 `public_params` 的接口。之所以可以返回，是因为写入时就用
+        严格白名单校验过：里面只可能有会发给每个客户端的公开参数，结构上放不进任何私钥。
+        最多 100 条，超出则拒绝返回不完整成功。
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200':
+          description: 按 priority、id 升序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, observed_at]
+                properties:
+                  items: { type: array, maxItems: 100, items: { $ref: '#/components/schemas/ManagedInboundDetail' } }
+                  observed_at: { type: string, format: date-time }
+        '404': { description: 40401 节点不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createInbound
+      x-admin-level: L1
+      x-permission: nodes.write
+      x-idempotent: true
+      summary: 为节点新增入站
+      description: |
+        `public_params` 按协议走**严格白名单**校验，未知字段一律拒绝——因此这里结构上
+        存不进私钥。WIREGUARD 的公钥、DNS、MTU 用与节点侧、连接材料侧**同一份**实现校验
+        （`nodewire`），所以一条能建出来的入站，不会在下发时才被判为「资料无效」而
+        连累该节点上的全部用户。
+        本轮只支持 WIREGUARD；其余协议返回 40001，不接受未经校验的参数落库。
+        新增 ENABLED 入站会**立即**影响用户可见性与连接材料下发。
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, protocol, port, public_params]
+              properties:
+                operation_id: { type: string, format: uuid }
+                protocol: { type: string, enum: [WIREGUARD] }
+                port: { type: integer, minimum: 1, maximum: 65535 }
+                priority: { type: integer, minimum: 0, maximum: 10000, default: 100 }
+                status: { type: string, enum: [ENABLED, DISABLED], default: DISABLED }
+                public_params:
+                  type: object
+                  additionalProperties: false
+                  required: [interface, public_key, config_version]
+                  properties:
+                    interface: { type: string, description: 节点上的 WireGuard 接口名 }
+                    public_key: { type: string, description: 节点的 WireGuard 公钥（Base64 32 字节），公开材料 }
+                    config_version: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+                    dns: { type: array, maxItems: 4, items: { type: string } }
+                    mtu: { type: integer, minimum: 1280, maximum: 1500 }
+      responses:
+        '201':
+          description: 已创建
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedInboundDetail' }
+        '404': { description: 40401 节点不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 40901 该节点同协议同端口已存在，或同一 operation_id 提交了不同内容, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /traffic/stats:
+    get:
+      operationId: getTrafficStats
+      x-admin-level: L0
+      x-permission: traffic.read
+      summary: 流量统计（只读聚合）
+      description: |
+        需要 traffic.read。读取前后实时核验会话与权限，业务读取使用只读一致性快照。
+
+        统计源是 traffic_daily，**它只包含已被控制面接受并入库的节点上报**：节点没上报、
+        上报被拒、或凭据已无法归属到设备的那部分流量不在其中，因此这里的数字是「账面已记」的
+        用量，不等于链路真实转发量，也不是实时值。
+
+        `stat_date` 取自上报窗口结束时刻的 **UTC 日期**，不是任何人的本地日期；跨零点的会话
+        会落在结束那一天。`upload_bytes` 是用户上行、`download_bytes` 是用户下行，
+        两者与 `total_bytes` 一律为字符串（字节数可超过 2^53，JSON 数字会被前端读成浮点）。
+
+        不返回节点名称、用户账号等标识信息：那些属于 nodes.read / users.read，
+        拿 traffic.read 不应顺带看到。
+
+        `from`/`to` 为闭区间的 UTC 日期，省略时默认最近 30 天（含今天）；
+        `from` 晚于 `to`、跨度超过 366 天或日期不合法一律 400，不静默纠正。
+        排序：dim=day 按日期倒序，其余按 total_bytes 倒序、编号升序兜底。
+      parameters:
+        - { name: dim, in: query, required: true, schema: { type: string, enum: [day, user, device, node] } }
+        - { name: from, in: query, schema: { type: string, format: date } }
+        - { name: to, in: query, schema: { type: string, format: date } }
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200': { description: 聚合统计, content: { application/json: { schema: { $ref: '#/components/schemas/TrafficStatsPage' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /exports:
+    get:
+      operationId: listExports
+      x-admin-level: L0
+      x-permission: exports.read
+      summary: 导出任务列表（只读，不含文件内容）
+      description: |
+        需要 exports.read。这同时也是查询生成进度的入口：`POST /exports` 返回 202 之后，
+        文件由 worker 异步生成，轮询这里看 `status` 从 PENDING 变成 READY 或 FAILED。
+
+        **本接口永远不返回文件内容**，只返回元数据：行数、字节数、内容 SHA-256、
+        水印、到期时间、失败原因。取文件要另外带二次验证走
+        `POST /exports/{id}/download`——那才是数据离开系统的那一刻，是另一个能力。
+
+        `status` 的含义：PENDING 排队或正在生成；READY 可下载；FAILED 生成失败，
+        `failure_reason` 原样给出（最常见的是超过行数或体积上限，要缩小区间）；
+        EXPIRED 已过 24 小时保留期、文件已被删除，记录本身保留以便审计。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: kind, in: query, schema: { type: string, enum: [ORDERS, CHAIN_TRANSFERS, TRAFFIC, RECONCILE] } }
+        - { name: status, in: query, schema: { type: string, enum: [PENDING, READY, FAILED, EXPIRED] } }
+      responses:
+        '200':
+          description: 按 created_at、id 倒序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedExport' } }
+                  total: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createExport
+      x-admin-level: L2
+      x-permission: exports.create
+      summary: 发起数据导出（异步生成，L2 + 二次验证）
+      description: |
+        登记一个导出任务并立刻返回 202——**这时文件还不存在**。生成由 worker 异步完成，
+        进度在 `GET /exports` 上看，文件用 `POST /exports/{id}/download` 取。
+
+        `kind` 决定导出什么，也决定 `from`/`to` 怎么填：
+
+        | kind | 内容 | 区间 |
+        |---|---|---|
+        | ORDERS | 订单流水，按 `created_at` 落在区间内 | 必填 |
+        | CHAIN_TRANSFERS | 链上转账，按 `block_time` | 必填 |
+        | TRAFFIC | 按天/设备/节点的流量明细，按 `stat_date` | 必填 |
+        | RECONCILE | 方案 10.5 的对账异常清单（余额与流水不符、固化超时未处理、已完成但没有发放流水） | **必须不填** |
+
+        RECONCILE 是**此刻的异常清单**，不是某段时间的流水，所以带上 `from`/`to` 一律 40001
+        而不是静默忽略——静默忽略会让人以为筛过了。其余三种 `from`/`to` 都必填、
+        `to` 为闭区间、跨度不超过 92 天。
+
+        投影与资金只读接口同一套口径：金额一律固定 6 位小数的字符串，
+        链上 `raw` 原始载荷、收款地址签名原文、订单 `client_idem_key` 一律不出现在导出件里。
+
+        文件是 UTF-8 CSV（带 BOM，便于 Excel 正确识别中文），**首行与末行是以 `#` 开头的
+        水印行**，含管理员账号、发起时间、生成时间、导出编号与区间（方案 12.4 要求水印）。
+        消费方需要跳过这两行；末行同时可以用来判断文件有没有被截断。
+
+        上限：20 万行或 32 MiB，先到者为准。超限不会返回半份数据，而是把任务置为 FAILED
+        并在 `failure_reason` 里说明要缩小区间。上限在生成时判定，不在这里预检——
+        预检要先扫一遍全表，代价比失败一次更大。
+
+        文件 24 小时后由 worker 删除（方案 12.4），记录本身转为 EXPIRED 保留以便审计。
+
+        幂等：同一 `operation_id` 重复提交返回首次的 202 响应，不会生成第二份文件；
+        换了请求体一律 40901。
+      parameters: [ { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, kind, reason]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 200 }
+                kind: { type: string, enum: [ORDERS, CHAIN_TRANSFERS, TRAFFIC, RECONCILE] }
+                from: { type: string, format: date }
+                to: { type: string, format: date }
+      responses:
+        '202':
+          description: 已登记，异步生成；下载与生成均在审计日志留痕
+          content: { application/json: { schema: { $ref: '#/components/schemas/ManagedExport' } } }
+        default: { $ref: '#/components/responses/Error' }
+  /exports/{id}/download:
+    post:
+      operationId: downloadExport
+      x-admin-level: L2
+      x-permission: exports.download
+      summary: 取回导出文件（L2 + 二次验证，每次下载都写审计日志）
+      description: |
+        返回 CSV 文件本身。用 POST 而不是 GET，是因为这一步要消费一次性二次验证令牌，
+        而且**每一次下载都要单独写一条审计日志**——数据离开系统的次数必须逐次可数。
+        二次验证令牌一次一用，因此连续下载两次需要两次二次验证，这是有意的。
+
+        `exports.download` 与 `exports.create` 是两个能力：可以让人发起导出而不能自己取走。
+
+        只有 READY 的导出可以下载。PENDING 返回 40901（还没生成好），
+        FAILED 返回 40901 并附失败原因，EXPIRED 或已过 `expires_at` 返回 40401——
+        过期就是过期，不会临时再生成一份。
+
+        响应体是 CSV 原文，不套 JSON 信封；`Content-Disposition` 给出文件名，
+        `Cache-Control: no-store`。`X-Export-Sha256` 回带内容校验和，与
+        `GET /exports` 里的 `content_sha256` 一致，可用于核对下载是否完整。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200':
+          description: CSV 文件
+          headers:
+            Content-Disposition: { schema: { type: string } }
+            X-Export-Sha256: { schema: { type: string, pattern: '^[a-f0-9]{64}$' } }
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content: { text/csv: { schema: { type: string, format: binary } } }
+        '404': { description: 40401 导出不存在或已过保留期, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /invite-relations:
+    get:
+      operationId: listInviteRelations
+      x-admin-level: L0
+      x-permission: invite.read
+      summary: 邀请关系列表（只读）
+      description: |
+        每个用户只能被邀请一次，因此 invitee_user_id 是主键。
+        `risk_flags` 是绑定当时记下的风险标记原样返回，不做解释。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - { name: inviter_user_id, in: query, schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' } }
+        - { name: invitee_user_id, in: query, schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' } }
+      responses:
+        '200':
+          description: 按 created_at 倒序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedInviteRelation' } }
+                  total: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /invite-rewards:
+    get:
+      operationId: listInviteRewards
+      x-admin-level: L0
+      x-permission: invite.read
+      summary: 邀请奖励列表（只读）
+      description: |
+        运维真正要看的是 `status=REVIEW` 那一批——它们被风控挂起，
+        **worker 不会再碰**（只处理 PENDING），只能由人在
+        `POST /invite-rewards/{id}/review` 放行或驳回。
+
+        `reward_value` 的单位随 `reward_type` 变，因此一律附带 `value_unit`：
+        DAYS→天、TRAFFIC→字节、BALANCE→USDT 微单位。只有 BALANCE 才有
+        `amount`（固定 6 位小数的 USDT 字符串）。
+        `rule_snapshot` 不返回：体量大，而复核需要的信息已在其余字段里。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - { name: status, in: query, schema: { type: string, enum: [PENDING, REVIEW, RELEASED, CANCELLED] } }
+        - { name: beneficiary_user_id, in: query, schema: { type: string, pattern: '^[1-9][0-9]{0,18}$' } }
+      responses:
+        '200':
+          description: 按 created_at、id 倒序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedInviteReward' } }
+                  total: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /invite-rewards/{id}/review:
+    post:
+      operationId: reviewInviteReward
+      x-admin-level: L2
+      x-permission: invite.reward_review
+      x-idempotent: true
+      summary: 复核邀请奖励（放行或驳回）
+      description: |
+        只处置处于 `REVIEW` 的奖励。PENDING 归 worker，RELEASED / CANCELLED 已成定局——
+        把已发放的奖励改回去属于人工账务调整，是另一条链路。
+
+        **APPROVE 会当场发放**：余额类记 balance_ledger，时长/流量类改订阅或发流量包，
+        与 worker 使用同一把幂等 key，因此不可能重复发放。
+
+        **复核不重跑风控**——放行的含义就是「人看过这些风险标记并决定认」，
+        重跑只会把它再次打回 REVIEW。但完整性检查一条不省：快照必须自洽、
+        来源订单与邀请关系必须还在且没变、不能已有同 key 的账目、受益人不能已被封禁。
+        任何一条不成立返回 40901 并附原因码（如 `SOURCE_ORDER_CHANGED`、
+        `PREEXISTING_LEDGER`、`BENEFICIARY_BANNED`），整笔事务回滚，不存在记了一半的中间态。
+
+        REJECT 只置为 CANCELLED 并把 note 记入 cancel_reason，不触碰任何账目。
+      parameters:
+        - $ref: '#/components/parameters/Id'
+        - $ref: '#/components/parameters/StepUp'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, decision, note]
+              properties:
+                operation_id: { type: string, format: uuid }
+                decision: { type: string, enum: [APPROVE, REJECT] }
+                note: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '200':
+          description: 已处置（同一 operation_id 重复提交返回首次结果）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReviewedReward' }
+        '404':
+          description: 40401 奖励不存在
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        '409':
+          description: 40901 该奖励不在 REVIEW，或完整性检查未通过（原因码附在消息里）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        default: { $ref: '#/components/responses/Error' }
+  /invite-rules/{id}:
+    patch:
+      operationId: updateInviteRule
+      x-admin-level: L2
+      x-permission: invite.rule_write
+      x-idempotent: true
+      summary: 修改邀请奖励规则
+      description: |
+        需要 invite.rule_write（L2）；二次验证 action_code=invite.rule_write，绑定 PATCH、
+        实际完整路径和原始请求体。operation_id 幂等，换请求体 40901，重放逐字节相同。
+
+        **不动已经生成的奖励。** 每笔奖励创建时就存了完整 rule_snapshot 并按快照结算；
+        改规则只影响之后生成的，停用也不会撤回已排队的 PENDING/REVIEW。
+
+        **trigger_event、beneficiary、reward_type 不可修改**，请求里出现即 40001：
+        前两个是 invite_rewards 去重键的组成部分（去重键一变，同一受益人就同一笔订单会再拿一次奖励），
+        reward_type 决定 reward_value 的单位（天 / 字节 / micro），改类型不改值等于把 30 天变成 30 字节。
+        要换这三项请新建规则。
+
+        值用**与发放侧同一份实现**校验（internal/invite 的 RuleShapeDefect），
+        因为形状不合格的规则不会被跳过——发放侧照样建奖励，只是每一笔都带着 INVALID_RULE 或
+        DAILY_CAP_REQUIRED 落进人工复核队列。据此拒绝的有：按比例奖励配在非 BALANCE 类型上、
+        配了比例却没把 reward_value 归零、DAYS 超过 36500、TRAFFIC 超过 2^53-1、
+        最低订单金额为负、INVITEE_PAID 规则没有每日上限、固定值与比例都为 0（每笔都会被判 ZERO_REWARD）。
+        每日上限显式写 0 或负数一律拒绝——不限量请写 null。
+
+        窗口是 [starts_at, ends_at)，右端开区间，因此 ends_at 必须**晚于** starts_at，相等即空窗口。
+
+        PATCH 语义：请求体里出现的键才会被改，靠键名区分「没提」与「显式 null」。
+        version 只在实质字段（数值、比例、门槛、冻结、上限、窗口）变化时 +1；
+        改名称或上下架不动它——奖励快照里记着这个版本号，每改个名字就推高会让它失去对账价值。
+        可选的 expected_version 做乐观并发：与当前不符返回 40901 而不是覆盖。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 255 }
+                expected_version: { type: string, pattern: '^[1-9][0-9]{0,9}$' }
+                name: { type: string, minLength: 1, maxLength: 64 }
+                status: { type: string, enum: [ENABLED, DISABLED] }
+                reward_value: { type: integer, format: int64, minimum: 0 }
+                reward_percent_bp: { type: [integer, 'null'], minimum: 0, maximum: 10000 }
+                min_order_amount_micro: { type: [integer, 'null'], format: int64, minimum: 0 }
+                freeze_hours: { type: integer, minimum: 0, maximum: 8784 }
+                daily_cap_per_inviter: { type: [integer, 'null'], minimum: 1 }
+                starts_at: { type: [string, 'null'], format: date-time }
+                ends_at: { type: [string, 'null'], format: date-time }
+      responses:
+        '200': { description: 已修改；Cache-Control no-store, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedInviteRule' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /shared-pay-addresses:
+    get:
+      operationId: listSharedPayAddresses
+      x-admin-level: L0
+      x-permission: finance.read
+      summary: 公共付款地址列表（只读）
+      description: |
+        需要 finance.read。交易所热钱包等「多人共用」的付款地址。
+
+        **唯一读取方是邀请风控**（internal/invite/risk_rewards.go）：从命中这里的地址付的款，
+        不会被当成自邀请的铁证，而是打上 SHARED_PAY_ADDRESS 转人工复核。它不阻止下单、
+        不阻止到账、也不影响任何资金流转。
+
+        `auto_detected` 区分扫描自动识别与人工登记（本接口 POST 写入的恒为 false）。
+        按登记时间倒序。
+      parameters:
+        - { $ref: '#/components/parameters/UserPage' }
+        - { $ref: '#/components/parameters/PageSize' }
+      responses:
+        '200': { description: 列表, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedSharedPayAddressPage' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: addSharedPayAddress
+      x-admin-level: L2
+      x-permission: finance.shared_pay_write
+      x-idempotent: true
+      summary: 登记公共付款地址
+      description: |
+        需要 finance.shared_pay_write（L2）；二次验证 action_code=finance.shared_pay_write，
+        绑定 POST、实际完整路径和原始请求体；operation_id 幂等。
+
+        写入的 `auto_detected` 恒为 false——人工登记与扫描自动识别混在一起，
+        事后就说不清某个地址是谁认定的。地址重复返回 40901。
+
+        **本系统自己的收款地址一律拒绝登记**：它是收钱的一端，不是别人付款的来源；
+        标错之后凡是查到这个地址的风控判断都会走偏。
+
+        注意：契约里**没有删除接口**，登记错了目前只能连库处理。需要的话应当另行补上。
+      parameters: [ { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason, address]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 255 }
+                address: { type: string, minLength: 1, maxLength: 64 }
+                note: { type: string, maxLength: 128 }
+      responses:
+        '201': { description: 已登记；Cache-Control no-store, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedSharedPayAddress' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /blacklist:
+    get:
+      operationId: listBlacklist
+      x-admin-level: L0
+      x-permission: risk.read
+      summary: 黑名单列表（只读）
+      description: |
+        **重要：黑名单当前只在邀请链路生效。** 命中它会拦下邀请绑定与邀请奖励，
+        但**不会**阻止登录、下单或连接——不要指望加一条黑名单就能把某人挡在门外。
+        代码里实际读取它的只有 `internal/invite/bind.go` 与 `risk_rewards.go` 两处。
+        USER 与 INVITE_CODE 两类目标无条件生效；DEVICE / FINGERPRINT / IP_PREFIX
+        还要求 effects 与 `INVITE_BIND` / `INVITE_REWARD` / `ALL` 有交集。
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, REMOVED] } }
+        - { name: target_type, in: query, schema: { type: string, enum: [USER, DEVICE, FINGERPRINT, PAY_ADDRESS, IP_PREFIX, INVITE_CODE] } }
+      responses:
+        '200':
+          description: 按 created_at、id 倒序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ManagedBlacklistEntry' } }
+                  total: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: addBlacklist
+      x-admin-level: L2
+      x-permission: risk.blacklist_add
+      x-idempotent: true
+      summary: 新增黑名单条目（只影响邀请链路）
+      description: |
+        契约此前把 target_type 写成 `DEVICE_FINGERPRINT`，与数据库实际允许的取值不一致；
+        已按数据库为准改正为 DEVICE / FINGERPRINT 两类，并补上 INVITE_CODE。
+
+        `effects` 只接受 `INVITE_BIND` / `INVITE_REWARD` / `ALL`——这是代码里真正会检查的三个值。
+        写入一个没有任何地方会读的 effect 等于给运维一个假的安全感，因此一律拒绝。
+      parameters: [ { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, target_type, target_value, effects, reason]
+              properties:
+                operation_id: { type: string, format: uuid }
+                target_type: { type: string, enum: [USER, DEVICE, FINGERPRINT, PAY_ADDRESS, IP_PREFIX, INVITE_CODE] }
+                target_value: { type: string, minLength: 1, maxLength: 128 }
+                effects:
+                  type: array
+                  minItems: 1
+                  maxItems: 3
+                  items: { type: string, enum: [INVITE_BIND, INVITE_REWARD, ALL] }
+                reason: { type: string, minLength: 1, maxLength: 200 }
+                expires_at: { type: [string, 'null'], format: date-time, description: 留空表示长期有效 }
+      responses:
+        '201':
+          description: 已新增（同一 operation_id 重复提交返回首次结果）
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ManagedBlacklistEntry' }
+        '409': { description: 40901 同一目标已有生效条目，或同一 operation_id 提交了不同内容, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /blacklist/{id}:
+    delete:
+      operationId: removeBlacklist
+      x-admin-level: L2
+      x-permission: risk.blacklist_remove
+      x-idempotent: true
+      summary: 解除黑名单条目
+      description: |
+        置为 REMOVED 并记录操作人与时间，**不删除记录**——风控处置需要留痕。
+        已解除的条目再次解除返回同样的结果（幂等）。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 200 }
+      responses:
+        '204': { description: 已解除（重复解除同样返回 204） }
+        '404': { description: 40401 条目不存在, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /approvals:
+    get:
+      operationId: listApprovals
+      x-admin-level: L0
+      description: 需要 approvals.read；pending 为仍有效且非本人发起的待审批项。过期以 EXPIRED 展示。
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: scope, in: query, schema: { type: string, enum: [all, mine, pending], default: pending } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/ApprovalStatus' } }
+      responses:
+        '200': { description: 审批分页, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalList' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /approvals/{id}:
+    get:
+      operationId: getApproval
+      x-admin-level: L0
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      description: 需要 approvals.read；仅支持的版本发布动作返回公开字段快照，未知动作不返回原始 payload。
+      responses:
+        '200': { description: 审批详情, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /approvals/{id}/approve:
+    post:
+      operationId: approveApproval
+      x-admin-level: L2
+      description: |
+        需要 approvals.decide 与目标动作权限 app_versions.publish；二次验证 action_code=approvals.decide。
+        审批人不能是发起人（40907），作者仍须有效且有发布权限。仅 app_versions.publish 执行器可用。
+        实际请求哈希、审批快照和当前数据重新校验；数据变化返回40908，24小时过期拒绝。
+        二次验证消耗、发布、审批终态与审计同一事务；锁定审批行防重复执行，未知执行器拒绝执行。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false } } } }
+      responses:
+        '200': { description: 已执行审批详情, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /approvals/{id}/reject:
+    post:
+      operationId: rejectApproval
+      x-admin-level: L2
+      description: 需要 approvals.decide；二次验证 action_code=approvals.decide。不可自审，理由持久保存，状态及审计同事务。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [note], properties: { note: { type: string, minLength: 1, maxLength: 500 } } } } } }
+      responses:
+        '200': { description: 已拒绝审批详情, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /audit-logs:
+    get:
+      operationId: listAuditLogs
+      x-admin-level: L0
+      description: 需要 audit.read；列表不暴露IP、浏览器信息与前后快照。只追加哈希链，未接外部WORM锚点。
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: action, in: query, schema: { type: string, maxLength: 64 } }
+        - { name: result, in: query, schema: { type: string, enum: [SUCCESS, FAILED, DENIED] } }
+      responses:
+        '200': { description: 审计分页, content: { application/json: { schema: { $ref: '#/components/schemas/AuditList' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /audit-logs/verify:
+    post:
+      operationId: verifyAuditChain
+      x-admin-level: L0
+      description: 需要 audit.read 和 CSRF；固定数据库快照校验区间及前驱，最多10000条，ID跳号本身不视为损坏。
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [from_id, to_id], properties: { from_id: { type: string, pattern: '^[1-9][0-9]*$' }, to_id: { type: string, pattern: '^[1-9][0-9]*$' } } } } } }
+      responses:
+        '200': { description: 校验结果, content: { application/json: { schema: { $ref: '#/components/schemas/AuditVerification' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /configs/{key}:
+    patch:
+      operationId: updateConfig
+      x-admin-level: L2
+      x-permission: configs.write
+      x-idempotent: true
+      summary: 修改系统参数
+      description: |
+        需要 configs.write（L2）；二次验证 action_code=configs.write，绑定 PATCH、实际完整路径和原始请求体。
+        operation_id 是请求体内的规范小写 UUIDv4 幂等键；同一 operation_id 换请求体或换操作一律 40901，
+        重放返回与首次逐字节相同的响应。
+
+        **key 走白名单**，只接受代码真正会读取的那几个参数：`order.cooldown_seconds`、
+        `topup.min_micro`、`topup.max_micro`、`invite.reward_default_plan_code`、
+        `invite.reward_traffic_plan_code`。白名单之外一律 40001，**包括数据库里已经存在的键**——
+        能写一个没有读取方的键，等于给运维一个「改了但不生效」的按钮。
+
+        值按 key 逐个校验，两处是重点：
+
+        - `topup.min_micro` 与 `topup.max_micro` 是一对。单独改一个足以把区间改成空集，
+          而下单只会报「金额不在范围内」，没人会想到是配置写反了。因此改任一个都会在同一事务里
+          取另一个的现值一起校验，min > max 返回 40001。另一端从未配过时放行（读取方会退回内置默认值）。
+        - `invite.reward_*_plan_code` 用**与发放侧完全相同的一套判断**校验：套餐必须存在、ON_SALE、
+          类型匹配且本身合法。不满足时返回 40001——写进去不会报错，只会在发奖励时静默不发。
+
+        整值替换，不是合并：这些键存的是标量。类型不符一律拒绝而不是转换——`"3600"`（字符串）
+        不会被当成 3600。key 尚未配置过时写入第一条并返回 `created: true`，不是 404。
+        version 每次写入 +1。
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string, maxLength: 64 } }
+        - { $ref: '#/components/parameters/StepUp' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason, value]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 255 }
+                value: { description: 标量值；类型由 key 决定（整数或套餐编号字符串） }
+      responses:
+        '200': { description: 已写入；Cache-Control no-store, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedConfig' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /admins:
+    get:
+      operationId: listAdmins
+      x-admin-level: L0
+      description: 需要 admins.read；分页返回管理员与完整角色目录，不返回密码、TOTP、IP 或会话材料。username 为精确匹配；Cache-Control no-store。
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: username, in: query, schema: { type: string, maxLength: 32 } }
+        - { name: status, in: query, schema: { type: string, enum: [ACTIVE, LOCKED, DISABLED] } }
+      responses:
+        '200': { description: 管理员列表及可供选择的角色目录, content: { application/json: { schema: { $ref: '#/components/schemas/ManagedAdminPage' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createAdmin
+      x-admin-level: L3
+      description: |
+        需要 admins.create + 二次验证 + 另一名管理员审批，返回 202 仅代表建立申请。
+        用户名为小写字母开头的 3–32 位字母、数字、下划线、点或短横线。
+        初始密码及新管理员已配置的 TOTP 种子只在请求中提供；必须同时提供该种子的当前六位验证码。
+        审批暂存凭据经过加密，审批详情与审计只展示用户名和角色，不含凭据。
+        发起人和审批人均须持有所分配角色的全部权限；执行时重新核验角色快照与双方权限。
+        operation_id 为 UUIDv4；同一会话相同请求可安全重放，冲突请求返回 40901。
+        本接口不创建默认账号，不授予调用者当前没有的权限。
+      parameters: [ { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason, username, password, totp_secret, totp_code, role_ids]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+                username: { type: string, pattern: '^[a-z][a-z0-9_.-]{2,31}$' }
+                password: { type: string, minLength: 12, maxLength: 1024, writeOnly: true }
+                totp_secret: { type: string, minLength: 32, maxLength: 103, writeOnly: true, description: RFC4648 大写 Base32 无填充，解码后 20–64 字节 }
+                totp_code: { type: string, pattern: '^[0-9]{6}$', writeOnly: true }
+                role_ids: { type: array, minItems: 1, maxItems: 20, uniqueItems: true, items: { type: string, pattern: '^[1-9][0-9]*$' } }
+      responses:
+        '202': { $ref: '#/components/responses/Approval' }
+        default: { $ref: '#/components/responses/Error' }
+  /admins/{id}/roles:
+    put:
+      operationId: setAdminRoles
+      x-admin-level: L3
+      description: |
+        需要 admins.roles + 二次验证 + 双人审批；以 role_ids 替换全部角色（空数组表示撤销全部权限）。
+        发起人不能修改自己的角色；目标管理员不能审批自己的角色变更。
+        发起人和审批人均须持有目标现有及新角色的全部权限；角色定义或目标当前角色在等待期间变化则 40908。
+        执行与目标全部会话失效、审批状态和审计同事务。不可借此解锁或启用禁用账号。
+        operation_id 为 UUIDv4；相同会话相同请求幂等，冲突请求返回 40901。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id, reason, role_ids]
+              properties:
+                operation_id: { type: string, format: uuid }
+                reason: { type: string, minLength: 1, maxLength: 500 }
+                role_ids: { type: array, maxItems: 20, uniqueItems: true, items: { type: string, pattern: '^[1-9][0-9]*$' } }
+      responses:
+        '202': { $ref: '#/components/responses/Approval' }
+        default: { $ref: '#/components/responses/Error' }
+  /app-versions:
+    get:
+      operationId: listAppVersions
+      x-admin-level: L0
+      description: 需要 app_versions.read。按创建时间和数字编号倒序；version_code 为精确匹配且必须同时传 platform，可用于网络不明后的只读核实。
+      parameters:
+        - { $ref: '#/components/parameters/Page' }
+        - { $ref: '#/components/parameters/PageSize' }
+        - { name: platform, in: query, schema: { type: string, enum: [ANDROID, IOS] } }
+        - { name: status, in: query, schema: { type: string, enum: [DRAFT, PUBLISHED, WITHDRAWN] } }
+        - { name: version_code, in: query, schema: { type: string, pattern: '^[1-9][0-9]{0,9}$' } }
+      responses:
+        '200': { description: 版本列表, content: { application/json: { schema: { $ref: '#/components/schemas/AppVersionList' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createAppVersion
+      x-admin-level: L2
+      description: |
+        需要 app_versions.draft；二次验证 action_code=app_versions.draft，绑定 POST 方法、实际完整路径和原始请求体。
+        仅新建完整 DRAFT，不发布、不上传或下载文件。最大请求24KB，release_notes最大16000 UTF-8字节。
+        operation_id 为客户端UUIDv4；同一管理员相同操作只落库一次，冲突内容返回40901。
+        网络不明不得自动重试；通过平台和版本号精确查询核实。明确重新提交也需要新的二次验证令牌；已消费令牌不可复用。
+        相同操作重放仅在原请求及结果快照均未变化时返回原目标，否则40901并应重新查询。
+      parameters: [ { $ref: '#/components/parameters/StepUp' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AppVersionCreate' } } } }
+      responses:
+        '201': { description: 已保存草稿, content: { application/json: { schema: { $ref: '#/components/schemas/AppVersionDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /app-versions/{id}:
+    get:
+      operationId: getAppVersion
+      x-admin-level: L0
+      description: 需要 app_versions.read；只返回当前版本公开发布字段，不读取安装包内容。
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { description: 版本详情, content: { application/json: { schema: { $ref: '#/components/schemas/AppVersionDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    put:
+      operationId: updateAppVersion
+      x-admin-level: L2
+      description: |
+        需要 app_versions.draft；二次验证 action_code=app_versions.draft，绑定 PUT、实际完整路径及原始请求体。
+        全量替换DRAFT公开发布字段。expected_snapshot_hash必须等于最近GET详情的snapshot_hash，否则40908。
+        存在未过期PENDING发布审批、非DRAFT或平台版本号冲突返回40901。不会修改已有审批或已发布版本。
+        operation_id、请求上限、幂等和网络不明核实规则与新建一致。已消费step-up令牌不可复用。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AppVersionUpdate' } } } }
+      responses:
+        '200': { description: 已保存草稿, content: { application/json: { schema: { $ref: '#/components/schemas/AppVersionDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /app-versions/{id}/publish:
+    post:
+      operationId: publishAppVersion
+      x-admin-level: L3
+      description: |
+        需要 app_versions.publish；二次验证 action_code=app_versions.publish。仅对有效 DRAFT 创建24小时审批，不直接发布。
+        同一发起人对同一草稿和相同理由的重复申请复用已有有效PENDING审批；草稿快照变化返回40908。
+        金额与奖励执行器未接入，此接口不启用奖励，也不上传或生成安装包。
+      parameters: [ { $ref: '#/components/parameters/Id' }, { $ref: '#/components/parameters/StepUp' } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, additionalProperties: false, required: [reason], properties: { reason: { type: string, minLength: 1, maxLength: 500 } } } } } }
+      responses:
+        '202': { description: 版本发布审批, content: { application/json: { schema: { $ref: '#/components/schemas/ApprovalDetail' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /dev/mock-deposit:
+    post:
+      operationId: devMockDeposit
+      x-admin-level: L1
+      x-dev-only: true
+      summary: 阶段一模拟到账：写入 network=MOCK 的 chain_transfers 并执行与生产相同的到账事务
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [order_no, amount], properties: { order_no: { type: string }, amount: { type: string }, from_address: { type: string } } } } } }
+      responses: { '200': { description: 到账事务结果（订单终态） }, default: { $ref: '#/components/responses/Error' } }
+  /dev/reconcile:
+    get: { operationId: devReconcile, x-admin-level: L1, x-dev-only: true, summary: 立即执行方案 10.5 对账查询, responses: { '200': { description: 对账报告 } } }
+  /dev/mock-traffic:
+    post: { operationId: devMockTraffic, x-admin-level: L1, x-dev-only: true, requestBody: { required: true, content: { application/json: { schema: { type: object, required: [account_no, bytes], properties: { account_no: { type: string }, bytes: { type: integer } } } } } }, responses: { '204': { description: OK } } }
+  /dev/clock:
+    post: { operationId: devClock, x-admin-level: L1, x-dev-only: true, requestBody: { required: true, content: { application/json: { schema: { type: object, required: [offset_seconds], properties: { offset_seconds: { type: integer } } } } } }, responses: { '204': { description: 整体拨动业务时钟 } } }
+
+  /egress:
+    get:
+      operationId: listEgress
+      x-admin-level: L0
+      x-permission: egress.read
+      summary: 出口列表（外购代理 / 自建多协议节点）。只含 identity_hint（如 "ab***"），从不返回凭据
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: page_size, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+        - { name: status, in: query, schema: { type: string, enum: [ENABLED, DISABLED] } }
+        - { name: protocol, in: query, schema: { type: string } }
+        - { name: country_code, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string, maxLength: 64 } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /egress/import/preview:
+    post:
+      operationId: previewEgressImport
+      x-admin-level: L1
+      x-permission: egress.write
+      summary: |
+        解析导入内容并逐行报错，不落库。支持 IP:端口:账号:密码、user:pass@host:port、socks5/http/https/ss/trojan/
+        vless/vmess/hysteria2 分享链接、base64 订阅正文、CSV（带表头）与 JSON。回显只含脱敏片段。
+        拒绝任何关闭 TLS 校验的写法（allowInsecure/insecure），TUIC 等当前内核不支持的协议逐行报错。
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EgressImportInput' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /egress/import:
+    post:
+      operationId: importEgress
+      x-admin-level: L1
+      x-permission: egress.write
+      x-idempotent: true
+      summary: 提交导入（服务端重新解析，不信任预览结果）；按指纹去重，已存在默认跳过、可选更新；默认导入为停用
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EgressImportInput' } } } }
+      responses:
+        '201': { description: 已处理（逐行结果，脱敏）, content: { application/json: { schema: { type: object } } } }
+        '409': { description: 40901 operation_id 已用于不同请求, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /egress/{id}:
+    patch:
+      operationId: updateEgress
+      x-admin-level: L1
+      x-permission: egress.write
+      x-idempotent: true
+      summary: 修改出口的名称/地区/等级/排序/启停；只有 SOCKS5 可标注是否支持 UDP。凭据只能通过重新导入更新
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, pattern: '^e[1-9][0-9]*$' } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id]
+              properties:
+                operation_id: { type: string, format: uuid }
+                name: { type: string }
+                status: { type: string, enum: [ENABLED, DISABLED] }
+                country_code: { type: string }
+                city: { type: string }
+                region: { type: string }
+                min_tier: { type: integer, minimum: 1, maximum: 9 }
+                sort_order: { type: integer }
+                supports_udp: { type: boolean }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /egress-subscriptions:
+    get:
+      operationId: listEgressSubscriptions
+      x-admin-level: L0
+      x-permission: egress.read
+      summary: 订阅列表（只显示订阅主机名，订阅地址加密保存、从不返回）
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      operationId: createEgressSubscription
+      x-admin-level: L1
+      x-permission: egress.write
+      x-idempotent: true
+      summary: 登记订阅（只允许 https、默认端口、公网地址；不带任何后台凭据）
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EgressSubscriptionInput' } } } }
+      responses:
+        '201': { description: 已登记, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /egress-subscriptions/preview:
+    post:
+      operationId: previewEgressSubscription
+      x-admin-level: L1
+      x-permission: egress.write
+      summary: 抓取并解析订阅，不落库。每次实际连接都校验目标 IP（防 DNS 重绑定），拒绝重定向，限 15 秒/2MB
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/EgressSubscriptionInput' } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /egress-subscriptions/{id}/refresh:
+    post:
+      operationId: refreshEgressSubscription
+      x-admin-level: L1
+      x-permission: egress.write
+      x-idempotent: true
+      summary: 抓取订阅并按指纹新建/更新；订阅里消失的条目停用（disable_missing 默认开）。抓取失败不改动任何出口
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, pattern: '^s[1-9][0-9]*$' } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [operation_id]
+              properties:
+                operation_id: { type: string, format: uuid }
+                enable: { type: boolean }
+                disable_missing: { type: boolean }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+components:
+  parameters:
+    UserPage:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 10000, default: 1 }
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    PageSize:
+      name: page_size
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+    StepUp:
+      name: X-Step-Up-Token
+      in: header
+      required: true
+      description: L2/L3 操作必需；由 POST /step-up 签发，绑定 action_code 与 payload_hash
+      schema: { type: string }
+  responses:
+    Error:
+      description: 错误（40110 需二级验证 / 40111 令牌无效 / 40112 TOTP 错误 / 40310 权限不足 / 40907 / 40908）
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error, request_id]
+            properties:
+              error: { type: object, required: [code, message], properties: { code: { type: integer }, message: { type: string } } }
+              request_id: { type: string }
+    Approval:
+      description: 已创建审批单，等待另一名管理员审批（24 小时未处理自动过期）
+      content:
+        application/json:
+          schema: { type: object, required: [approval_id], properties: { approval_id: { type: string } } }
+  schemas:
+    EgressImportInput:
+      type: object
+      additionalProperties: false
+      properties:
+        operation_id: { type: string, format: uuid, description: 提交导入时必填 }
+        text: { type: string, maxLength: 1048576 }
+        default_protocol: { type: string, enum: [SOCKS5, HTTP, HTTPS] }
+        default_udp: { type: boolean, description: SOCKS5 代理端是否支持 UDP ASSOCIATE }
+        country_code: { type: string }
+        city: { type: string }
+        region: { type: string }
+        name_prefix: { type: string }
+        min_tier: { type: integer, minimum: 1, maximum: 9 }
+        enable: { type: boolean, description: 导入后直接启用（默认停用） }
+        update_existing: { type: boolean, description: 指纹已存在时更新凭据与参数（默认跳过） }
+    EgressSubscriptionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        operation_id: { type: string, format: uuid }
+        name: { type: string }
+        url: { type: string, description: https 订阅地址（加密保存） }
+        default_protocol: { type: string, enum: [SOCKS5, HTTP, HTTPS] }
+        country_code: { type: string }
+        region: { type: string }
+        min_tier: { type: integer, minimum: 1, maximum: 9 }
+    ErrorEnvelope:
+      type: object
+      required: [error, request_id]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: integer }
+            message: { type: string }
+        request_id: { type: string }
+    ManagedAdmin:
+      type: object
+      additionalProperties: false
+      required: [id, username, status, role_ids, created_at, updated_at, last_login_at]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        status: { type: string, enum: [ACTIVE, LOCKED, DISABLED] }
+        role_ids: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        last_login_at: { type: [string, 'null'], format: date-time }
+    ManagedAdminRole:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, permissions]
+      properties:
+        id: { type: string }
+        code: { type: string }
+        name: { type: string }
+        permissions: { type: array, items: { type: string } }
+    ManagedAdminPage:
+      type: object
+      additionalProperties: false
+      required: [items, roles, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ManagedAdmin' } }
+        roles: { type: array, items: { $ref: '#/components/schemas/ManagedAdminRole' } }
+        total: { type: string }
+        page: { type: integer }
+        page_size: { type: integer }
+    ManagedSharedPayAddress:
+      type: object
+      additionalProperties: false
+      required: [address, note, auto_detected, created_at]
+      properties:
+        address: { type: string, maxLength: 64 }
+        note: { type: [string, 'null'], maxLength: 128 }
+        auto_detected: { type: boolean }
+        created_at: { type: string, format: date-time }
+    ManagedSharedPayAddressPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, page, page_size, observed_at]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ManagedSharedPayAddress' } }
+        total: { type: string, pattern: '^[0-9]{1,20}$' }
+        page: { type: integer }
+        page_size: { type: integer }
+        observed_at: { type: string, format: date-time }
+    ManagedReceiveAddressStatus:
+      type: object
+      additionalProperties: false
+      required: [id, network, address, status, previous_status, valid_until, active_remaining, updated_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        network: { type: string, enum: [TRON, MOCK] }
+        address: { type: string, maxLength: 64 }
+        status: { type: string, enum: [ACTIVE, PAUSED, RETIRED] }
+        previous_status: { type: string, enum: [ACTIVE, PAUSED, RETIRED] }
+        valid_until: { type: string, format: date-time }
+        active_remaining: { type: string, pattern: '^[0-9]{1,20}$', description: 本次改动后仍可用的收款地址数量 }
+        updated_at: { type: string, format: date-time }
+    ManagedInviteRule:
+      type: object
+      additionalProperties: false
+      required: [id, name, trigger_event, beneficiary, reward_type, reward_value,
+                 reward_percent_bp, min_order_amount_micro, freeze_hours, daily_cap_per_inviter,
+                 status, starts_at, ends_at, version, updated_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        name: { type: string, maxLength: 64 }
+        trigger_event: { type: string, enum: [INVITEE_REGISTERED, INVITEE_FIRST_PAID, INVITEE_PAID] }
+        beneficiary: { type: string, enum: [INVITER, INVITEE] }
+        reward_type: { type: string, enum: [DAYS, TRAFFIC, BALANCE] }
+        reward_value: { type: string, pattern: '^[0-9]{1,19}$', description: 单位随 reward_type 变（天 / 字节 / micro） }
+        reward_percent_bp: { type: [integer, 'null'] }
+        min_order_amount_micro: { type: [string, 'null'], pattern: '^[0-9]{1,19}$' }
+        freeze_hours: { type: integer }
+        daily_cap_per_inviter: { type: [integer, 'null'] }
+        status: { type: string, enum: [ENABLED, DISABLED] }
+        starts_at: { type: [string, 'null'], format: date-time }
+        ends_at: { type: [string, 'null'], format: date-time }
+        version: { type: string, pattern: '^[1-9][0-9]{0,9}$' }
+        updated_at: { type: string, format: date-time }
+    ManagedConfig:
+      type: object
+      additionalProperties: false
+      required: [key, value, version, created, updated_at]
+      properties:
+        key: { type: string, maxLength: 64 }
+        value: { description: 规范化后的值 }
+        version: { type: string, pattern: '^[1-9][0-9]{0,9}$' }
+        created: { type: boolean, description: 本次是否是该 key 的第一条记录 }
+        updated_at: { type: string, format: date-time }
+    Dashboard:
+      type: object
+      additionalProperties: false
+      description: sections 列出本次实际包含的段；未列出的段不在响应里，不能当成 0。
+      required: [sections, observed_at]
+      properties:
+        sections: { type: array, items: { type: string, enum: [users, nodes, traffic, finance, invite] } }
+        users:
+          type: object
+          additionalProperties: false
+          required: [by_status, devices_active]
+          properties:
+            by_status: { type: object, additionalProperties: { type: string, pattern: '^[0-9]{1,20}$' } }
+            devices_active: { type: string, pattern: '^[0-9]{1,20}$' }
+        nodes:
+          type: object
+          additionalProperties: false
+          required: [by_status]
+          properties:
+            by_status: { type: object, additionalProperties: { type: string, pattern: '^[0-9]{1,20}$' } }
+        traffic:
+          type: object
+          additionalProperties: false
+          required: [window_days, from, to, upload_bytes, download_bytes, total_bytes]
+          properties:
+            window_days: { type: integer }
+            from: { type: string, format: date }
+            to: { type: string, format: date }
+            upload_bytes: { type: string, pattern: '^[0-9]{1,20}$' }
+            download_bytes: { type: string, pattern: '^[0-9]{1,20}$' }
+            total_bytes: { type: string, pattern: '^[0-9]{1,20}$' }
+        finance:
+          type: object
+          additionalProperties: false
+          required: [orders_created_today, deposit_exceptions_open]
+          properties:
+            orders_created_today: { type: string, pattern: '^[0-9]{1,20}$' }
+            deposit_exceptions_open: { type: string, pattern: '^[0-9]{1,20}$' }
+        invite:
+          type: object
+          additionalProperties: false
+          required: [rewards_in_review]
+          properties:
+            rewards_in_review: { type: string, pattern: '^[0-9]{1,20}$' }
+        observed_at: { type: string, format: date-time }
+    ManagedDeviceOverviewPage:
+      type: object
+      additionalProperties: false
+      required: [items, total, page, page_size, observed_at]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [user_id, id, platform, display_name, status, created_at, last_seen_at, revoked_at]
+            properties:
+              user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+              id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+              platform: { type: string, enum: [ANDROID, IOS] }
+              display_name: { type: [string, 'null'], maxLength: 64 }
+              status: { type: string, enum: [ACTIVE, REVOKED] }
+              created_at: { type: string, format: date-time }
+              last_seen_at: { type: [string, 'null'], format: date-time }
+              revoked_at: { type: [string, 'null'], format: date-time }
+        total: { type: string, pattern: '^[0-9]{1,20}$' }
+        page: { type: integer }
+        page_size: { type: integer }
+        observed_at: { type: string, format: date-time }
+    TrafficStatItem:
+      type: object
+      additionalProperties: false
+      description: |
+        维度键只出现该维度对应的那一个字段：dim=day 给 stat_date，dim=user 给 user_id，
+        dim=device 给 device_id 与它所属的 user_id（一台设备只属于一个用户），dim=node 给 node_id。
+      required: [upload_bytes, download_bytes, total_bytes]
+      properties:
+        stat_date: { type: string, format: date }
+        user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        device_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        node_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        upload_bytes: { type: string, pattern: '^[0-9]{1,20}$' }
+        download_bytes: { type: string, pattern: '^[0-9]{1,20}$' }
+        total_bytes: { type: string, pattern: '^[0-9]{1,20}$' }
+    TrafficStatsPage:
+      type: object
+      additionalProperties: false
+      description: total 是该维度下的分组数量，不是流量总和；observed_at 是本次快照时间。
+      required: [dim, from, to, items, total, page, page_size, observed_at]
+      properties:
+        dim: { type: string, enum: [day, user, device, node] }
+        from: { type: string, format: date }
+        to: { type: string, format: date }
+        items: { type: array, items: { $ref: '#/components/schemas/TrafficStatItem' } }
+        total: { type: string, pattern: '^[0-9]{1,20}$' }
+        page: { type: integer }
+        page_size: { type: integer }
+        observed_at: { type: string, format: date-time }
+    ManagedBlacklistEntry:
+      type: object
+      additionalProperties: false
+      required: [id, target_type, target_value, effects, reason, status, expires_at, created_at, removed_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        target_type: { type: string, enum: [USER, DEVICE, FINGERPRINT, PAY_ADDRESS, IP_PREFIX, INVITE_CODE] }
+        target_value: { type: string, maxLength: 128 }
+        effects: { type: array, items: { type: string, enum: [INVITE_BIND, INVITE_REWARD, ALL] } }
+        reason: { type: string, maxLength: 255 }
+        status: { type: string, enum: [ACTIVE, REMOVED] }
+        expires_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+        removed_at: { type: [string, 'null'], format: date-time }
+    ManagedExport:
+      type: object
+      additionalProperties: false
+      required: [id, kind, range_from, range_to, status, requested_by, watermark,
+                 row_count, byte_size, content_sha256, failure_reason,
+                 created_at, finished_at, expires_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        kind: { type: string, enum: [ORDERS, CHAIN_TRANSFERS, TRAFFIC, RECONCILE] }
+        # RECONCILE 恒为 null：对账是此刻的异常清单，没有区间可言。
+        range_from: { type: [string, 'null'], format: date }
+        range_to: { type: [string, 'null'], format: date }
+        status: { type: string, enum: [PENDING, READY, FAILED, EXPIRED] }
+        requested_by: { type: string, description: 发起人的管理员账号 }
+        # 方案 12.4 要求的水印原文；它也逐字出现在文件的首行与末行。
+        watermark: { type: string }
+        # 行数不含水印行与表头。生成完成前为 null。
+        row_count: { type: [string, 'null'], pattern: '^(0|[1-9][0-9]{0,18})$' }
+        byte_size: { type: [string, 'null'], pattern: '^(0|[1-9][0-9]{0,18})$' }
+        content_sha256: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$' }
+        failure_reason: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+        expires_at: { type: [string, 'null'], format: date-time }
+    ManagedInviteRelation:
+      type: object
+      additionalProperties: false
+      required: [invitee_user_id, inviter_user_id, invite_code, bind_method, risk_flags, created_at]
+      properties:
+        invitee_user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        inviter_user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        invite_code: { type: string, maxLength: 12 }
+        bind_method: { type: string, enum: [APK_CHANNEL, CLIPBOARD, MANUAL] }
+        risk_flags: { type: array, items: { type: string } }
+        created_at: { type: string, format: date-time }
+    ManagedInviteReward:
+      type: object
+      additionalProperties: false
+      required: [id, rule_id, inviter_user_id, invitee_user_id, beneficiary_user_id, trigger_ref,
+                 reward_type, reward_value, value_unit, amount, status, risk_flags, release_at,
+                 cancel_reason, released_at, created_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        rule_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        inviter_user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        invitee_user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        beneficiary_user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        trigger_ref: { type: string, maxLength: 64 }
+        reward_type: { type: string, enum: [DAYS, TRAFFIC, BALANCE] }
+        reward_value: { type: string, description: 单位见 value_unit }
+        value_unit: { type: string, enum: [DAYS, BYTES, USDT_MICRO] }
+        amount: { type: [string, 'null'], description: 仅 BALANCE 有值；固定 6 位小数的 USDT }
+        status: { type: string, enum: [PENDING, REVIEW, RELEASED, CANCELLED] }
+        risk_flags: { type: array, items: { type: string } }
+        release_at: { type: string, format: date-time }
+        cancel_reason: { type: [string, 'null'], maxLength: 255 }
+        released_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    ReviewedReward:
+      type: object
+      additionalProperties: false
+      required: [id, inviter_user_id, invitee_user_id, beneficiary_user_id, reward_type,
+                 reward_value, status, risk_flags]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        inviter_user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        invitee_user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        beneficiary_user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        reward_type: { type: string, enum: [DAYS, TRAFFIC, BALANCE] }
+        reward_value: { type: string }
+        status: { type: string, enum: [RELEASED, CANCELLED], description: 处置之后的状态 }
+        risk_flags: { type: array, items: { type: string }, description: 处置前的风险标记 }
+    ManagedOrder:
+      type: object
+      additionalProperties: false
+      required: [order_no, user_id, order_type, status, pay_method, base_amount, pay_amount, currency,
+                 is_late_payment, expires_at, paid_at, completed_at, created_at]
+      properties:
+        order_no: { type: string }
+        user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        order_type: { type: string }
+        status: { type: string }
+        pay_method: { type: string }
+        base_amount: { type: string, description: 固定 6 位小数的字符串，绝不用 JSON 数字 }
+        pay_amount: { type: string }
+        currency: { type: string }
+        is_late_payment: { type: boolean }
+        expires_at: { type: string, format: date-time }
+        paid_at: { type: [string, 'null'], format: date-time }
+        completed_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: string, format: date-time }
+    ManagedChainTransfer:
+      type: object
+      additionalProperties: false
+      required: [id, network, tx_hash, from_address, to_address, amount, currency, block_number,
+                 block_time, confirm_status, match_status, order_no, created_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        network: { type: string }
+        tx_hash: { type: string }
+        from_address: { type: string }
+        to_address: { type: string }
+        amount: { type: string }
+        currency: { type: string }
+        block_number: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+        block_time: { type: string, format: date-time }
+        confirm_status: { type: string }
+        match_status: { type: string }
+        order_no: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    ManagedNodeGroup:
+      type: object
+      additionalProperties: false
+      required: [id, name, min_tier]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        name: { type: string, minLength: 1, maxLength: 64 }
+        min_tier: { type: integer, minimum: 0, maximum: 9 }
+    ManagedInboundDetail:
+      type: object
+      additionalProperties: false
+      required: [id, protocol, port, priority, status, public_params]
+      description: |
+        public_params 是会发给每个客户端的公开参数。写入时经过严格白名单校验，
+        结构上不可能含有私钥或口令。
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        protocol: { type: string, enum: [VLESS_REALITY, TROJAN, SS2022, WIREGUARD, HYSTERIA2] }
+        port: { type: integer, minimum: 1, maximum: 65535 }
+        priority: { type: integer }
+        status: { type: string, enum: [ENABLED, DISABLED] }
+        public_params: { type: object }
+    ManagedNode:
+      type: object
+      additionalProperties: false
+      required: [id, name, group, country_code, city, region, status, is_recommended, capacity_users, online_count, load_score, last_heartbeat_at, heartbeat_state, agent_version, updated_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        name: { type: string, minLength: 1, maxLength: 64 }
+        group:
+          type: object
+          additionalProperties: false
+          required: [id, name, min_tier]
+          properties:
+            id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+            name: { type: string, minLength: 1, maxLength: 64 }
+            min_tier: { type: integer, minimum: 0, maximum: 9 }
+        country_code: { type: string, pattern: '^[A-Z]{2}$' }
+        city: { type: string, maxLength: 64 }
+        region: { type: string, minLength: 1, maxLength: 32 }
+        status: { type: string, enum: [ONLINE, OFFLINE, MAINTENANCE, DISABLED] }
+        is_recommended: { type: boolean }
+        capacity_users: { type: integer, minimum: 0, maximum: 2147483647 }
+        online_count: { type: integer, minimum: 0, maximum: 2147483647 }
+        load_score: { type: integer, minimum: 0, maximum: 100 }
+        last_heartbeat_at: { type: [string, 'null'], format: date-time }
+        heartbeat_state:
+          type: string
+          enum: [FRESH, STALE, NEVER, CLOCK_SKEW]
+          description: 按observed_at计算；无心跳NEVER，未来时间CLOCK_SKEW，超过90秒STALE，其余FRESH。独立于配置状态，不改写数据库。
+        agent_version: { type: [string, 'null'], maxLength: 32 }
+        updated_at: { type: string, format: date-time }
+    ManagedUserSummary:
+      type: object
+      additionalProperties: false
+      required: [id, account_no, status, balance, currency, active_device_count, created_at, updated_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]*$' }
+        account_no: { type: string, pattern: '^[1-9][0-9]{9}$' }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, BANNED] }
+        balance: { type: [string, 'null'], pattern: '^[0-9]+\.[0-9]{6}$', description: USDT金额；余额行缺失为null }
+        currency: { type: string, const: USDT }
+        active_device_count: { type: string, pattern: '^[0-9]+$' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    ManagedUserDetail:
+      type: object
+      additionalProperties: false
+      required: [id, account_no, status, balance, currency, active_device_count, created_at, updated_at, invite_code, balance_updated_at, subscription]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]*$' }
+        account_no: { type: string, pattern: '^[1-9][0-9]{9}$' }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, BANNED] }
+        balance: { type: [string, 'null'], pattern: '^[0-9]+\.[0-9]{6}$', description: USDT金额；余额行缺失为null }
+        currency: { type: string, const: USDT }
+        active_device_count: { type: string, pattern: '^[0-9]+$' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        invite_code: { type: string, minLength: 1, maxLength: 12 }
+        balance_updated_at: { type: [string, 'null'], format: date-time }
+        subscription:
+          oneOf:
+            - { type: 'null' }
+            - { $ref: '#/components/schemas/ManagedSubscriptionSnapshot' }
+    ManagedSubscriptionSnapshot:
+      type: object
+      additionalProperties: false
+      required: [plan_id, tier, expires_at, device_limit, period_quota_bytes, period_used_bytes, period_reset_at]
+      properties:
+        plan_id: { type: [string, 'null'] }
+        tier: { type: integer, minimum: 0, maximum: 9 }
+        expires_at: { type: [string, 'null'], format: date-time }
+        device_limit: { type: integer, minimum: 0, maximum: 2147483647 }
+        period_quota_bytes: { type: [string, 'null'], pattern: '^[0-9]+$' }
+        period_used_bytes: { type: string, pattern: '^[0-9]+$' }
+        period_reset_at: { type: [string, 'null'], format: date-time }
+    ManagedUserList:
+      type: object
+      additionalProperties: false
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ManagedUserSummary' } }
+        total: { type: string, pattern: '^[0-9]+$' }
+        page: { type: integer }
+        page_size: { type: integer }
+    ManagedBalanceLedgerEntry:
+      type: object
+      additionalProperties: false
+      required: [id, entry_type, amount, balance_after, source_type, source_id, operator_type, created_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]*$' }
+        entry_type: { type: string, enum: [DEPOSIT, PURCHASE, INVITE_REWARD, EXCEPTION_CREDIT, FULFILL_FALLBACK, ADMIN_CREDIT, ADMIN_DEBIT] }
+        amount: { type: string, pattern: '^-?[0-9]+\.[0-9]{6}$' }
+        balance_after: { type: string, pattern: '^[0-9]+\.[0-9]{6}$' }
+        source_type: { type: string, enum: [CHAIN_TRANSFER, ORDER, INVITE_REWARD, DEPOSIT_EXCEPTION, ADMIN_APPROVAL] }
+        source_id: { type: string }
+        operator_type: { type: string, enum: [USER, ADMIN, SYSTEM] }
+        created_at: { type: string, format: date-time }
+    ManagedEntitlementLedgerEntry:
+      type: object
+      additionalProperties: false
+      required: [id, change_type, delta_seconds, delta_bytes, delta_devices, source_type, source_id, operator_type, created_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]*$' }
+        change_type: { type: string, enum: [PURCHASE, RENEW, TIER_CHANGE, TRAFFIC_PACK, DEVICE_ADDON, INVITE_REWARD, ADMIN_ADJUST, TRAFFIC_CONSUME_OVERFLOW, PERIOD_RESET, EXPIRE, REVOKE] }
+        delta_seconds: { type: string, pattern: '^-?[0-9]+$' }
+        delta_bytes: { type: string, pattern: '^-?[0-9]+$' }
+        delta_devices: { type: string, pattern: '^-?[0-9]+$' }
+        source_type: { type: string, enum: [ORDER, INVITE_REWARD, ADMIN_APPROVAL, SYSTEM] }
+        source_id: { type: [string, 'null'] }
+        operator_type: { type: string, enum: [USER, ADMIN, SYSTEM] }
+        created_at: { type: string, format: date-time }
+    ManagedBalanceLedgerPage:
+      type: object
+      additionalProperties: false
+      required: [user_id, type, currency, items, total, page, page_size]
+      properties:
+        user_id: { type: string }
+        type: { type: string, const: balance }
+        currency: { type: string, const: USDT }
+        items: { type: array, items: { $ref: '#/components/schemas/ManagedBalanceLedgerEntry' } }
+        total: { type: string, pattern: '^[0-9]+$' }
+        page: { type: integer }
+        page_size: { type: integer }
+    ManagedEntitlementLedgerPage:
+      type: object
+      additionalProperties: false
+      required: [user_id, type, currency, items, total, page, page_size]
+      properties:
+        user_id: { type: string }
+        type: { type: string, const: entitlement }
+        currency: { type: 'null' }
+        items: { type: array, items: { $ref: '#/components/schemas/ManagedEntitlementLedgerEntry' } }
+        total: { type: string, pattern: '^[0-9]+$' }
+        page: { type: integer }
+        page_size: { type: integer }
+    ManagedDevice:
+      type: object
+      additionalProperties: false
+      required: [id, platform, display_name, status, created_at, last_seen_at, revoked_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]*$', description: 公开设备记录编号，正int64规范十进制字符串 }
+        platform: { type: string, enum: [ANDROID, IOS] }
+        display_name: { type: [string, 'null'], maxLength: 64, description: 普通文本；可空或null，不含控制字符，不解释为HTML }
+        status: { type: string, enum: [ACTIVE, REVOKED] }
+        created_at: { type: string, format: date-time }
+        last_seen_at: { type: [string, 'null'], format: date-time }
+        revoked_at: { type: [string, 'null'], format: date-time }
+    ManagedDeviceDetail:
+      type: object
+      additionalProperties: false
+      required: [user_id, device]
+      properties:
+        user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        device: { $ref: '#/components/schemas/ManagedDevice' }
+    DeviceRevocationReceipt:
+      type: object
+      additionalProperties: false
+      required: [node_id, node_name, node_status, confirmed]
+      properties:
+        node_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        node_name: { type: string, maxLength: 64 }
+        node_status: { type: string, enum: [ONLINE, OFFLINE, MAINTENANCE, DISABLED] }
+        confirmed: { type: boolean, description: 该节点已确认这些凭据不存在 }
+        confirmed_absent_at: { type: string, format: date-time, nullable: true }
+        heartbeat_sequence: { type: string, pattern: '^[1-9][0-9]{0,18}$', nullable: true }
+        snapshot_checksum: { type: string, pattern: '^[a-f0-9]{64}$', nullable: true }
+    DeviceRevocationReceipts:
+      type: object
+      additionalProperties: false
+      required: [user_id, device_id, device_status, credential_count, confirmed_node_count, items]
+      properties:
+        user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        device_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        device_status: { type: string, enum: [ACTIVE, REVOKED] }
+        credential_count: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$', description: 该设备的凭据条数；为 0 时任何节点都无从确认 }
+        confirmed_node_count: { type: string, pattern: '^(0|[1-9][0-9]{0,18})$' }
+        items:
+          type: array
+          maxItems: 200
+          items: { $ref: '#/components/schemas/DeviceRevocationReceipt' }
+    DeviceRevokeInput:
+      type: object
+      additionalProperties: false
+      required: [operation_id, user_id, reason]
+      properties:
+        operation_id: { type: string, format: uuid, pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' }
+        user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        reason: { type: string, minLength: 1, maxLength: 500, description: 首尾无空白、无控制字符；不要填写密码、令牌或密钥 }
+    DeviceRevokeResult:
+      type: object
+      additionalProperties: false
+      required: [operation_id, user_id, device, already_revoked, node_sync]
+      properties:
+        operation_id: { type: string, format: uuid }
+        user_id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        device: { $ref: '#/components/schemas/ManagedDevice' }
+        already_revoked: { type: boolean, description: 首次处理该操作时设备是否已经撤销 }
+        node_sync: { type: string, enum: [QUEUED, NOT_REQUIRED], description: QUEUED仅表示本次已写节点事件（含修补历史撤销）；NOT_REQUIRED表示已有目标移除事件或没有节点凭据，不代表节点执行回执 }
+    ManagedDevicePage:
+      type: object
+      additionalProperties: false
+      required: [user_id, items, total, page, page_size]
+      properties:
+        user_id: { type: string, pattern: '^[1-9][0-9]*$' }
+        items: { type: array, maxItems: 50, items: { $ref: '#/components/schemas/ManagedDevice' } }
+        total: { type: string, pattern: '^(0|[1-9][0-9]*)$' }
+        page: { type: integer, minimum: 1, maximum: 10000 }
+        page_size: { type: integer, minimum: 1, maximum: 50 }
+    AppVersionCreate:
+      type: object
+      additionalProperties: false
+      required: [operation_id, platform, version_name, version_code, min_supported_code, download_url, file_sha256, cert_sha256, release_notes]
+      properties:
+        operation_id: { type: string, format: uuid, description: 规范小写UUIDv4 }
+        platform: { type: string, enum: [ANDROID, IOS] }
+        version_name: { type: string, minLength: 1, maxLength: 32 }
+        version_code: { type: string, pattern: '^[1-9][0-9]{0,9}$', description: 1至2147483647的规范十进制整数 }
+        min_supported_code: { type: string, pattern: '^(0|[1-9][0-9]{0,9})$', description: 不大于version_code }
+        download_url: { type: string, maxLength: 512, description: 公网HTTPS域名链接；不允许IP直链、用户凭据、查询、片段、本地域名或数字IPv4别名 }
+        file_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        cert_sha256: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$', description: ANDROID必填；IOS可为null }
+        release_notes: { type: string, maxLength: 16000, description: 同时限制最大16000 UTF-8字节 }
+    AppVersionUpdate:
+      type: object
+      additionalProperties: false
+      required: [operation_id, expected_snapshot_hash, platform, version_name, version_code, min_supported_code, download_url, file_sha256, cert_sha256, release_notes]
+      properties:
+        operation_id: { type: string, format: uuid, description: 规范小写UUIDv4 }
+        expected_snapshot_hash: { type: string, pattern: '^[a-f0-9]{64}$' }
+        platform: { type: string, enum: [ANDROID, IOS] }
+        version_name: { type: string, minLength: 1, maxLength: 32 }
+        version_code: { type: string, pattern: '^[1-9][0-9]{0,9}$', description: 1至2147483647的规范十进制整数 }
+        min_supported_code: { type: string, pattern: '^(0|[1-9][0-9]{0,9})$', description: 不大于version_code }
+        download_url: { type: string, maxLength: 512, description: 公网HTTPS域名链接；不允许IP直链、用户凭据、查询、片段、本地域名或数字IPv4别名 }
+        file_sha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+        cert_sha256: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$', description: ANDROID必填；IOS可为null }
+        release_notes: { type: string, maxLength: 16000, description: 同时限制最大16000 UTF-8字节 }
+    AppVersionDetail:
+      type: object
+      additionalProperties: false
+      required: [id, platform, version_name, version_code, min_supported_code, download_url, file_sha256, cert_sha256, release_notes, status, published_at, approval_id, created_at, snapshot_hash, pending_approval_id, can_edit]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]*$' }
+        platform: { type: string, enum: [ANDROID, IOS] }
+        version_name: { type: string, minLength: 1, maxLength: 32 }
+        version_code: { type: string, pattern: '^[1-9][0-9]{0,9}$', description: 1至2147483647的规范十进制整数 }
+        min_supported_code: { type: string, pattern: '^(0|[1-9][0-9]{0,9})$', description: 不大于version_code }
+        download_url: { type: [string, 'null'], maxLength: 512, description: 公网HTTPS域名链接；不允许IP直链、用户凭据、查询、片段、本地域名或数字IPv4别名 }
+        file_sha256: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$' }
+        cert_sha256: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$', description: ANDROID必填；IOS可为null }
+        release_notes: { type: string, maxLength: 16000, description: 同时限制最大16000 UTF-8字节 }
+        status: { type: string, enum: [DRAFT, PUBLISHED, WITHDRAWN] }
+        published_at: { type: [string, 'null'] }
+        approval_id: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        snapshot_hash: { type: string, pattern: '^[a-f0-9]{64}$' }
+        pending_approval_id: { type: [string, 'null'] }
+        can_edit: { type: boolean, description: 仅表达草稿且无有效待审批、无已发布时间或关联审批；调用方仍须拥有app_versions.draft权限 }
+    AppVersionList:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AppVersionDetail' } }
+        total: { type: string, pattern: '^[0-9]+$' }
+        page: { type: integer }
+        page_size: { type: integer }
+    ApprovalStatus: { type: string, enum: [PENDING, APPROVED, REJECTED, EXECUTED, EXPIRED, FAILED] }
+    ApprovalDetail:
+      type: object
+      required: [id, action_code, target_type, target_id, status, reason, requested_by, created_at, expires_at, payload_hash, executor_supported]
+      properties:
+        id: { type: string }
+        action_code: { type: string }
+        target_type: { type: string }
+        target_id: { type: [string, 'null'] }
+        status: { $ref: '#/components/schemas/ApprovalStatus' }
+        reason: { type: string }
+        requested_by: { type: string }
+        decided_by: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        decided_at: { type: [string, 'null'], format: date-time }
+        executed_at: { type: [string, 'null'], format: date-time }
+        decision_note: { type: [string, 'null'] }
+        payload_hash: { type: string }
+        executor_supported: { type: boolean }
+        snapshot:
+          type: object
+          description: 已验证的公开版本字段或管理员账号与角色快照；大整数均字符串，不包含凭据。
+          additionalProperties: { type: [string, 'null'] }
+    ApprovalList:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/ApprovalDetail' } }
+        total: { type: string }
+        page: { type: integer }
+        page_size: { type: integer }
+    AuditEntry:
+      type: object
+      required: [id, action_code, target_type, request_id, result, step_up_verified, created_at, prev_hash, row_hash]
+      properties:
+        id: { type: string }
+        admin_user_id: { type: [string, 'null'] }
+        action_code: { type: string }
+        target_type: { type: [string, 'null'] }
+        target_id: { type: [string, 'null'] }
+        approval_id: { type: [string, 'null'] }
+        request_id: { type: string }
+        result: { type: string, enum: [SUCCESS, FAILED, DENIED] }
+        step_up_verified: { type: boolean }
+        created_at: { type: string, format: date-time }
+        prev_hash: { type: string }
+        row_hash: { type: string }
+    AuditList:
+      type: object
+      required: [items, total, page, page_size]
+      properties:
+        items: { type: array, items: { $ref: '#/components/schemas/AuditEntry' } }
+        total: { type: string }
+        page: { type: integer }
+        page_size: { type: integer }
+    AuditVerification:
+      type: object
+      required: [valid, from_id, to_id, checked, head_id, head_hash, reason, external_anchor]
+      properties:
+        valid: { type: boolean }
+        from_id: { type: string }
+        to_id: { type: string }
+        checked: { type: integer }
+        head_id: { type: string }
+        head_hash: { type: string }
+        first_broken_id: { type: [string, 'null'] }
+        reason: { type: string }
+        external_anchor: { type: boolean, const: false }
+    # 原 PlanInput 已按数据库为准重写为 PlanCreate / PlanPatch 两个 schema。
+    # 三处与实现对不上的地方在此一并改正，理由写在各自字段上：
+    #   - node_group_ids：**全库没有套餐与节点组的任何关联**，节点可见范围由 tier 决定
+    #     （node_groups.min_tier）。契约承诺一个不存在的能力比少写一个字段更糟，故删除。
+    #   - quota_bytes / period_days：数据库里是 period_quota_bytes（TIME，每 30 天配额）
+    #     与 pack_bytes + validity_days（TRAFFIC），原来的两个字段在两种类型间含义不清。
+    #   - list_price → price：必须是 0.1 USDT 的整数倍（数据库约束）。
+    PlanCreate:
+      type: object
+      additionalProperties: false
+      required: [operation_id, reason, code, name, plan_type, tier, price]
+      properties:
+        operation_id: { type: string, format: uuid }
+        reason: { type: string, minLength: 1, maxLength: 200 }
+        code:
+          type: string
+          pattern: '^[A-Z][A-Z0-9_]{1,31}$'
+          description: App 与订单快照引用的稳定标识，建好之后不可修改
+        name: { type: string, minLength: 1, maxLength: 64 }
+        plan_type: { type: string, enum: [TIME, TRAFFIC, DEVICE_ADDON], description: 建好之后不可修改 }
+        tier: { type: integer, minimum: 1, maximum: 9, description: 决定可用节点组（node_groups.min_tier） }
+        price: { type: string, description: 必须是 0.1 USDT 的整数倍，例如 "9.900000" }
+        duration_days: { type: integer, minimum: 1, maximum: 3650, description: 仅 TIME }
+        period_quota_bytes:
+          type: [string, 'null']
+          description: 仅 TIME；每 30 天配额，省略或 null 表示不限量。字符串以免 JSON number 失精
+        pack_bytes: { type: [string, 'null'], description: 仅 TRAFFIC }
+        validity_days: { type: integer, minimum: 1, maximum: 3650, description: 仅 TRAFFIC }
+        device_limit: { type: integer, minimum: 1, maximum: 100, description: 仅 TIME / TRAFFIC }
+        extra_devices: { type: integer, minimum: 1, maximum: 100, description: 仅 DEVICE_ADDON }
+        badge: { type: [string, 'null'], maxLength: 32 }
+        sort_order: { type: integer, minimum: 0, maximum: 100000 }
+    PlanPatch:
+      type: object
+      additionalProperties: false
+      required: [operation_id, reason]
+      description: 部分更新；未出现的键保持原样。至少要给出一个可改字段。
+      properties:
+        operation_id: { type: string, format: uuid }
+        reason: { type: string, minLength: 1, maxLength: 200 }
+        name: { type: string, minLength: 1, maxLength: 64 }
+        tier: { type: integer, minimum: 1, maximum: 9 }
+        price: { type: string }
+        duration_days: { type: integer, minimum: 1, maximum: 3650 }
+        period_quota_bytes: { type: [string, 'null'], description: 显式 null = 改成不限量 }
+        pack_bytes: { type: [string, 'null'] }
+        validity_days: { type: integer, minimum: 1, maximum: 3650 }
+        device_limit: { type: integer, minimum: 1, maximum: 100 }
+        extra_devices: { type: integer, minimum: 1, maximum: 100 }
+        badge: { type: [string, 'null'] }
+        sort_order: { type: integer, minimum: 0, maximum: 100000 }
+    ManagedPlan:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, plan_type, tier, duration_days, period_quota_bytes, pack_bytes,
+                 validity_days, device_limit, extra_devices, price, badge, sort_order, status,
+                 version, created_at, updated_at]
+      properties:
+        id: { type: string, pattern: '^[1-9][0-9]{0,18}$' }
+        code: { type: string }
+        name: { type: string }
+        plan_type: { type: string, enum: [TIME, TRAFFIC, DEVICE_ADDON] }
+        tier: { type: integer }
+        duration_days: { type: [integer, 'null'] }
+        period_quota_bytes: { type: [string, 'null'], description: null 表示不限量 }
+        pack_bytes: { type: [string, 'null'] }
+        validity_days: { type: [integer, 'null'] }
+        device_limit: { type: [integer, 'null'] }
+        extra_devices: { type: [integer, 'null'] }
+        price: { type: string, description: 固定 6 位小数 }
+        badge: { type: [string, 'null'] }
+        sort_order: { type: integer }
+        status: { type: string, enum: [DRAFT, ON_SALE, OFF_SALE] }
+        version: { type: integer, description: 实质改动才 +1；未结报价靠它作废 }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }

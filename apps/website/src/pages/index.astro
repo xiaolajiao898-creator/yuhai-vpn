@@ -1,0 +1,255 @@
+---
+import Base from '../layouts/Base.astro';
+import Lifestyle from '../components/Lifestyle.astro';
+import { release } from '../data/release';
+import { support } from '../data/support';
+import { privacyData } from '../data/privacy';
+const dl = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>`;
+const power = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>`;
+const lock = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2.5"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>`;
+const eye = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/><path d="m3 3 18 18"/></svg>`;
+const hand = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>`;
+---
+<Base>
+  <!-- 首屏：先讲加密、隐私与掌控；速度与线路在第二层。右侧为界面示意（示例数据）。 -->
+  <section class="hero">
+    <div class="wrap">
+      <div class="reveal">
+        <span class="kicker">加密传输 · 隐私保护 · 由你掌控</span>
+        <h1><span class="nowrap">你的连接，</span><span class="nowrap accent">加密传输。</span><br /><span class="nowrap">你的信息，</span><span class="nowrap">你说了算。</span></h1>
+        <p class="lead">宇海用 WireGuard 加密你的网络连接。注册不需要手机号或邮箱；我们只收集提供服务必需的信息，并在下方写清楚收集什么、为什么、保留多久。</p>
+        <div class="actions">
+          <a class="btn btn-primary" href="/download/"><Fragment set:html={dl} />下载安卓版</a>
+          <a class="btn btn-outline" href="#privacy">我们收集什么</a>
+        </div>
+        <p class="hero-note">安卓正式版 {release.version} · 官方签名安装包 · 线路以 App 内实时列表为准</p>
+      </div>
+      <div class="stage">
+        <div class="phone" data-demo-phone data-state="idle" aria-label="连接页界面示意（示例数据）" role="img">
+          <div class="phone-top"><span>9:41</span><span class="phone-notch"></span><span>示意</span></div>
+          <div class="app-status"><i></i><span data-demo-label>未连接</span></div>
+          <div class="app-timer" data-demo-timer></div>
+          <div class="ring"><b set:html={power}></b><small data-demo-hint>轻触连接</small></div>
+          <div class="rates" data-demo-rates></div>
+          <div class="line-card">
+            <span class="flag">🇸🇬</span>
+            <div><b>新加坡 · 01</b><span>新加坡 · WireGuard 加密</span></div>
+          </div>
+          <div class="phone-nav"><span class="on">连接</span><span>套餐</span><span>邀请</span><span>我的</span></div>
+        </div>
+        <div class="demo-controls">
+          <button type="button" data-demo-toggle aria-pressed="true">暂停动效</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 三个承诺：每条都对应可核对的实现或政策 -->
+  <section class="section" id="pillars">
+    <div class="wrap">
+      <div class="grid-3">
+        <article class="card reveal">
+          <div class="ico" set:html={lock}></div>
+          <h3>加密传输</h3>
+          <p>安卓正式版使用 WireGuard 协议。IPv4 与 IPv6 流量都进入加密通道，DNS 查询也经加密通道发出。</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico" set:html={eye}></div>
+          <h3>隐私保护</h3>
+          <p>我们的服务器不记录你访问的网站和传输内容；为套餐计量只统计流量字节数。收集项与保留期见下方清单。</p>
+        </article>
+        <article class="card reveal">
+          <div class="ico" set:html={hand}></div>
+          <h3>由你掌控</h3>
+          <p>账号就是你自己钱包的 USDT 地址，密码自己设；设备可以随时在 App 里移除，忘记密码用这个地址自己找回。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- 三幕：①加密连接建立 ②选择新加坡/日本/美国 ③隐私设置与断网保护。每幕：生活方式横幅 + App 界面 + 简短说明 -->
+  <section class="section alt" id="product">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker">产品</span>
+        <h2>安心用网，从这三步开始。</h2>
+        <p>界面为新版 App 示意，数据为示例；人物图片仅为氛围示意，不是真实用户或评价。</p>
+      </div>
+
+      <article class="act reveal">
+        <Lifestyle id="act-encrypt" tone="sea" />
+        <div class="act-body">
+          <div class="act-copy">
+            <span class="kicker">01 · 加密连接建立</span>
+            <h3>轻触一次，连接即被加密。</h3>
+            <p>只有真正连通之后，才显示「已连接」和计时；连不上会写明原因，并给出「重试」或「换一条线路」。</p>
+          </div>
+          <div class="phone phone-sm" data-state="connected" role="img" aria-label="已连接状态示意">
+            <div class="phone-top"><span>9:41</span><span class="phone-notch"></span><span>示意</span></div>
+            <div class="app-status"><i></i><span>已连接</span></div>
+            <div class="app-timer">00:12:48</div>
+            <div class="ring"><b set:html={power}></b><small>轻触断开</small></div>
+            <div class="line-card"><span class="flag">🇯🇵</span><div><b>东京 · 01</b><span>日本 · 东京</span></div></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="act reverse reveal">
+        <Lifestyle id="act-regions" tone="dawn" />
+        <div class="act-body">
+          <div class="act-copy">
+            <span class="kicker">02 · 选择地区</span>
+            <h3>新加坡、日本、美国，一搜就到。</h3>
+            <p>按国家 → 城市 → 线路排列，常用的收藏、最近用过的排在前面。「延迟」是本机到线路的往返时间，不代表下载速度。</p>
+          </div>
+          <div class="phone phone-sm" role="img" aria-label="线路选择界面示意">
+            <div class="phone-top"><span>9:41</span><span class="phone-notch"></span><span>示意</span></div>
+            <div class="phone-title">选择线路</div>
+            <div class="search">⌕ 搜索国家、城市或线路</div>
+            <div class="chips"><span>🇸🇬 新加坡</span><span>🇺🇸 美国</span><span>🇯🇵 日本</span></div>
+            <div class="row sel"><span class="f">🇸🇬</span><div><b>新加坡 · 01</b><span>新加坡 · 延迟 36 ms</span></div><span class="star">★</span></div>
+            <div class="row"><span class="f">🇯🇵</span><div><b>大阪 · 01</b><span>大阪 · 延迟 58 ms</span></div><span class="star">☆</span></div>
+            <div class="row"><span class="f">🇺🇸</span><div><b>洛杉矶 · 01</b><span>洛杉矶 · 延迟 158 ms</span></div><span class="star">☆</span></div>
+            <div class="row off"><span class="f">🇺🇸</span><div><b>纽约 · 01</b><span>节点暂时离线</span></div></div>
+          </div>
+        </div>
+      </article>
+
+      <article class="act reveal">
+        <Lifestyle id="act-privacy" tone="mist" />
+        <div class="act-body">
+          <div class="act-copy">
+            <span class="kicker">03 · 隐私设置与断网保护</span>
+            <h3>哪些已经在保护你，写得明明白白。</h3>
+            <p>DNS 与 IPv6 走加密通道；设置只存在你的手机上。断网保护与自动连接仍在开发中——做好并验证之前，我们不会把它说成已提供。</p>
+          </div>
+          <div class="phone phone-sm" role="img" aria-label="连接设置界面示意">
+            <div class="phone-top"><span>9:41</span><span class="phone-notch"></span><span>示意</span></div>
+            <div class="phone-title">连接设置</div>
+            <div class="setting"><div><b>DNS 查询</b><span>经加密通道发出</span></div><em class="on">已启用</em></div>
+            <div class="setting"><div><b>IPv6</b><span>同样进入加密通道</span></div><em class="on">已启用</em></div>
+            <div class="setting off"><div><b>断网保护</b><span>连接意外中断时阻断其他流量</span></div><em>开发中</em></div>
+            <div class="setting off"><div><b>自动连接</b><span>当前版本需要手动连接</span></div><em>开发中</em></div>
+            <div class="setting"><div><b>偏好设置</b><span>只保存在本机</span></div><em>›</em></div>
+          </div>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- 隐私清单：内容来自 src/data/privacy.ts，每一项注明依据；没有落地的保留期写「尚未设定」，不编造。 -->
+  <section class="section" id="privacy">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker">隐私</span>
+        <h2>我们收集什么、为什么、保留多久。</h2>
+        <p>这里只写系统实际在做的事。规则变化时，先改这张表再上线。</p>
+      </div>
+      <div class="matrix-wrap reveal">
+        <table class="matrix">
+          <thead><tr><th>信息</th><th>用途</th><th>保留多久</th></tr></thead>
+          <tbody>
+            {privacyData.map((r) => (
+              <tr><td>{r.item}</td><td>{r.purpose}</td><td>{r.retention}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="fineprint">不收集：手机号、邮箱、通讯录、你访问的网站和传输内容。多协议线路上线后，若使用第三方线路供应商，其日志政策会在该线路旁单独注明。</p>
+    </div>
+  </section>
+
+  <!-- 支持范围：只写已发布、已验证的；测试中的如实标注。数据来自 src/data/support.ts。 -->
+  <section class="section alt" id="support">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker">支持范围</span>
+        <h2>支持什么，写得清清楚楚。</h2>
+        <p>只列已经发布的平台和协议；还在测试的会单独标出，不提前宣传。</p>
+      </div>
+      <div class="matrix-wrap reveal">
+        <table class="matrix">
+          <thead><tr><th>平台</th><th>状态</th><th>连接方式</th><th>说明</th></tr></thead>
+          <tbody>
+            {support.map((r) => (
+              <tr>
+                <td>{r.platform}</td>
+                <td><span class={`pill ${r.state === 'live' ? 'live' : r.state === 'test' ? 'test' : ''}`}>{r.stateLabel}</span></td>
+                <td>{r.protocols}</td>
+                <td>{r.note}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p class="fineprint">线路位置以 App 内实时列表为准；页面中的地区与延迟均为界面示例。中国大陆网络环境下的实际效果以你自己的使用为准。</p>
+    </div>
+  </section>
+
+  <section class="section" id="account">
+    <div class="wrap">
+      <div class="section-head reveal">
+        <span class="kicker">账户</span>
+        <h2>一个地址，一个密码。</h2>
+        <p>三步开始使用，不用留下手机号或邮箱。</p>
+      </div>
+      <div class="split">
+        <ol class="steps reveal">
+          <li><div><h3>填写你的 USDT 地址</h3><p>在 App 里输入你自己钱包的 TRON（TRC20）地址，作为登录账号。</p></div></li>
+          <li><div><h3>设置密码</h3><p>自己设置登录密码，请使用不容易被猜到的组合。</p></div></li>
+          <li><div><h3>选择套餐，连接</h3><p>用 USDT 付款，到账后轻触连接。</p></div></li>
+        </ol>
+        <div class="box-card reveal">
+          <h3>忘记密码怎么办？</h3>
+          <p>在 App 里点「忘记密码」，用<b>注册时的地址</b>向 App 显示的官方地址转一笔<b>约 1 TRX</b>的验证金额（请照抄 App 显示的精确金额）。链上确认后即可重设密码。</p>
+          <p class="note">请使用你自己钱包（如 TronLink、imToken）的地址，不要填交易所充值地址——那类地址无法由你自己转出，找回时无法完成验证。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section alt" id="faq">
+    <div class="wrap">
+      <div class="section-head center reveal">
+        <span class="kicker">常见问题</span>
+        <h2>你可能想了解</h2>
+      </div>
+      <div class="faq">
+        <details open>
+          <summary>用了宇海就绝对安全、绝对匿名吗？</summary>
+          <p>没有任何工具能做到绝对。宇海做的是：加密你设备与线路之间的连接、不记录你访问的网站和内容、只收集提供服务必需的信息。你在网站上登录的账号、浏览器指纹等，仍会被对应网站看到。</p>
+        </details>
+        <details>
+          <summary>支持哪些设备？</summary>
+          <p>目前正式提供安卓版（{release.minAndroid} 及以上）。其他平台上线后会在下载页更新。</p>
+        </details>
+        <details>
+          <summary>有新加坡、日本、美国的线路吗？</summary>
+          <p>可用线路以 App 内实时列表为准，列表每 30 秒自动核实一次；维护中或暂不可用的线路会标明原因，不会显示成可以连接。</p>
+        </details>
+        <details>
+          <summary>有断网保护吗？</summary>
+          <p>还在开发中。当前版本在连接意外中断时不会阻断其他流量；做好并验证后会在 App 设置和本页同时更新。</p>
+        </details>
+        <details>
+          <summary>怎么付款？</summary>
+          <p>在 App 里选好套餐后，用 USDT（TRC20）转到 App 显示的地址。请只使用 TRON 网络，转错网络的资金无法找回。</p>
+        </details>
+        <details>
+          <summary>怎么确认下载的是官方版本？</summary>
+          <p>官方网站仅 yhvpn.io。下载页公布了安装包 SHA-256 和签名证书指纹，核对一致才是官方版本。</p>
+        </details>
+      </div>
+    </div>
+  </section>
+
+  <section class="cta-band">
+    <div class="wrap">
+      <div>
+        <h2>加密你的连接，从现在开始。</h2>
+        <p>安卓正式版 {release.version} · {release.sizeMb} MB · 官方签名</p>
+      </div>
+      <a class="btn btn-white" href="/download/"><Fragment set:html={dl} />下载安卓版</a>
+    </div>
+  </section>
+</Base>
