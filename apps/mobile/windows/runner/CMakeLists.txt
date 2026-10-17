@@ -36,5 +36,10 @@ target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
+# 链接器会再生成一份 level=asInvoker 的 UAC 片段。和本清单里的
+# requireAdministrator 合并时 mt.exe 直接失败（LNK1327）。关掉自动片段，
+# 只嵌入 runner.exe.manifest。
+target_link_options(${BINARY_NAME} PRIVATE "/MANIFESTUAC:NO")
+
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
