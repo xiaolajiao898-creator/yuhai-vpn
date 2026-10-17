@@ -53,6 +53,10 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 add_subdirectory("runner")
 
 
+# VS 2026 / MSVC 14.51 把 <experimental/coroutine> 当成错误。local_auth_windows
+# 仍包含这个头。微软给出的过渡宏，插件和主程序一起带上。
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
