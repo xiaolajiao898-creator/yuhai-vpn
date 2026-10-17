@@ -8,6 +8,7 @@ import '../../../platform/vpn/native_vpn_engine.dart';
 import '../../../platform/vpn/unavailable_vpn_engine.dart';
 import '../../../platform/vpn/vpn_engine.dart';
 import '../../../platform/vpn/windows_wireguard_engine.dart';
+import '../../../platform/vpn/windows_xray_engine.dart';
 import '../../nodes/data/node_selection.dart';
 import '../../nodes/data/node_shortcuts.dart';
 import '../../nodes/data/nodes_api.dart';
@@ -17,12 +18,19 @@ import '../../settings/data/connection_preferences.dart';
 import '../data/connection_api.dart';
 
 final vpnDemoModeProvider = Provider<bool>((_) => false);
+
+/// 没有可用的 WireGuard 节点时，Windows 不调用 WireGuard 引擎。
+bool windowsWireGuardSelectable(Iterable<NodeItem> nodes) => nodes.any((node) =>
+    node.available && !node.isEgress && node.protocols.contains('WIREGUARD'));
+
 final vpnEngineProvider = Provider<VpnEngine>((ref) {
   if (kIsWeb) return UnavailableVpnEngine();
   switch (defaultTargetPlatform) {
     case TargetPlatform.windows:
-      // Windows：调用官方 WireGuard 隧道服务（纯 Dart，无需原生插件）。
-      final engine = WindowsWireGuardEngine();
+      // 出口走随包的 Xray。WireGuard 引擎留着，但列表里没有 WireGuard 节点时不会被调用。
+      final wireGuard = WindowsWireGuardEngine();
+      final engine =
+          WindowsXrayEngine(wireGuard: wireGuard, allowWireGuard: true);
       ref.onDispose(engine.dispose);
       return engine;
     case TargetPlatform.android:
@@ -175,7 +183,7 @@ class ConnectionController extends Notifier<VpnStatus> {
       return;
     }
     final selected = ref.read(selectedNodeProvider);
-    // 出口（e 开头）走 Xray 内核：只能用户明确选择，不参与自动选择；目前只有安卓有该内核。
+    // 出口（e 开头）走 Xray 内核：只能用户明确选择，不参与自动选择。安卓与 Windows 可用。
     final egress = !demo && selected != null && selected.startsWith('e');
     if (egress && !egressPlatformSupported) {
       state = VpnStatus.error;
@@ -202,6 +210,13 @@ class ConnectionController extends Notifier<VpnStatus> {
             preferences.protocol != ProtocolPreference.wireguard) {
           throw const VpnFailure('PROTOCOL_UNSUPPORTED',
               '当前版本支持 WireGuard，请在连接设置中选择自动或 WireGuard');
+        }
+        if (!egress && defaultTargetPlatform == TargetPlatform.windows) {
+          final listed = await ref.refresh(nodesProvider.future);
+          if (!current()) return;
+          if (!windowsWireGuardSelectable(listed)) {
+            throw const VpnFailure('ENGINE_UNAVAILABLE', '请先选择一条出口线路');
+          }
         }
       }
       if (egress) {
