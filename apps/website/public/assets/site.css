@@ -63,6 +63,7 @@ h1, h2, h3, p { margin: 0; }
 .btn:hover { transform: translateY(-1px); }
 .btn-primary { background: var(--yh-button); color: var(--yh-button-ink); }
 .nav-links a.btn-primary { color: var(--yh-button-ink); }
+.nav-links a.btn-outline { color: var(--yh-ink); background: var(--yh-paper); }
 .btn-outline { background: var(--yh-paper); color: var(--yh-ink); border-color: var(--yh-line); }
 .btn-quiet { background: transparent; color: var(--yh-sub); padding-inline: 8px; }
 .btn-sm { min-height: 36px; padding: 7px 14px; font-size: 13px; border-radius: 11px; }

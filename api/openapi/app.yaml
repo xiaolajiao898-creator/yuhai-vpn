@@ -216,6 +216,89 @@ paths:
         '429': { $ref: '#/components/responses/Error' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/auth/web/challenge:
+    post:
+      tags: [auth]
+      operationId: issueWebRegisterChallenge
+      x-auth-level: S0
+      security: []
+      summary: 网页注册的工作量证明题目
+      description: >-
+        只允许来源 https://yhvpn.io 与 https://www.yhvpn.io 的浏览器跨域读取；其他来源的预检与带 Origin 的请求会被拒绝。
+        不带 Origin 的请求（非浏览器）仍须解题，并受 IP / 网段限流。
+        algorithm 固定为 sha256-lzbits-v1。preimage = challenge_id + ":" + nonce + ":" + 十进制 counter
+        （0 写成 "0"，无空格、无前导零）。digest = SHA-256(UTF-8(preimage))，前 difficulty 个比特必须为 0。
+        题目约 3 分钟内有效，并绑定签发时看到的客户端 IP。counter 取值 0 到 16777215。
+      responses:
+        '200':
+          description: 题目
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/WebRegisterChallenge' } }
+        '403': { description: 来源不在允许名单（40310）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [auth]
+      operationId: issueWebRegisterChallengePreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页注册题目的 CORS 预检
+      description: 仅允许 https://yhvpn.io 与 https://www.yhvpn.io，方法 POST，请求头 Content-Type。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/register:
+    post:
+      tags: [auth]
+      operationId: registerFromWeb
+      x-auth-level: S0
+      security: []
+      summary: 在官网用 TRON 地址和密码注册，不绑定设备
+      description: >-
+        创建与 POST /v1/auth/address/register 相同的地址账户（地址 HMAC、加密副本、Argon2id 密码），
+        但不创建用户设备、不返回令牌。之后用同一地址和密码调用 POST /v1/auth/address/login，
+        由安卓或 Windows 客户端照常绑定设备。
+        必须先通过 /v1/auth/web/challenge 的工作量证明。challenge_id 同时是幂等键：
+        同一题目、相同请求体在 10 分钟内返回第一次的结果；请求体不同返回 40901。
+        邀请码可选，无效时仍然注册成功且 invite_bound=false，来源记为 MANUAL。
+        注册限流与 App 注册共用：每 IP 每小时 5 次，每网段每小时 30 次。
+        跨域规则同 /v1/auth/web/challenge。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebRegisterRequest' }
+      responses:
+        '201':
+          description: 账户已创建。响应不含令牌，Cache-Control 为 no-store
+          headers: { Cache-Control: { schema: { type: string, const: no-store } } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/WebRegisterResult' } }
+        '403': { description: 来源不在允许名单（40310）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '404': { description: 同一题目的幂等重放已超过 10 分钟（40401）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 地址已注册（40909）或同一题目请求体不一致（40901）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [auth]
+      operationId: registerFromWebPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页注册的 CORS 预检
+      description: 仅允许 https://yhvpn.io 与 https://www.yhvpn.io，方法 POST，请求头 Content-Type。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
   /v1/auth/password-reset/start:
     post:
       tags: [auth]
@@ -1099,6 +1182,33 @@ components:
               properties:
                 code: { type: string }
                 method: { type: string, enum: [APK_CHANNEL, CLIPBOARD, MANUAL] }
+    WebRegisterChallenge:
+      type: object
+      required: [challenge_id, nonce, difficulty, algorithm, expires_at]
+      properties:
+        challenge_id: { type: string, format: uuid }
+        nonce: { type: string, description: 无填充的 Base64URL }
+        difficulty: { type: integer, minimum: 1, maximum: 22, description: 需要的 SHA-256 前导零比特数 }
+        algorithm: { type: string, const: sha256-lzbits-v1 }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+    WebRegisterRequest:
+      type: object
+      required: [address, password, challenge_id, counter]
+      properties:
+        address: { type: string, description: TRON 地址，T 开头 34 位 Base58Check；服务端会去掉首尾空白 }
+        password: { type: string, minLength: 8, maxLength: 128, description: 至少 8 位，且同时包含字母和数字 }
+        invite_code: { type: string, description: 可选。有效邀请码才会绑定，无效时注册仍然成功 }
+        challenge_id: { type: string, format: uuid }
+        counter: { type: integer, minimum: 0, maximum: 16777215 }
+    WebRegisterResult:
+      type: object
+      required: [account_no, login_address, invite_code, invite_bound, server_time]
+      properties:
+        account_no: { type: string, description: 内部编号，客服查询用。登录账号仍是 TRON 地址 }
+        login_address: { type: string }
+        invite_code: { type: string, description: 这个新账户自己的邀请码 }
+        invite_bound: { type: boolean }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
     AddressRegisterResult:
       type: object
       required: [account_no, login_address, invite_code, invite_bound, device_id, tokens, server_time]

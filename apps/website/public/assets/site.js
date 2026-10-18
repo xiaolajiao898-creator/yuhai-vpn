@@ -145,6 +145,8 @@
           copyText(btn, code, codeEl, function () { if (note) note.hidden = false; });
         });
       }
+      var registerLink = document.getElementById('invite-register');
+      if (registerLink) registerLink.href = '/register/?code=' + encodeURIComponent(code);
     }
   }
 })();

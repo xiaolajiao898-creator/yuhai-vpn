@@ -42,6 +42,7 @@ func (h *Handler) Mount(v1 *gin.RouterGroup) {
 	a.POST("/logout", h.MW.S2(), h.logout)
 
 	h.mountPassword(v1)
+	h.mountWeb(v1)
 	h.mountLedgers(v1)
 	v1.GET("/me", h.MW.S1(), h.me)
 	v1.POST("/account/backup-ack", h.MW.S2(), h.backupAck)
