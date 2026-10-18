@@ -64,6 +64,37 @@ func (c *Client) PutTicket(ctx context.Context, kind string, payload string, ttl
 
 var ErrTicketNotFound = errors.New("ticket not found")
 
+// ErrMissing 表示键不存在。调用方据此返回「验证已过期」，不要当成 Redis 故障。
+var ErrMissing = errors.New("redis key missing")
+
+// SetEX 写入带 TTL 的字符串。网页注册挑战用它暂存，不放业务库。
+func (c *Client) SetEX(ctx context.Context, key, value string, ttl time.Duration) error {
+	if c == nil || c.rdb == nil || key == "" || ttl <= 0 {
+		return errors.New("redis unavailable")
+	}
+	return c.rdb.Set(ctx, key, value, ttl).Err()
+}
+
+// Get 读取字符串。键不存在时返回 ErrMissing。
+func (c *Client) Get(ctx context.Context, key string) (string, error) {
+	if c == nil || c.rdb == nil || key == "" {
+		return "", errors.New("redis unavailable")
+	}
+	v, err := c.rdb.Get(ctx, key).Result()
+	if errors.Is(err, redis.Nil) {
+		return "", ErrMissing
+	}
+	return v, err
+}
+
+// Del 删除键。键已经不在也视为成功。
+func (c *Client) Del(ctx context.Context, key string) error {
+	if c == nil || c.rdb == nil || key == "" {
+		return errors.New("redis unavailable")
+	}
+	return c.rdb.Del(ctx, key).Err()
+}
+
 func (c *Client) TakeTicket(ctx context.Context, kind, id string) (string, error) {
 	v, err := c.rdb.GetDel(ctx, "ticket:"+kind+":"+id).Result()
 	if errors.Is(err, redis.Nil) {

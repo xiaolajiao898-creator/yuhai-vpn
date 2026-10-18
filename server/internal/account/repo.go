@@ -270,7 +270,9 @@ type entitlementRow struct {
 func (r *Repo) entitlement(ctx context.Context, userID int64) (entitlementRow, error) {
 	var e entitlementRow
 	err := r.Pool.QueryRow(ctx, `
-		SELECT s.tier, COALESCE(p.name, ''), s.expire_at, s.device_limit, s.period_quota_bytes, s.period_used_bytes, s.period_reset_at
+		SELECT s.tier,
+		       COALESCE(NULLIF(p.name, ''), CASE WHEN s.tier > 0 AND s.plan_id IS NULL THEN '兑换卡' ELSE '' END),
+		       s.expire_at, s.device_limit, s.period_quota_bytes, s.period_used_bytes, s.period_reset_at
 		  FROM subscriptions s LEFT JOIN plans p ON p.id = s.plan_id WHERE s.user_id = $1`, userID).
 		Scan(&e.Tier, &e.PlanName, &e.ExpireAt, &e.DeviceLimit, &e.PeriodQuotaBytes, &e.PeriodUsedBytes, &e.PeriodResetAt)
 	if errors.Is(err, pgx.ErrNoRows) {

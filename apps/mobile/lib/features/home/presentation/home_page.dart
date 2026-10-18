@@ -369,11 +369,25 @@ class _AccountCard extends StatelessWidget {
               _ =>
                 '${ent['plan_name'] ?? ''} · 到期 ${(ent['expire_at'] as String?)?.substring(0, 10) ?? '—'}',
             };
-            return InkWell(
-              onTap: reason == null ? null : () => context.push(Routes.plans),
-              child: Text('账户 ${m['account_no']} · $hint',
-                  style: text.labelSmall?.copyWith(
-                      color: reason == null ? YhColors.sub : YhColors.warn)),
+            final noPlan = reason == 'NO_PLAN' || reason == 'EXPIRED';
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                InkWell(
+                  onTap: reason == null ? null : () => context.push(Routes.plans),
+                  child: Text('账户 ${m['account_no']} · $hint',
+                      style: text.labelSmall?.copyWith(
+                          color: reason == null ? YhColors.sub : YhColors.warn)),
+                ),
+                if (noPlan)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton(
+                      onPressed: () => context.push(Routes.redeem),
+                      child: const Text('兑换码'),
+                    ),
+                  ),
+              ],
             );
           },
           loading: () => Text('正在同步…', style: text.labelSmall),

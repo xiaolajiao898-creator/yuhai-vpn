@@ -75,7 +75,7 @@ func contractOperations(t *testing.T, path string) map[string]string {
 	for p, item := range doc.Paths {
 		for method, op := range item {
 			switch strings.ToUpper(method) {
-			case "GET", "POST", "PUT", "PATCH", "DELETE":
+			case "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS":
 				ops[strings.ToUpper(method)+" "+p] = op.OperationID
 			}
 		}
