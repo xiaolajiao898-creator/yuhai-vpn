@@ -34,7 +34,8 @@ ThemeData buildDeepSeaTheme() {
     bottomSheetTheme: const BottomSheetThemeData(
       backgroundColor: YhColors.current,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(YhRadius.sheet)),
+        borderRadius:
+            BorderRadius.vertical(top: Radius.circular(YhRadius.sheet)),
       ),
     ),
     appBarTheme: const AppBarTheme(
@@ -73,17 +74,24 @@ ThemeData buildDeepSeaTheme() {
         backgroundColor: YhColors.button,
         foregroundColor: YhColors.buttonInk,
         minimumSize: const Size.fromHeight(56),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(YhRadius.button)),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(YhRadius.button)),
         textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
       ),
     ),
-    inputDecorationTheme: InputDecorationTheme(
+    // 填充圆角框不能用 OutlineInputBorder。描边框把浮动标签钉在上边线中央，
+    // BorderSide.none 时字就压在填充块的顶边上。非描边边框让标签浮在框内。
+    inputDecorationTheme: const InputDecorationTheme(
       filled: true,
       fillColor: YhColors.soft,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(YhRadius.listSelected),
-        borderSide: BorderSide.none,
-      ),
+      floatingLabelBehavior: FloatingLabelBehavior.auto,
+      contentPadding: EdgeInsets.fromLTRB(16, 18, 16, 14),
+      border: _filledFieldBorder,
+      enabledBorder: _filledFieldBorder,
+      focusedBorder: _filledFieldBorder,
+      disabledBorder: _filledFieldBorder,
+      errorBorder: _filledFieldBorder,
+      focusedErrorBorder: _filledFieldBorder,
     ),
     pageTransitionsTheme: const PageTransitionsTheme(builders: {
       TargetPlatform.android: _FadeSlideTransitions(),
@@ -92,18 +100,29 @@ ThemeData buildDeepSeaTheme() {
   );
 }
 
+/// 四角圆角、不画线。填充色来自主题，标签留在框内。
+const _filledFieldBorder = UnderlineInputBorder(
+  borderSide: BorderSide.none,
+  borderRadius: BorderRadius.all(Radius.circular(YhRadius.listSelected)),
+);
+
 /// 页面转场：260 ms ease-out，16 pt 位移 + 淡入（方案 9.2 动效）。
 class _FadeSlideTransitions extends PageTransitionsBuilder {
   const _FadeSlideTransitions();
 
   @override
-  Widget buildTransitions<T>(PageRoute<T> route, BuildContext context, Animation<double> animation,
-      Animation<double> secondaryAnimation, Widget child) {
+  Widget buildTransitions<T>(
+      PageRoute<T> route,
+      BuildContext context,
+      Animation<double> animation,
+      Animation<double> secondaryAnimation,
+      Widget child) {
     final curved = CurvedAnimation(parent: animation, curve: Curves.easeOut);
     return FadeTransition(
       opacity: curved,
       child: SlideTransition(
-        position: Tween(begin: const Offset(0, 0.02), end: Offset.zero).animate(curved),
+        position: Tween(begin: const Offset(0, 0.02), end: Offset.zero)
+            .animate(curved),
         child: child,
       ),
     );
