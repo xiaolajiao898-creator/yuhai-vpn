@@ -55,7 +55,6 @@ node_modules/
 *.tsbuildinfo
 .astro/
 server/bin/
-server/internal/db/sqlcgen/
 server/internal/httpx/gen/
 apps/mobile/lib/core/network/gen/
 local.properties

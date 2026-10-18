@@ -1026,7 +1026,7 @@ components:
         protocol: { type: string, enum: [SOCKS5, HTTP, HTTPS, SHADOWSOCKS, TROJAN, VLESS, VMESS, HYSTERIA2] }
         supports_udp: { type: boolean }
         available: { type: boolean }
-        locked_reason: { type: string, nullable: true, enum: [TIER, PROTOCOL_UNSUPPORTED, null] }
+        locked_reason: { type: [string, 'null'], enum: [TIER, PROTOCOL_UNSUPPORTED, null] }
     EgressProfile:
       type: object
       required: [egress_id, protocol, supports_udp, core, core_version, expires_at, config, notice]

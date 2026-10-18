@@ -1551,10 +1551,167 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/egress": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 出口列表（外购代理 / 自建多协议节点）。只含 identity_hint（如 "ab***"），从不返回凭据 */
+        get: operations["listEgress"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/egress/import/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 解析导入内容并逐行报错，不落库。支持 IP:端口:账号:密码、user:pass@host:port、socks5/http/https/ss/trojan/
+         *     vless/vmess/hysteria2 分享链接、base64 订阅正文、CSV（带表头）与 JSON。回显只含脱敏片段。
+         *     拒绝任何关闭 TLS 校验的写法（allowInsecure/insecure），TUIC 等当前内核不支持的协议逐行报错。
+         */
+        post: operations["previewEgressImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/egress/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 提交导入（服务端重新解析，不信任预览结果）；按指纹去重，已存在默认跳过、可选更新；默认导入为停用 */
+        post: operations["importEgress"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/egress/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** 修改出口的名称/地区/等级/排序/启停；只有 SOCKS5 可标注是否支持 UDP。凭据只能通过重新导入更新 */
+        patch: operations["updateEgress"];
+        trace?: never;
+    };
+    "/egress-subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 订阅列表（只显示订阅主机名，订阅地址加密保存、从不返回） */
+        get: operations["listEgressSubscriptions"];
+        put?: never;
+        /** 登记订阅（只允许 https、默认端口、公网地址；不带任何后台凭据） */
+        post: operations["createEgressSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/egress-subscriptions/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 抓取并解析订阅，不落库。每次实际连接都校验目标 IP（防 DNS 重绑定），拒绝重定向，限 15 秒/2MB */
+        post: operations["previewEgressSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/egress-subscriptions/{id}/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 抓取订阅并按指纹新建/更新；订阅里消失的条目停用（disable_missing 默认开）。抓取失败不改动任何出口 */
+        post: operations["refreshEgressSubscription"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        EgressImportInput: {
+            /**
+             * Format: uuid
+             * @description 提交导入时必填
+             */
+            operation_id?: string;
+            text?: string;
+            /** @enum {string} */
+            default_protocol?: "SOCKS5" | "HTTP" | "HTTPS";
+            /** @description SOCKS5 代理端是否支持 UDP ASSOCIATE */
+            default_udp?: boolean;
+            country_code?: string;
+            city?: string;
+            region?: string;
+            name_prefix?: string;
+            min_tier?: number;
+            /** @description 导入后直接启用（默认停用） */
+            enable?: boolean;
+            /** @description 指纹已存在时更新凭据与参数（默认跳过） */
+            update_existing?: boolean;
+        };
+        EgressSubscriptionInput: {
+            /** Format: uuid */
+            operation_id?: string;
+            name?: string;
+            /** @description https 订阅地址（加密保存） */
+            url?: string;
+            /** @enum {string} */
+            default_protocol?: "SOCKS5" | "HTTP" | "HTTPS";
+            country_code?: string;
+            region?: string;
+            min_tier?: number;
+        };
         ErrorEnvelope: {
             error: {
                 code: number;
@@ -4797,6 +4954,235 @@ export interface operations {
                 };
                 content?: never;
             };
+        };
+    };
+    listEgress: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+                status?: "ENABLED" | "DISABLED";
+                protocol?: string;
+                country_code?: string;
+                search?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewEgressImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressImportInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    importEgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressImportInput"];
+            };
+        };
+        responses: {
+            /** @description 已处理（逐行结果，脱敏） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            /** @description 40901 operation_id 已用于不同请求 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    updateEgress: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    operation_id: string;
+                    name?: string;
+                    /** @enum {string} */
+                    status?: "ENABLED" | "DISABLED";
+                    country_code?: string;
+                    city?: string;
+                    region?: string;
+                    min_tier?: number;
+                    sort_order?: number;
+                    supports_udp?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listEgressSubscriptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createEgressSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressSubscriptionInput"];
+            };
+        };
+        responses: {
+            /** @description 已登记 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewEgressSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EgressSubscriptionInput"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    refreshEgressSubscription: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    operation_id: string;
+                    enable?: boolean;
+                    disable_missing?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": Record<string, never>;
+                };
+            };
+            default: components["responses"]["Error"];
         };
     };
 }

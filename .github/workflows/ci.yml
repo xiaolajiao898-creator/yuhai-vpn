@@ -4,14 +4,14 @@ jobs:
   server:
     runs-on: ubuntu-latest
     env:
-      TEST_DATABASE_URL: postgres://yuhai_app:yuhai_app@localhost:5432/yuhai?sslmode=disable
-      TEST_MIGRATE_DATABASE_URL: postgres://yuhai_migrator:yuhai_migrator@localhost:5432/yuhai?sslmode=disable
+      TEST_DATABASE_URL: postgres://yuhai_app:yuhai_app@localhost:15432/yuhai?sslmode=disable
+      TEST_MIGRATE_DATABASE_URL: postgres://yuhai_migrator:yuhai_migrator@localhost:15432/yuhai?sslmode=disable
       TEST_REDIS_URL: redis://localhost:6379/1
     services:
       postgres:
         image: postgres:17-alpine
         env: { POSTGRES_DB: yuhai, POSTGRES_USER: postgres, POSTGRES_PASSWORD: postgres }
-        ports: ["5432:5432"]
+        ports: ["15432:5432"]
         options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-retries 10
       redis:
         image: redis:7-alpine
@@ -22,10 +22,10 @@ jobs:
         with: { go-version-file: server/go.mod }
       - name: 迁移必须在干净库上成功
         run: |
-          psql postgres://postgres:postgres@localhost:5432/yuhai -f server/scripts/init-dev-db.sql
-          cd server && go run github.com/pressly/goose/v3/cmd/goose@latest -dir internal/db/migrations postgres "postgres://yuhai_migrator:yuhai_migrator@localhost:5432/yuhai?sslmode=disable" up
+          psql postgres://postgres:postgres@localhost:15432/yuhai -f server/scripts/init-dev-db.sql
+          cd server && go run github.com/pressly/goose/v3/cmd/goose@latest -dir internal/db/migrations postgres "postgres://yuhai_migrator:yuhai_migrator@localhost:15432/yuhai?sslmode=disable" up
       - name: sqlc 生成结果必须与仓库一致
-        run: cd server && go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest diff
+        run: cd server && go run github.com/sqlc-dev/sqlc/cmd/sqlc@v1.31.1 diff
       - run: cd server && go vet ./... && test -z "$(gofmt -l .)"
       - name: 全量实库 race（禁止静默跳过）
         working-directory: server
