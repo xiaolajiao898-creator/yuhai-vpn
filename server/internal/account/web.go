@@ -33,7 +33,7 @@ import (
 
 const (
 	webPoWAlgorithm   = "sha256-lzbits-v1"
-	webPoWBits        = 18
+	webPoWBits        = 16
 	webPoWMaxCounter  = 1<<24 - 1
 	webChallengeTTL   = 3 * time.Minute
 	idemRegisterWeb   = "register_web"
