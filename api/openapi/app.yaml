@@ -441,6 +441,65 @@ paths:
                   - properties: { data: { $ref: '#/components/schemas/Me' } }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/redeem-codes:
+    post:
+      tags: [account]
+      operationId: redeemCode
+      x-auth-level: S2
+      summary: 兑换周卡、月卡或年卡
+      description: |
+        登录用户提交一张兑换码。码只可使用一次；并发请求也只有一次会成功。
+
+        错误文案：`兑换码格式不正确`、`码不存在`、`已使用`、`已作废`、`尝试太频繁`。
+        每个账号每小时最多 10 次，每个 IP 每小时最多 30 次。
+
+        叠加规则：
+
+        - 没有未过期权益（含已过期）：按卡上的天数、等级、设备数和流量开通，从现在起算。
+        - 已有未过期权益：到期时间 = 当前到期时间 + 卡的天数，不从现在重新起算，因此不会缩短更长的剩余时间。
+        - 等级、设备数取较高者，不把已有的更高等级或更多设备改小。
+        - 流量只放宽不收紧：卡是不限流量时结果为不限；原来已是不限则保持不限。
+        - 只有到期时间变化时保留原套餐名称。等级、设备或流量被抬高后，套餐名改为「兑换卡」，避免旧名称和实际权益不一致。
+        - 已过期的更高等级不会保留。
+
+        幂等键是 `redeem:{码 id}`，写在 subscription_ledger 上。正常付费套餐的开通不受影响。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [code]
+              properties:
+                code:
+                  type: string
+                  minLength: 16
+                  maxLength: 64
+                  description: 形如 ABCD-EFGH-JKLM-NPQR，可含空格或连字符，大小写不敏感
+      responses:
+        '200':
+          description: 已开通。extended 为 true 表示加在原到期时间之后。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [card_type, card_name, duration_days, tier, device_limit, unlimited_traffic, expire_at, extended]
+                        properties:
+                          card_type: { type: string }
+                          card_name: { type: string }
+                          duration_days: { type: integer }
+                          tier: { type: integer, description: 开通后的等级，可能高于卡本身 }
+                          device_limit: { type: integer, description: 开通后的设备数，可能高于卡本身 }
+                          unlimited_traffic: { type: boolean }
+                          expire_at: { type: string, format: date-time }
+                          extended: { type: boolean }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/account/backup-ack:
     post:
       tags: [account]
