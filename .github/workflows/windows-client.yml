@@ -142,3 +142,9 @@ jobs:
           name: YuhaiVPN-Windows-candidate-x64
           path: apps/mobile/build/windows/installer/YuhaiVPN-Windows-candidate-x64.exe
           if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yuhai-icon-preview
+          path: apps/mobile/windows/packaging/icon-preview.png
+          if-no-files-found: error
