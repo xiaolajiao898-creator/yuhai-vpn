@@ -10,6 +10,7 @@ import '../../../app/theme/tokens.dart';
 import '../../../core/network/api_client.dart';
 import '../data/auth_api.dart';
 import 'auth_layout.dart';
+import 'brand_scenes.dart';
 import 'credential_rules.dart';
 import 'onboarding_controller.dart';
 
@@ -156,7 +157,10 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       Text('输入注册地址', style: text.headlineMedium),
       const SizedBox(height: YhSpace.unit),
-      Text('下一步会告诉你要转多少 TRX、转到哪里。', style: text.bodyMedium?.copyWith(color: YhColors.haze)),
+      Text('下一步会告诉你要转多少 TRX、转到哪里。从注册地址转出，用来证明是你本人。',
+          style: text.bodyMedium?.copyWith(color: YhColors.haze)),
+      const SizedBox(height: YhSpace.page),
+      const BrandSceneArt(scene: BrandScene.recover, compact: true),
       const SizedBox(height: YhSpace.page),
       TextField(
         controller: _address,

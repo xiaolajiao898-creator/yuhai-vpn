@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/providers.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
+import '../../account/presentation/support_sheet.dart';
 import '../../account/data/account_api.dart';
 import '../../home/data/me_api.dart';
 import 'settings_widgets.dart';
@@ -52,7 +53,7 @@ class SettingsPage extends ConsumerWidget {
                         child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                          Text('宇海账户',
+                          Text('宇海VPN',
                               style: Theme.of(context).textTheme.titleLarge),
                           const SizedBox(height: 4),
                           Text('${data['account_no'] ?? '—'}',
@@ -99,6 +100,12 @@ class SettingsPage extends ConsumerWidget {
                       onTap: () => context.push(Routes.orders)),
                   const Divider(height: 1),
                   SettingsRow(
+                      icon: Icons.confirmation_number_outlined,
+                      title: '兑换码',
+                      subtitle: '周卡、月卡、年卡',
+                      onTap: () => context.push(Routes.redeem)),
+                  const Divider(height: 1),
+                  SettingsRow(
                       icon: Icons.card_giftcard_outlined,
                       title: '邀请好友',
                       subtitle: '查看邀请码与奖励记录',
@@ -120,14 +127,16 @@ class SettingsPage extends ConsumerWidget {
                   const Divider(height: 1),
                   SettingsRow(
                       icon: Icons.info_outline,
-                      title: '关于宇海',
+                      title: '关于宇海VPN',
                       subtitle: appVersion,
                       onTap: () => context.push(Routes.about)),
+                  const Divider(height: 1),
+                  SettingsRow(
+                      icon: Icons.support_agent_outlined,
+                      title: '联系客服',
+                      subtitle: 'Telegram',
+                      onTap: () => showSupportSheet(context)),
                 ])),
-                const SizedBox(height: 24),
-                Text('演示阶段 · VPN 连接仍为模拟模式',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.labelSmall),
               ],
             ),
           );

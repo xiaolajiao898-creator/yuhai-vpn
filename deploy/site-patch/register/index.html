@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B4AA2">
+<meta name="yuhai-api" content="https://api.yhvpn.io">
+<title>注册宇海账户</title>
+<meta name="description" content="用你自己的 USDT（TRC20）地址注册宇海。不需要手机号或邮箱。注册后在安卓或 Windows 客户端用地址和密码登录。">
+<meta property="og:title" content="注册宇海账户">
+<meta property="og:description" content="用你自己的 USDT（TRC20）地址注册宇海。不需要手机号或邮箱。">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+<style>
+.reg-layout{display:grid;grid-template-columns:minmax(0,560px) minmax(0,1fr);gap:24px;align-items:start}
+@media (max-width:860px){.reg-layout{grid-template-columns:1fr}}
+.reg-card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:clamp(22px,3vw,32px);display:grid;gap:16px}
+.reg-card .field input{width:100%;height:48px;border:1px solid var(--line);border-radius:10px;padding:0 14px;font:16px/1.4 var(--sans);color:var(--ink);background:#fff}
+.reg-card .field input.mono{font-family:var(--mono);letter-spacing:.02em}
+.reg-card .hint,.pow{margin:0;color:var(--muted);font-size:13px}
+.reg-card .btn{width:100%}
+.reg-card .btn:disabled{opacity:.6;cursor:default}
+.form-error{margin:0;color:#9b2c2c;font-size:14px}
+.hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+.done-address{font-family:var(--mono);font-size:15px;word-break:break-all;color:var(--ink)}
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="/" aria-label="宇海 首页"><svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#0B4AA2"/><path d="M6 18.5c2.8 0 2.8-2.2 5.7-2.2s2.9 2.2 5.7 2.2 2.8-2.2 5.7-2.2c1.4 0 2.1.5 2.9 1.1" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M8.5 23c2.3 0 2.3-1.6 4.7-1.6s2.4 1.6 4.7 1.6 2.4-1.6 4.7-1.6" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="21.5" cy="10" r="2.4" fill="#F2C14E"/></svg><span class="brand-name">宇海</span><span class="brand-latin">Yuhai</span></a><nav class="nav-links" aria-label="主导航"><a class="hide-sm" href="/#features">产品优势</a><a class="hide-sm" href="/#account">账户与安全</a><a class="hide-sm" href="/#faq">常见问题</a><a class="btn btn-outline btn-sm" href="/register/" aria-current="page" style="color:var(--ink);background:#fff">注册</a><a class="btn btn-primary btn-sm" href="/download/">下载</a></nav></div></header>
+<main>
+<section class="page-head"><div class="wrap"><span class="kicker">注册</span><h1>注册宇海账户</h1><p>账号就是你自己的 USDT（TRC20）地址，密码自己设置。不需要手机号或邮箱。注册完成后，到安卓或 Windows 客户端登录。</p></div></section>
+<section class="section" id="reg-panel"><div class="wrap reg-layout">
+<form class="reg-card" id="reg-form" method="post" action="/register/" novalidate>
+<div class="field"><label for="address">USDT 地址（TRC20）</label><input class="mono" id="address" name="address" type="text" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" placeholder="T 开头，共 34 位" required><p class="hint">请使用 TronLink、imToken 等你自己钱包里的地址。</p></div>
+<div class="field"><label for="password">密码</label><input id="password" name="password" type="password" autocomplete="new-password" maxlength="128" required><p class="hint">至少 8 位，同时包含字母和数字。</p></div>
+<div class="field"><label for="password2">再输一次密码</label><input id="password2" name="password2" type="password" autocomplete="new-password" maxlength="128" required></div>
+<div class="field"><label for="invite">邀请码（选填）</label><input class="mono" id="invite" name="invite" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="12" placeholder="6 位字母或数字"><p class="hint">从邀请链接打开时会自动填上。</p></div>
+<div class="hp" aria-hidden="true"><label for="yh_hp">传真</label><input id="yh_hp" name="yh_hp" type="text" tabindex="-1" autocomplete="off" value=""></div>
+<div class="field"><label for="pow">人机验证</label><p class="pow" id="pow">提交时自动完成，大约需要一两秒，不使用第三方验证码。</p></div>
+<p class="notice"><b>请填写你自己钱包（如 TronLink、imToken）的地址，不要填交易所的充值地址。</b>交易所地址不能由你自己转出。忘记密码时，需要从这个地址转一笔很小的 TRX（约 1 TRX，精确金额以 App 显示为准）来证明是你本人。</p>
+<p class="form-error" id="form-error" hidden></p>
+<button class="btn btn-primary" id="submit" type="submit">注册</button>
+<p class="hint" style="text-align:center">已有账户？<a href="/download/">下载客户端</a>，用地址和密码登录。</p>
+</form>
+<aside class="box-card"><h3>注册之后</h3><p>这个页面只负责开户，不会替你保持登录。请下载安卓版或 Windows 版，打开后用刚才的地址和密码登录。</p><p>忘记密码不能在网页上重设。在 App 里点「忘记密码」，从注册地址向 App 显示的官方地址转一笔约 1 TRX（金额带小数，请照抄）。链上确认后即可重设密码。</p><p class="note">请只从 yhvpn.io 下载安装包。</p></aside>
+</div></section>
+<section class="section alt" id="reg-done" hidden><div class="wrap"><div class="section-head"><span class="kicker">注册成功</span><h2>接下来在 App 里登录</h2><p>网页没有登录状态。请下载客户端，用下面的地址和刚才设置的密码登录。</p></div>
+<dl class="kv"><dt>登录账号（你的 USDT 地址）</dt><dd><span class="done-address hash" id="done-address"></span><button class="copy" id="copy-address" type="button">复制</button></dd></dl>
+<div class="actions" style="margin-top:22px"><a class="btn btn-primary" href="/download/yuhai-vpn-candidate-0928.apk" download><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48 19.44 6.3a.38.38 0 0 0-.66-.38l-1.86 3.22a11.46 11.46 0 0 0-9.84 0L5.22 5.92a.38.38 0 0 0-.66.38L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52ZM7 15.25A1.25 1.25 0 1 1 8.25 14 1.25 1.25 0 0 1 7 15.25Zm10 0A1.25 1.25 0 1 1 18.25 14 1.25 1.25 0 0 1 17 15.25Z"/></svg>下载安卓版</a><a class="btn btn-primary" href="/download/YuhaiVPN-Windows-x64-candidate.exe" download><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.6 10.4 4.5v7.1H3V5.6Zm8.4-1.2L21 3v8.6h-9.6V4.4ZM3 12.4h7.4v7.1L3 18.4v-6Zm8.4 0H21V21l-9.6-1.4v-7.2Z"/></svg>下载 Windows 版</a><a class="btn btn-outline" href="/download/">安装说明与校验</a></div>
+<ol class="howto" style="margin-top:28px"><li><b>下载并安装。</b>安卓手机用安卓版，Windows 电脑用 Windows 版。只从 yhvpn.io 下载。</li><li><b>打开 App 登录。</b>账号填上面的 USDT（TRC20）地址，密码填刚才设置的密码。</li><li><b>选套餐并连接。</b>付款使用 USDT（TRC20）。转错网络的资金无法找回。</li></ol>
+</div></section>
+</main>
+<footer class="footer"><div class="wrap"><a class="brand" href="/" aria-label="宇海 首页"><svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#0B4AA2"/><path d="M6 18.5c2.8 0 2.8-2.2 5.7-2.2s2.9 2.2 5.7 2.2 2.8-2.2 5.7-2.2c1.4 0 2.1.5 2.9 1.1" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M8.5 23c2.3 0 2.3-1.6 4.7-1.6s2.4 1.6 4.7 1.6 2.4-1.6 4.7-1.6" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="21.5" cy="10" r="2.4" fill="#F2C14E"/></svg><span class="brand-name">宇海</span></a><nav aria-label="页脚导航"><a href="/register/">注册</a><a href="/download/">下载</a><a href="/#account">账户与安全</a><a href="/#faq">常见问题</a></nav><span>© 2026 宇海 · 官方网站仅 yhvpn.io</span></div></footer>
+<script src="/register/register.js"></script>
+</body>
+</html>

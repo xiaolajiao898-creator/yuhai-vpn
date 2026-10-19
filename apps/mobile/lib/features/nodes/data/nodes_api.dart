@@ -205,9 +205,11 @@ List<NodeItem> parseEgress(Map<String, dynamic> data,
   return result;
 }
 
-/// 出口只有安卓的 Xray 内核能连；其他平台照样列出但标明不支持，不静默隐藏。
+/// 出口可由安卓与 Windows 的 Xray 内核连接；其他平台照样列出但标明不支持，不静默隐藏。
 bool get egressPlatformSupported =>
-    !kIsWeb && defaultTargetPlatform == TargetPlatform.android;
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.windows);
 
 /// Each refresh reads a complete server snapshot; failures never become empty success.
 /// 出口列表是后加的接口：只有「服务端尚未提供该接口」（40401）时视为没有出口，

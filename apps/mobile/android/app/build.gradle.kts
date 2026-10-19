@@ -42,7 +42,7 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
-        manifestPlaceholders["appLabel"] = if (multiprotoCandidate) "宇海多协议测试版" else "宇海"
+        manifestPlaceholders["appLabel"] = "宇海VPN"
         // 仅 CI 模拟器探测打开。正式构建不设置，活动保持禁用。
         manifestPlaceholders["vpnProbeEnabled"] = if (System.getenv("YH_VPN_PROBE") == "1") "true" else "false"
         if (multiprotoCandidate) applicationIdSuffix = ".candidate"

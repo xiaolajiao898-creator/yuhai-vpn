@@ -104,7 +104,7 @@ class _InvitePageState extends ConsumerState<InvitePage> {
     final method = _method;
     final rewardNotice = current.rewardsEnabled
         ? '奖励以活动规则和实际发放记录为准。'
-        : '奖励活动暂未开放，当前仅绑定邀请关系，不发放奖励。';
+        : '奖励还没开放。现在只记下邀请关系，不发奖励。';
     setState(() {
       _confirming = true;
       _error = null;
@@ -213,7 +213,7 @@ class _InvitePageState extends ConsumerState<InvitePage> {
                                       letterSpacing: 4)),
                               const SizedBox(height: 16),
                               FilledButton.icon(
-                                  onPressed: () => _copy('宇海邀请码 ${i.code}'),
+                                  onPressed: () => _copy('宇海VPN邀请码 ${i.code}'),
                                   icon: const Icon(Icons.copy),
                                   label: const Text('复制邀请码')),
                               if (i.url != null)
@@ -352,7 +352,7 @@ class _InvitePageState extends ConsumerState<InvitePage> {
                   color: YhColors.starlight, size: 20),
               const SizedBox(width: 8),
               Expanded(
-                  child: Text(info.rewardsEnabled ? '奖励以活动规则为准' : '奖励活动暂未开放',
+                  child: Text(info.rewardsEnabled ? '奖励以活动规则为准' : '奖励还没开放',
                       style: Theme.of(context)
                           .textTheme
                           .titleMedium
@@ -362,7 +362,7 @@ class _InvitePageState extends ConsumerState<InvitePage> {
             Text(
                 info.rewardsEnabled
                     ? '绑定成功不代表已获得奖励，请以实际发放记录为准。'
-                    : '当前仅绑定邀请关系，不发放奖励。历史奖励记录仍可查看。',
+                    : '现在只记下邀请关系，不发奖励。以前的奖励记录还能看。',
                 style: Theme.of(context).textTheme.labelSmall),
           ]),
         ),

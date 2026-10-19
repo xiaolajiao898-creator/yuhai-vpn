@@ -1,0 +1,66 @@
+---
+import Base from '../layouts/Base.astro';
+const slots = [
+  { name: '周卡', days: '约 7 天' },
+  { name: '月卡', days: '约 30 天' },
+  { name: '季卡', days: '约 90 天' },
+  { name: '年卡', days: '约 365 天' },
+];
+---
+<Base title="价格 · 宇海VPN" description="新用户可免费试用 24 小时。付费套餐的 USDT 价格在 App 里显示，官网不刊登尚未公布的金额。">
+  <section class="page-head">
+    <div class="wrap">
+      <span class="kicker">价格</span>
+      <h1>先试用 24 小时，价格以 App 为准。</h1>
+      <p>具体价格在 App 里。这里不写还没公布的金额，也不换算成人民币或美元。</p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="wrap">
+      <article class="plan rec" style="max-width: 420px; margin-bottom: 28px;">
+        <span class="kicker">新用户</span>
+        <h2>免费试用 24 小时</h2>
+        <p>不限流量，最多 3 台设备。每个账户一次，每台设备一次。到期即停，不会变成付费套餐。</p>
+        <p class="price">24 小时</p>
+      </article>
+      <div class="plans">
+        {slots.map((slot) => (
+          <article class="plan">
+            <h3>{slot.name}</h3>
+            <p>{slot.days}。名称和天数以 App 里的套餐为准。</p>
+            <p class="price">价格即将公布</p>
+          </article>
+        ))}
+      </div>
+      <p style="margin-top: 18px; color: var(--yh-sub);">有兑换码的话，在 App 的「设置」或套餐页输入。网页只负责开户，不能在网页上兑换。</p>
+    </div>
+  </section>
+
+  <section class="section alt">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="kicker">常见问题</span>
+        <h2>付款和试用</h2>
+      </div>
+      <div class="faq">
+        <details>
+          <summary>会自动续费吗？</summary>
+          <p>不会。套餐是预付的 USDT。到期后停止，不会从钱包里再扣一笔。</p>
+        </details>
+        <details>
+          <summary>付款之后多久开通？</summary>
+          <p>链上到账并确认后开通。App 的付款页会显示确认进度。到账即开通，不需要再人工点一次审核。</p>
+        </details>
+        <details>
+          <summary>试用怎么领？</summary>
+          <p>用新账户登录 App，在首页或套餐页点「免费试用 24 小时」。买过、兑过或领过的账户不能再领。试用关闭时，App 会直接说明。</p>
+        </details>
+        <details>
+          <summary>为什么这里没有具体价格？</summary>
+          <p>价格还没公布。公布之后以 App 套餐页显示的金额为准，网站不另写一套。</p>
+        </details>
+      </div>
+    </div>
+  </section>
+</Base>

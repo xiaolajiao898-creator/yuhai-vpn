@@ -1,0 +1,150 @@
+name: windows-client
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Windows x64 installer
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Flutter analyze and test
+        working-directory: apps/mobile
+        run: |
+          flutter config --enable-windows-desktop
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.2'
+          cache: false
+
+      - name: Build pinned Xray-core v26.9.9
+        env:
+          XRAY_COMMIT: 52a412d9e2f5c2a5142b1b4e2ab3771dacb8b120
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $src = Join-Path $env:RUNNER_TEMP 'xray-src'
+          git clone --depth 1 --branch v26.9.9 https://github.com/XTLS/Xray-core.git $src
+          Push-Location $src
+          $sha = (git rev-parse HEAD).Trim()
+          if ($sha -ne $env:XRAY_COMMIT) { throw "unexpected xray commit $sha" }
+          $env:CGO_ENABLED = '0'
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          $env:GOTOOLCHAIN = 'local'
+          go build -trimpath -buildvcs=false -ldflags "-X github.com/xtls/xray-core/core.build=52a412d -s -w -buildid=" -o (Join-Path $env:RUNNER_TEMP 'xray.exe') ./main
+          Pop-Location
+          $exe = Join-Path $env:RUNNER_TEMP 'xray.exe'
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          if ($bytes.Length -lt 1000000) { throw 'xray.exe is unexpectedly small' }
+          if ([System.Text.Encoding]::ASCII.GetString($bytes, 0, 2) -ne 'MZ') { throw 'xray.exe is not a PE' }
+          $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $pe + 4)
+          if ($machine -ne 0x8664) { throw "xray.exe is not amd64 (machine=$machine)" }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          "xray.exe sha256: $hash" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          New-Item -ItemType Directory -Force -Path apps/mobile/windows/third_party | Out-Null
+          Copy-Item $exe apps/mobile/windows/third_party/xray.exe
+          & $exe version
+          if ($LASTEXITCODE -ne 0) { throw 'xray version failed' }
+
+      - name: Fetch pinned wintun.dll
+        env:
+          WINTUN_ZIP_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
+          WINTUN_DLL_SHA256: e5da8447dc2c320edc0fc52fa01885c103de8c118481f683643cacc3220dafce
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $zip = Join-Path $env:RUNNER_TEMP 'wintun-0.14.1.zip'
+          Invoke-WebRequest -Uri 'https://www.wintun.net/builds/wintun-0.14.1.zip' -OutFile $zip
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          if ($zipHash -ne $env:WINTUN_ZIP_SHA256) { throw "wintun zip checksum mismatch: $zipHash" }
+          Expand-Archive $zip -DestinationPath (Join-Path $env:RUNNER_TEMP 'wintun') -Force
+          $dll = Join-Path $env:RUNNER_TEMP 'wintun/wintun/bin/amd64/wintun.dll'
+          $dllHash = (Get-FileHash $dll -Algorithm SHA256).Hash.ToLower()
+          if ($dllHash -ne $env:WINTUN_DLL_SHA256) { throw "wintun.dll checksum mismatch: $dllHash" }
+          Copy-Item $dll apps/mobile/windows/third_party/wintun.dll
+          "wintun.dll sha256: $dllHash" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: xray accepts the Windows TUN config
+        working-directory: apps/mobile/windows/third_party
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Get-ChildItem env: | Where-Object { $_.Name -like 'XRAY_*' } | ForEach-Object { Remove-Item "env:$($_.Name)" }
+          $psi = [System.Diagnostics.ProcessStartInfo]::new((Resolve-Path .\xray.exe).Path)
+          $psi.Arguments = 'run -c stdin: -test'
+          $psi.WorkingDirectory = (Get-Location).Path
+          $psi.UseShellExecute = $false
+          $psi.RedirectStandardInput = $true
+          $psi.RedirectStandardOutput = $true
+          $psi.RedirectStandardError = $true
+          $proc = [System.Diagnostics.Process]::Start($psi)
+          $utf8 = [System.Text.UTF8Encoding]::new($false)
+          $writer = [System.IO.StreamWriter]::new($proc.StandardInput.BaseStream, $utf8)
+          try {
+            $writer.Write([System.IO.File]::ReadAllText((Resolve-Path ..\packaging\tun-selftest.json)))
+          } finally {
+            $writer.Dispose()
+          }
+          $output = $proc.StandardOutput.ReadToEnd() + $proc.StandardError.ReadToEnd()
+          $proc.WaitForExit()
+          $output
+          if ($proc.ExitCode -ne 0 -or $output -notmatch 'Configuration OK') {
+            throw "xray rejected the Windows TUN self-test config (exit $($proc.ExitCode)): $output"
+          }
+
+      - name: Build Flutter Windows release
+        working-directory: apps/mobile
+        run: flutter build windows --release
+
+      - name: Require bundled engine files
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = 'apps/mobile/build/windows/x64/runner/Release'
+          foreach ($name in @('yuhai_vpn.exe', 'xray.exe', 'wintun.dll', 'licenses\NOTICES.txt', 'licenses\LICENSE-Xray-MPL-2.0.txt', 'licenses\LICENSE-wintun.txt', 'licenses\LICENSE-ChineseSimplified-MIT.txt')) {
+            $path = Join-Path $release $name
+            if (-not (Test-Path $path)) { throw "missing $path" }
+          }
+
+      - name: Install Inno Setup and package
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          choco install innosetup --no-progress -y
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) { throw "ISCC not found at $iscc" }
+          & $iscc 'apps/mobile/windows/packaging/yuhai.iss'
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: YuhaiVPN-Windows-candidate-x64
+          path: apps/mobile/build/windows/installer/YuhaiVPN-Windows-candidate-x64.exe
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yuhai-icon-preview
+          path: apps/mobile/windows/packaging/icon-preview.png
+          if-no-files-found: error

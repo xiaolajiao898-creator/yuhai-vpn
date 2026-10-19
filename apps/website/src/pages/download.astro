@@ -1,33 +1,71 @@
 ---
 import Base from '../layouts/Base.astro';
+import { candidates, sha256Placeholder } from '../data/candidates';
 import { release } from '../data/release';
 ---
-<Base title="下载宇海 · 安卓正式版" description={`宇海安卓正式版 ${release.version}，${release.sizeMb} MB，附 SHA-256 与签名证书指纹，方便核对官方版本。`}>
+<Base title="下载宇海VPN" description="下载宇海VPN 安卓版和 Windows 版。只从 yhvpn.io 获取安装包，并在正式发布后核对 SHA-256。">
   <section class="page-head">
     <div class="wrap">
       <span class="kicker">下载</span>
-      <h1>下载宇海</h1>
-      <p>请只从 yhvpn.io 下载。其他地方的安装包可能被人改过。</p>
+      <h1>下载客户端</h1>
+      <p>请只从 yhvpn.io 下载。安卓和 Windows 都有安装包。iOS 还没有。新账户可以在 App 里领取 24 小时免费试用。</p>
     </div>
   </section>
 
   <section class="section">
     <div class="wrap dl-grid">
-      <div class="dl-card">
-        <h2>
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48 19.44 6.3a.38.38 0 0 0-.66-.38l-1.86 3.22a11.46 11.46 0 0 0-9.84 0L5.22 5.92a.38.38 0 0 0-.66.38L6.4 9.48A10.78 10.78 0 0 0 1 18h22a10.78 10.78 0 0 0-5.4-8.52ZM7 15.25A1.25 1.25 0 1 1 8.25 14 1.25 1.25 0 0 1 7 15.25Zm10 0A1.25 1.25 0 1 1 18.25 14 1.25 1.25 0 0 1 17 15.25Z"/></svg>
-          安卓版 <span class="pill live">正式版</span>
-        </h2>
+      <article class="dl-card">
+        <h2>安卓版</h2>
+        <p>现在下载的是候选安装包。校验值还没公布，正式发布后再用页面上的 SHA-256 核对。</p>
+        <div>
+          <a class="btn btn-primary" href={candidates.android.href} download>
+            下载安卓版
+          </a>
+        </div>
+        <dl class="kv">
+          <dt>文件</dt>
+          <dd><span class="hash">{candidates.android.file}</span></dd>
+        </dl>
+        <dl class="kv">
+          <dt>SHA-256</dt>
+          <dd><span class="hash" id="h-android">{sha256Placeholder}</span><button class="copy" type="button" data-copy="h-android">复制</button></dd>
+        </dl>
+        <p class="hint">{candidates.android.note}</p>
+      </article>
+
+      <article class="dl-card">
+        <h2>Windows 版</h2>
+        <p>64 位候选版。还没有签名，安装时 Windows 可能提示未知发布者。</p>
+        <div>
+          <a class="btn btn-primary" href={candidates.windows.href} download>
+            下载 Windows 版
+          </a>
+        </div>
+        <dl class="kv">
+          <dt>文件</dt>
+          <dd><span class="hash">{candidates.windows.file}</span></dd>
+        </dl>
+        <dl class="kv">
+          <dt>SHA-256</dt>
+          <dd><span class="hash" id="h-windows">{sha256Placeholder}</span><button class="copy" type="button" data-copy="h-windows">复制</button></dd>
+        </dl>
+        <p class="hint">{candidates.windows.note}</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section alt">
+    <div class="wrap dl-grid">
+      <article class="dl-card">
+        <h2>上一版安卓 {release.version}</h2>
+        <p>这是更早的正式版，和上面的候选包不是同一个文件。下面的校验值只属于这一版。</p>
         <div class="specs">
           <span>版本 <b>{release.version}</b></span>
           <span>大小 <b>{release.sizeMb} MB</b></span>
           <span>发布 <b>{release.date}</b></span>
           <span>系统 <b>{release.minAndroid} 及以上</b></span>
         </div>
-        <div><a class="btn btn-primary" href={release.apk} download>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
-          下载安装包
-        </a></div>
+        <div><a class="btn btn-outline" href={release.apk} download>下载 {release.version}</a></div>
         <dl class="kv">
           <dt>安装包 SHA-256</dt>
           <dd><span class="hash" id="h-apk">{release.sha256}</span><button class="copy" type="button" data-copy="h-apk">复制</button></dd>
@@ -36,43 +74,27 @@ import { release } from '../data/release';
           <dt>签名证书 SHA-256</dt>
           <dd><span class="hash" id="h-cert">{release.certSha256}</span><button class="copy" type="button" data-copy="h-cert">复制</button></dd>
         </dl>
-      </div>
-
-      <div class="dl-card">
-        <h2>
-          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.3 1.9-3.4 2-3.5a4.3 4.3 0 0 0-3.4-1.8c-1.4-.2-2.8.8-3.5.8s-1.9-.8-3.1-.8a4.6 4.6 0 0 0-3.9 2.4c-1.7 2.9-.4 7.2 1.2 9.5.8 1.1 1.7 2.4 2.9 2.4s1.6-.8 3-.8 1.8.8 3 .7 2-1.1 2.8-2.3a9.6 9.6 0 0 0 1.3-2.6 3.9 3.9 0 0 1-2.3-3.5ZM14.1 5.8A4 4 0 0 0 15 2.9a4.1 4.1 0 0 0-2.7 1.4 3.8 3.8 0 0 0-1 2.8 3.4 3.4 0 0 0 2.8-1.3Z"/></svg>
-          iOS 版 <span class="pill">准备中</span>
-        </h2>
-        <p style="margin:0;color:var(--yh-sub)">iOS 版正在准备中，上线后会在这里更新。</p>
+      </article>
+      <article class="dl-card">
+        <h2>iOS <span class="pill">准备中</span></h2>
+        <p>iOS 版还没有安装包。上线后会加在这一页，不会用安卓包代替。</p>
         <div><span class="btn btn-outline" aria-disabled="true">敬请期待</span></div>
-      </div>
+      </article>
     </div>
   </section>
 
-  <section class="section alt">
-    <div class="wrap dl-grid">
-      <div>
-        <div class="section-head" style="margin-bottom:24px">
-          <span class="kicker">安装步骤</span>
-          <h2>安卓怎么装</h2>
-        </div>
-        <ol class="howto">
-          <li><b>下载安装包。</b>点上面的「下载安装包」，等下载完成。</li>
-          <li><b>允许安装。</b>手机提示「禁止安装未知应用」时，按提示允许当前浏览器安装应用。</li>
-          <li><b>完成安装。</b>回到下载的文件，点「安装」。</li>
-          <li><b>打开宇海注册。</b>账号填你自己钱包的 USDT（TRC20）地址，再设置密码。</li>
-        </ol>
+  <section class="section">
+    <div class="wrap">
+      <div class="section-head">
+        <span class="kicker">安装</span>
+        <h2>安卓怎么装</h2>
       </div>
-      <div>
-        <div class="section-head" style="margin-bottom:24px">
-          <span class="kicker">注意</span>
-          <h2>这些要留意</h2>
-        </div>
-        <div style="display:grid;gap:16px">
-          <p class="notice-card"><b>部分手机需要额外确认。</b>有的系统会要求多走一步「高级安装」确认，这是系统机制，不是应用问题。</p>
-          <p class="notice-card"><b>官方网站仅 yhvpn.io。</b>有人冒充我们发安装包时，核对上面的 SHA-256 和签名证书指纹就能识别。</p>
-        </div>
-      </div>
+      <ol class="howto">
+        <li><b>下载安装包。</b>用上面的「下载安卓版」。</li>
+        <li><b>允许安装。</b>系统提示不能安装未知应用时，允许当前浏览器安装。</li>
+        <li><b>打开 App 注册。</b>也可以先在<a href="/register/">网站上注册</a>。账号是你自己钱包的 USDT（TRC20）地址。</li>
+        <li><b>领取试用。</b>新账户在首页或套餐页点「免费试用 24 小时」。每个账户、每台设备一次，到期即停。</li>
+      </ol>
     </div>
   </section>
 </Base>

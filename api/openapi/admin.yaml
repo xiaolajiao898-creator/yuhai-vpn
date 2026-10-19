@@ -1762,7 +1762,7 @@ paths:
 
         **key 走白名单**，只接受代码真正会读取的那几个参数：`order.cooldown_seconds`、
         `topup.min_micro`、`topup.max_micro`、`invite.reward_default_plan_code`、
-        `invite.reward_traffic_plan_code`。白名单之外一律 40001，**包括数据库里已经存在的键**——
+        `invite.reward_traffic_plan_code`、`trial.enabled`。白名单之外一律 40001，**包括数据库里已经存在的键**——
         能写一个没有读取方的键，等于给运维一个「改了但不生效」的按钮。
 
         值按 key 逐个校验，两处是重点：
@@ -2064,6 +2064,133 @@ paths:
                 disable_missing: { type: boolean }
       responses:
         '200': { description: OK, content: { application/json: { schema: { type: object } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /redeem-card-types:
+    get:
+      operationId: listRedeemCardTypes
+      x-admin-level: L0
+      x-permission: redeem_codes.read
+      summary: 当前可生成的卡类型
+      description: |
+        期限以 redeem_card_types 为准。改天数、等级、设备或流量只影响之后生成的码，已发出的码用生成时的快照。
+      responses:
+        '200':
+          description: 仅返回仍启用的类型，按天数排序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/RedeemCardType' }
+        default: { $ref: '#/components/responses/Error' }
+  /redeem-codes:
+    get:
+      operationId: listRedeemCodes
+      x-admin-level: L0
+      x-permission: redeem_codes.read
+      summary: 兑换码列表（不含明文）
+      description: |
+        只返回掩码（后四位）。明文只在生成和导出的响应里出现，库中保存的是哈希和字段加密后的副本。
+      parameters:
+        - { name: card_type, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [unused, used, revoked] } }
+        - { name: batch_id, in: query, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+        - { name: note, in: query, schema: { type: string, maxLength: 200 } }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+      responses:
+        '200':
+          description: 按编号倒序
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [items, total, page, page_size, observed_at]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/RedeemCode' } }
+                  total: { type: string }
+                  page: { type: integer }
+                  page_size: { type: integer }
+                  observed_at: { type: string, format: date-time }
+        default: { $ref: '#/components/responses/Error' }
+  /redeem-codes/batches:
+    post:
+      operationId: generateRedeemCodes
+      x-admin-level: L2
+      x-permission: redeem_codes.generate
+      x-idempotent: true
+      summary: 生成一批一次性兑换码
+      description: |
+        周卡、月卡、年卡走同一个接口，用 card_type 区分（WEEK / MONTH / YEAR）。
+        数量 1–500。备注可选，例如发给谁。
+
+        响应里的 codes 是这批明文，请立即复制或下载。同一 operation_id 重放会再次返回这批明文，不会生成第二批。
+        换请求体则 40901。审计快照不含明文。
+      parameters:
+        - $ref: '#/components/parameters/StepUp'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RedeemGenerate' }
+      responses:
+        '201':
+          description: 已生成。codes 仅此响应和导出接口可见
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RedeemBatch' }
+        default: { $ref: '#/components/responses/Error' }
+  /redeem-codes/batches/{id}/export:
+    post:
+      operationId: exportRedeemCodes
+      x-admin-level: L2
+      x-permission: redeem_codes.export
+      x-idempotent: true
+      summary: 再次导出一批兑换码的明文
+      description: 需要二次验证。用于生成响应丢失后补救。已使用和已作废的码也会列出，并带上状态。
+      parameters:
+        - $ref: '#/components/parameters/StepUp'
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RedeemReason' }
+      responses:
+        '200':
+          description: 明文和当前状态
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RedeemExport' }
+        default: { $ref: '#/components/responses/Error' }
+  /redeem-codes/{id}/revoke:
+    post:
+      operationId: revokeRedeemCode
+      x-admin-level: L2
+      x-permission: redeem_codes.revoke
+      x-idempotent: true
+      summary: 作废一张未使用的兑换码
+      description: 已使用或已作废的码不能再次作废。与兑换使用同一行锁，避免一边开通一边作废。
+      parameters:
+        - $ref: '#/components/parameters/StepUp'
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^[1-9][0-9]*$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RedeemReason' }
+      responses:
+        '200':
+          description: 已作废
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RedeemRevoke' }
         default: { $ref: '#/components/responses/Error' }
 
 components:
@@ -2642,9 +2769,9 @@ components:
         node_name: { type: string, maxLength: 64 }
         node_status: { type: string, enum: [ONLINE, OFFLINE, MAINTENANCE, DISABLED] }
         confirmed: { type: boolean, description: 该节点已确认这些凭据不存在 }
-        confirmed_absent_at: { type: string, format: date-time, nullable: true }
-        heartbeat_sequence: { type: string, pattern: '^[1-9][0-9]{0,18}$', nullable: true }
-        snapshot_checksum: { type: string, pattern: '^[a-f0-9]{64}$', nullable: true }
+        confirmed_absent_at: { type: [string, 'null'], format: date-time }
+        heartbeat_sequence: { type: [string, 'null'], pattern: '^[1-9][0-9]{0,18}$' }
+        snapshot_checksum: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$' }
     DeviceRevocationReceipts:
       type: object
       additionalProperties: false
@@ -2890,3 +3017,94 @@ components:
         version: { type: integer, description: 实质改动才 +1；未结报价靠它作废 }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    RedeemCardType:
+      type: object
+      additionalProperties: false
+      required: [code, name, duration_days, tier, device_limit, unlimited_traffic, enabled]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        duration_days: { type: integer }
+        tier: { type: integer }
+        device_limit: { type: integer }
+        unlimited_traffic: { type: boolean }
+        enabled: { type: boolean }
+    RedeemCode:
+      type: object
+      additionalProperties: false
+      required: [id, hint, batch_id, card_type, card_name, duration_days, tier, device_limit, unlimited_traffic, note, status, created_by, created_at, redeemed_by, redeemed_account_no, redeemed_at]
+      properties:
+        id: { type: string }
+        hint: { type: string, description: 掩码，只有后四位 }
+        batch_id: { type: string }
+        card_type: { type: string }
+        card_name: { type: string }
+        duration_days: { type: integer }
+        tier: { type: integer }
+        device_limit: { type: integer }
+        unlimited_traffic: { type: boolean }
+        note: { type: string }
+        status: { type: string, enum: [unused, used, revoked] }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        redeemed_by: { type: [string, 'null'] }
+        redeemed_account_no: { type: [string, 'null'] }
+        redeemed_at: { type: [string, 'null'], format: date-time }
+    RedeemGenerate:
+      type: object
+      additionalProperties: false
+      required: [operation_id, card_type, quantity]
+      properties:
+        operation_id: { type: string, format: uuid }
+        card_type: { type: string, enum: [WEEK, MONTH, YEAR] }
+        quantity: { type: integer, minimum: 1, maximum: 500 }
+        note: { type: string, maxLength: 200 }
+    RedeemReason:
+      type: object
+      additionalProperties: false
+      required: [operation_id, reason]
+      properties:
+        operation_id: { type: string, format: uuid }
+        reason: { type: string, minLength: 1, maxLength: 500 }
+    RedeemBatch:
+      type: object
+      additionalProperties: false
+      required: [batch_id, card_type, card_name, quantity, duration_days, tier, device_limit, unlimited_traffic, note, created_at, codes]
+      properties:
+        batch_id: { type: string }
+        card_type: { type: string }
+        card_name: { type: string }
+        quantity: { type: integer }
+        duration_days: { type: integer }
+        tier: { type: integer }
+        device_limit: { type: integer }
+        unlimited_traffic: { type: boolean }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        codes: { type: array, items: { type: string } }
+    RedeemExport:
+      type: object
+      additionalProperties: false
+      required: [batch_id, card_type, card_name, note, codes]
+      properties:
+        batch_id: { type: string }
+        card_type: { type: string }
+        card_name: { type: string }
+        note: { type: string }
+        codes:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [code, status]
+            properties:
+              code: { type: string }
+              status: { type: string, enum: [unused, used, revoked] }
+    RedeemRevoke:
+      type: object
+      additionalProperties: false
+      required: [id, batch_id, status]
+      properties:
+        id: { type: string }
+        batch_id: { type: string }
+        status: { type: string, enum: [revoked] }

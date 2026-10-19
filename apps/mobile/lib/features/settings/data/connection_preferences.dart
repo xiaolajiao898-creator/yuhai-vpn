@@ -21,21 +21,29 @@ class ConnectionPreferences {
   const ConnectionPreferences({
     this.protocol = ProtocolPreference.auto,
     this.reduceMotion = false,
+    this.autoConnect = false,
   });
 
   final ProtocolPreference protocol;
   final bool reduceMotion;
 
+  /// 打开 App 且已有可用套餐时，调用一次现有的连接开关。默认关闭。
+  final bool autoConnect;
+
   ConnectionPreferences copyWith(
-          {ProtocolPreference? protocol, bool? reduceMotion}) =>
+          {ProtocolPreference? protocol,
+          bool? reduceMotion,
+          bool? autoConnect}) =>
       ConnectionPreferences(
           protocol: protocol ?? this.protocol,
-          reduceMotion: reduceMotion ?? this.reduceMotion);
+          reduceMotion: reduceMotion ?? this.reduceMotion,
+          autoConnect: autoConnect ?? this.autoConnect);
 
   Map<String, Object> toJson() => {
         'version': 1,
         'protocol': protocol.wireValue,
         'reduce_motion': reduceMotion,
+        'auto_connect': autoConnect,
       };
 
   /// Corrupted, unsupported or partially written records use safe defaults.
@@ -55,8 +63,11 @@ class ConnectionPreferences {
       }
       for (final protocol in ProtocolPreference.values) {
         if (value['protocol'] == protocol.wireValue) {
+          final auto = value['auto_connect'];
           return ConnectionPreferences(
-              protocol: protocol, reduceMotion: value['reduce_motion'] as bool);
+              protocol: protocol,
+              reduceMotion: value['reduce_motion'] as bool,
+              autoConnect: auto is bool && auto);
         }
       }
     } on FormatException {
@@ -69,9 +80,10 @@ class ConnectionPreferences {
   bool operator ==(Object other) =>
       other is ConnectionPreferences &&
       other.protocol == protocol &&
-      other.reduceMotion == reduceMotion;
+      other.reduceMotion == reduceMotion &&
+      other.autoConnect == autoConnect;
   @override
-  int get hashCode => Object.hash(protocol, reduceMotion);
+  int get hashCode => Object.hash(protocol, reduceMotion, autoConnect);
 }
 
 abstract interface class ConnectionPreferencesStorage {
@@ -131,6 +143,9 @@ class ConnectionPreferencesController
 
   Future<void> setReduceMotion(bool enabled) =>
       _update((current) => current.copyWith(reduceMotion: enabled));
+
+  Future<void> setAutoConnect(bool enabled) =>
+      _update((current) => current.copyWith(autoConnect: enabled));
 
   Future<void> _update(
       ConnectionPreferences Function(ConnectionPreferences) change) {

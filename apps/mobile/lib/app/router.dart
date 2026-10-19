@@ -7,6 +7,7 @@ import '../features/invite/presentation/invite_page.dart';
 import '../features/invite/presentation/rewards_page.dart';
 import '../features/account/presentation/ledger_page.dart';
 import '../features/account/presentation/account_page.dart';
+import '../features/account/presentation/redeem_page.dart';
 import '../features/account/presentation/devices_page.dart';
 import '../features/settings/presentation/settings_page.dart';
 import '../features/settings/presentation/connection_settings_page.dart';
@@ -26,6 +27,7 @@ import '../features/payment/data/orders_api.dart';
 import '../features/payment/presentation/orders_page.dart';
 import '../features/payment/presentation/pay_page.dart';
 import '../features/payment/presentation/pay_result_page.dart';
+import 'theme/tokens.dart';
 
 /// 路由表与方案 9.4 页面编号一一对应；页面文件在各 feature/presentation 下逐周补齐。
 abstract final class Routes {
@@ -47,6 +49,7 @@ abstract final class Routes {
   static const rewards = '/invite/rewards'; // P13
   static const settings = '/settings'; // P14
   static const account = '/settings/account'; // P15
+  static const redeem = '/settings/redeem';
   static const devices = '/settings/devices'; // P16
   static const connection = '/settings/connection'; // P17
   static const balance = '/settings/balance'; // P18
@@ -99,7 +102,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       );
     },
     routes: [
-      GoRoute(path: Routes.splash, builder: (_, __) => const _Splash()),
+      GoRoute(path: Routes.splash, builder: (_, __) => const YuhaiSplash()),
       GoRoute(
           path: Routes.sessionUnavailable,
           builder: (_, __) => const SessionUnavailablePage()),
@@ -133,6 +136,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: Routes.traffic, builder: (_, __) => const TrafficPage()),
       GoRoute(path: Routes.about, builder: (_, __) => const AboutPage()),
       GoRoute(path: Routes.account, builder: (_, __) => const AccountPage()),
+      GoRoute(path: Routes.redeem, builder: (_, __) => const RedeemPage()),
       GoRoute(path: Routes.devices, builder: (_, __) => const DevicesPage()),
       GoRoute(path: Routes.orders, builder: (_, __) => const OrdersPage()),
       GoRoute(
@@ -154,12 +158,52 @@ final routerProvider = Provider<GoRouter>((ref) {
 });
 
 /// P01 启动页：读取本地会话期间显示品牌字标，目标 1.5 秒内离开。
-class _Splash extends StatelessWidget {
-  const _Splash();
+class YuhaiSplash extends StatelessWidget {
+  const YuhaiSplash({super.key});
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Scaffold(
       body: Center(
-          child: Text('宇海', style: Theme.of(context).textTheme.displayLarge)));
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: YhColors.accent,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const CustomPaint(painter: _WaveMark()),
+          ),
+          const SizedBox(height: 16),
+          Text('宇海VPN', style: text.headlineMedium),
+        ]),
+      ),
+    );
+  }
+}
+
+class _WaveMark extends CustomPainter {
+  const _WaveMark();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = YhColors.buttonInk
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < 3; i++) {
+      final y = size.height * (0.34 + i * 0.16);
+      final path = Path()
+        ..moveTo(size.width * 0.2, y)
+        ..quadraticBezierTo(size.width * 0.35, y - 8, size.width * 0.5, y)
+        ..quadraticBezierTo(size.width * 0.65, y + 8, size.width * 0.8, y);
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _Notifier extends ChangeNotifier {

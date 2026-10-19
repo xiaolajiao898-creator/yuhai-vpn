@@ -16,7 +16,7 @@ void main() {
   });
 
   test('没有套餐和流量用尽用不同文案', () {
-    expect(accountSummaryLine({'blocked_reason': 'NO_PLAN'}), '还没有套餐 · 去购买或兑换');
+    expect(accountSummaryLine({'blocked_reason': 'NO_PLAN'}), '还没有套餐 · 可免费试用 24 小时');
     expect(
       trafficLabel({'period_quota_bytes': 1024, 'period_used_bytes': 512}),
       '512 B / 1.0 KB',

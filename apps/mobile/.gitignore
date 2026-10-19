@@ -46,3 +46,6 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Screenshot goldens depend on the bundled font rasterizer and are not compared in CI.
+/test/goldens/

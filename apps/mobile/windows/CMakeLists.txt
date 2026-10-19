@@ -53,6 +53,10 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 add_subdirectory("runner")
 
 
+# VS 2026 / MSVC 14.51 把 <experimental/coroutine> 当成错误。local_auth_windows
+# 仍包含这个头。微软给出的过渡宏，插件和主程序一起带上。
+add_compile_definitions(_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)
+
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
 include(flutter/generated_plugins.cmake)
@@ -106,3 +110,19 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# xray.exe 与 wintun.dll 由 CI 放进 third_party/，不入库。装到可执行文件旁边，
+# Wintun 才能被 xray 加载。许可证文本随包安装。
+set(_yuhai_third "${CMAKE_CURRENT_SOURCE_DIR}/third_party")
+foreach(_bin xray.exe wintun.dll)
+  if(EXISTS "${_yuhai_third}/${_bin}")
+    install(FILES "${_yuhai_third}/${_bin}"
+      DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+      COMPONENT Runtime)
+  endif()
+endforeach()
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/packaging/licenses/NOTICES.txt")
+  install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/packaging/licenses/"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}/licenses"
+    COMPONENT Runtime)
+endif()

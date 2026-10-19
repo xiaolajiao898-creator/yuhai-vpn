@@ -31,7 +31,14 @@ export const support: SupportRow[] = [
     note: '上线后在下载页更新',
   },
   {
-    platform: 'Windows / macOS',
+    platform: 'Windows',
+    state: 'test',
+    stateLabel: '候选版',
+    protocols: '出口线路（Xray）',
+    note: '提供未签名的候选安装包，还没有代码签名证书',
+  },
+  {
+    platform: 'macOS',
     state: 'none',
     stateLabel: '未发布',
     protocols: '—',

@@ -135,15 +135,17 @@ void main() {
     storage.failLoad = false;
     await tester.tap(find.text('重新读取'));
     await tester.pumpAndSettle();
-    final auto = tester.widget<ListTile>(
-        find.byKey(const ValueKey('automatic-connect-unavailable')));
+    final auto = tester.widget<SwitchListTile>(
+        find.byKey(const ValueKey('automatic-connect')));
     final killSwitch = tester.widget<ListTile>(
-        find.byKey(const ValueKey('kill-switch-unavailable')));
-    expect(auto.enabled, isFalse);
-    expect(auto.onTap, isNull);
-    expect(killSwitch.enabled, isFalse);
-    expect(killSwitch.onTap, isNull);
-    expect(find.text('模拟连接不会建立真实 VPN 隧道。协议偏好可先保存，接入真实引擎后生效。'), findsOneWidget);
+        find.byKey(const ValueKey('kill-switch-guidance')));
+    final split = tester.widget<SwitchListTile>(
+        find.byKey(const ValueKey('split-tunnel-unavailable')));
+    expect(auto.value, isFalse);
+    expect(auto.onChanged, isNotNull);
+    expect(killSwitch.onTap, isNotNull);
+    expect(split.onChanged, isNull);
+    expect(find.text('还没做好。\n打开也不会分流'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -163,7 +165,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(storage.value.protocol, ProtocolPreference.wireguard);
     expect(find.text('WireGuard'), findsOneWidget);
-    expect(find.text('协议偏好已保存，真实引擎接入后生效'), findsOneWidget);
+    expect(find.text('已保存。真正连接时会按这个偏好。'), findsOneWidget);
     storage.failSave = true;
     await tester
         .ensureVisible(find.byKey(const ValueKey('reduce-connection-motion')));

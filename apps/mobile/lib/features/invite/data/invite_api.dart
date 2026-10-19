@@ -34,6 +34,7 @@ String? parseInviteCode(String input) {
   if (input.length > 4096) return null;
   final text = input.trim().toUpperCase();
   final normalized = text
+      .replaceFirst(RegExp(r'^宇海VPN邀请码\s*[:：]?\s*'), '')
       .replaceFirst(RegExp(r'^宇海邀请码\s*[:：]?\s*'), '')
       .replaceFirst(RegExp(r'^YHINVITE:\s*'), '')
       .trim();

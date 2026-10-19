@@ -1,34 +1,37 @@
 ---
-const { title = '宇海 · 一键连接的加密网络', description = '宇海：打开就能连，选择新加坡、美国、日本等地区线路，连接状态清清楚楚。WireGuard 加密，USDT 地址注册与付款，官方签名安卓客户端。' } = Astro.props;
-// 统一品牌标识：深海蓝底 + 两道潮线 + 一点亮蓝（与 App、后台同一符号）。
-const mark = `<svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#143951"/><path d="M6 18.5c2.8 0 2.8-2.2 5.7-2.2s2.9 2.2 5.7 2.2 2.8-2.2 5.7-2.2c1.4 0 2.1.5 2.9 1.1" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M8.5 23c2.3 0 2.3-1.6 4.7-1.6s2.4 1.6 4.7 1.6 2.4-1.6 4.7-1.6" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="21.5" cy="10" r="2.4" fill="#79D0E3"/></svg>`;
+const { title = '宇海VPN · 一键连接的加密网络', description = '宇海VPN：打开就能连。不要手机号和邮箱，新用户免费试用 24 小时，不自动续费。' } = Astro.props;
+// 品牌标识：与 favicon 同一张 64×64 图，圆角 16，底 #bbef68，波浪 #14201c。
+const mark = `<svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#bbef68"/><g fill="none" stroke="#14201c" stroke-width="4" stroke-linecap="round"><path d="M13 22q9-8 19 0t19 0M13 32q9-8 19 0t19 0M13 42q9-8 19 0t19 0"/></g></svg>`;
 ---
 <!doctype html>
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#ffffff" />
+    <meta name="theme-color" content="#bbef68" />
     <title>{title}</title>
     <meta name="description" content={description} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/assets/site.css" />
-    <script is:inline>document.documentElement.classList.add('js')</script>
-    <script src="/assets/site.js" defer></script>
+    <slot name="head" />
+    <script is:inline src="/assets/html-class.js"></script>
+    <script is:inline src="/assets/site.js" defer></script>
   </head>
   <body>
     <header class="nav">
       <div class="wrap">
-        <a class="brand" href="/" aria-label="宇海 首页"><Fragment set:html={mark} /><span class="brand-name">宇海</span><span class="brand-latin">YUHAI</span></a>
+        <a class="brand" href="/" aria-label="宇海VPN 首页"><Fragment set:html={mark} /><span class="brand-name">宇海VPN</span></a>
         <nav class="nav-links" aria-label="主导航">
-          <a class="hide-sm" href="/#product">产品</a>
-          <a class="hide-sm" href="/#support">支持范围</a>
-          <a class="hide-sm" href="/#account">账户</a>
-          <a class="hide-sm" href="/#faq">常见问题</a>
-          <a class="btn btn-primary btn-sm" href="/download/">下载</a>
+          <a class="hide-sm" href="/pricing/">价格</a>
+          <a class="hide-sm" href="/download/">下载</a>
+          <a class="hide-sm" href="/help/">帮助</a>
+          <a class="btn btn-outline btn-sm" href="/register/">注册</a>
+          <a class="btn btn-primary btn-sm" id="nav-download" href="/download/">下载</a>
         </nav>
       </div>
     </header>
@@ -37,13 +40,16 @@ const mark = `<svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidde
     </main>
     <footer class="footer">
       <div class="wrap">
-        <a class="brand" href="/" aria-label="宇海 首页"><Fragment set:html={mark} /><span class="brand-name">宇海</span></a>
+        <a class="brand" href="/" aria-label="宇海VPN 首页"><Fragment set:html={mark} /><span class="brand-name">宇海VPN</span></a>
         <nav aria-label="页脚导航">
-          <a href="/download/">下载与校验</a>
-          <a href="/#support">支持范围</a>
-          <a href="/#faq">常见问题</a>
+          <a href="/pricing/">价格</a>
+          <a href="/download/">下载</a>
+          <a href="/help/">帮助</a>
+          <a href="/register/">注册</a>
+          <a href="/privacy/">隐私</a>
+          <a href="/terms/">条款</a>
         </nav>
-        <span>© 2026 宇海 · 官方网站仅 yhvpn.io</span>
+        <span>© 2026 宇海VPN · 官方网站仅 yhvpn.io</span>
       </div>
     </footer>
   </body>

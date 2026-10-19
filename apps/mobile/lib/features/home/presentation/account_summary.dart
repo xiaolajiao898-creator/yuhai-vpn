@@ -36,7 +36,7 @@ String formatExpiryLocal(String? raw,
 String accountSummaryLine(Map<String, dynamic> entitlement,
     {DateTime Function(DateTime utc)? toLocal}) {
   final blocked = switch (entitlement['blocked_reason']) {
-    'NO_PLAN' => '还没有套餐 · 去购买或兑换',
+    'NO_PLAN' => '还没有套餐 · 可免费试用 24 小时',
     'EXPIRED' => '套餐已到期 · 去续费',
     'QUOTA_EXHAUSTED' => '流量已用完 · 买流量包',
     'SUSPENDED' => '账户已停用 · 联系客服',

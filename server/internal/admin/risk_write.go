@@ -93,6 +93,7 @@ var mutationTables = map[string]bool{
 	"admin_config_mutations":  true,
 	"admin_finance_mutations": true,
 	"admin_export_mutations":  true,
+	"admin_redeem_mutations":  true,
 }
 
 // securedMutation 是后台 L2 写操作的公共骨架：二次验证 → 锁权限 → 幂等 → 执行 → 审计。

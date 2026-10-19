@@ -184,20 +184,20 @@ void main() {
     await tester.pumpWidget(app(api));
     await tester.pumpAndSettle();
     expect(find.text('邀请绑定已开放'), findsOneWidget);
-    expect(find.text('奖励活动暂未开放'), findsOneWidget);
+    expect(find.text('奖励还没开放'), findsOneWidget);
     await enterCode(tester, 'ABC234');
     await reveal(tester, find.text('绑定邀请码'));
     await tester.tap(find.text('绑定邀请码'));
     await tester.pumpAndSettle();
-    expect(find.textContaining('当前仅绑定邀请关系，不发放奖励。'), findsWidgets);
+    expect(find.textContaining('现在只记下邀请关系，不发奖励。'), findsWidgets);
     expect(api.calls, isEmpty);
     await tester.tap(find.text('确认绑定'));
     await tester.pumpAndSettle();
     expect(api.calls.single.code, 'ABC234');
     await reveal(tester, find.text('邀请码绑定成功'));
     expect(find.text('邀请码绑定成功'), findsOneWidget);
-    await reveal(tester, find.text('奖励活动暂未开放'));
-    expect(find.text('奖励活动暂未开放'), findsOneWidget);
+    await reveal(tester, find.text('奖励还没开放'));
+    expect(find.text('奖励还没开放'), findsOneWidget);
   });
 
   testWidgets('奖励关闭不阻止进入历史记录，也不隐藏已发放奖励', (tester) async {
@@ -219,7 +219,7 @@ void main() {
     await reveal(tester, find.text('查看奖励记录'));
     await tester.tap(find.text('查看奖励记录'));
     await tester.pumpAndSettle();
-    expect(find.text('奖励活动暂未开放，历史记录仍可查看。'), findsOneWidget);
+    expect(find.text('奖励还没开放，以前的记录还能看。'), findsOneWidget);
     expect(find.text('7 天'), findsOneWidget);
     expect(find.text('已发放'), findsOneWidget);
   });
@@ -239,6 +239,7 @@ void main() {
   test('邀请码只接受指定六位字符及两种分享文本', () {
     expect(parseInviteCode(' abcd23 '), 'ABCD23');
     expect(parseInviteCode('宇海邀请码 BCD234'), 'BCD234');
+    expect(parseInviteCode('宇海VPN邀请码 BCD234'), 'BCD234');
     expect(parseInviteCode('YHINVITE:BCD234'), 'BCD234');
     for (final invalid in [
       'A0CD23',
