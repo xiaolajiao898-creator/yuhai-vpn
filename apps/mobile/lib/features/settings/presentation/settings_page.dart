@@ -53,7 +53,7 @@ class SettingsPage extends ConsumerWidget {
                         child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                          Text('宇海账户',
+                          Text('宇海VPN',
                               style: Theme.of(context).textTheme.titleLarge),
                           const SizedBox(height: 4),
                           Text('${data['account_no'] ?? '—'}',
@@ -127,7 +127,7 @@ class SettingsPage extends ConsumerWidget {
                   const Divider(height: 1),
                   SettingsRow(
                       icon: Icons.info_outline,
-                      title: '关于宇海',
+                      title: '关于宇海VPN',
                       subtitle: appVersion,
                       onTap: () => context.push(Routes.about)),
                   const Divider(height: 1),

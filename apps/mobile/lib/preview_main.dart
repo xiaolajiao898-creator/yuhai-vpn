@@ -87,7 +87,7 @@ class _PreviewApp extends ConsumerWidget {
   final VoidCallback onReset;
   @override
   Widget build(BuildContext context, WidgetRef ref) => MaterialApp.router(
-        title: '宇海 · 前端演示',
+        title: '宇海VPN',
         theme: buildDeepSeaTheme(),
         debugShowCheckedModeBanner: false,
         routerConfig: ref.watch(routerProvider),

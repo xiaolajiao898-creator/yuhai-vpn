@@ -51,8 +51,10 @@ abstract final class YhSpace {
 }
 
 abstract final class YhFont {
-  static const numeric = 'IBMPlexSans'; // 数字与英文（等宽数字）
-  static const brand = 'NotoSerifSC'; // 仅引导页主标题
+  /// 界面中文与数字。已打进安装包的 Noto Sans SC。
+  static const ui = 'NotoSansSC';
+  static const numeric = ui;
+  static const brand = ui;
   static const sizes = [40.0, 28.0, 20.0, 16.0, 14.0, 12.0];
   static const lineHeight = 1.5;
 }

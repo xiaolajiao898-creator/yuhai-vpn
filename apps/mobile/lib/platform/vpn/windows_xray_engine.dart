@@ -168,7 +168,7 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
       throw const VpnFailure('XRAY_MISSING', '安装不完整：缺少 Xray 组件，请重新安装');
     }
     if (!await _isAdmin()) {
-      _emitFailure(const VpnFailure('PERMISSION_DENIED', '请右键宇海图标，选择「以管理员身份运行」'));
+      _emitFailure(const VpnFailure('PERMISSION_DENIED', '请右键宇海VPN图标，选择「以管理员身份运行」'));
       return false;
     }
     return true;

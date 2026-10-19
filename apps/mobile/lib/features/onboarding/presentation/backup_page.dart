@@ -107,7 +107,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
               title: const Text('我已妥善保存账户密钥，并知道丢失后无法找回'),
             ),
             const SizedBox(height: YhSpace.unit),
-            FilledButton(onPressed: _confirmed && !_busy ? _done : null, child: const Text('进入宇海')),
+            FilledButton(onPressed: _confirmed && !_busy ? _done : null, child: const Text('进入宇海VPN')),
             const SizedBox(height: YhSpace.page),
           ],
         ),

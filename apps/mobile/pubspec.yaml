@@ -40,16 +40,15 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  # 数字与英文：IBM Plex Sans（SIL OFL）；品牌时刻：Noto Serif SC。字体文件放入 assets/fonts/ 后取消注释
-  # fonts:
-  #   - family: IBMPlexSans
-  #     fonts:
-  #       - asset: assets/fonts/IBMPlexSans-Regular.ttf
-  #       - asset: assets/fonts/IBMPlexSans-Medium.ttf
-  #         weight: 500
-  #       - asset: assets/fonts/IBMPlexSans-SemiBold.ttf
-  #         weight: 600
-  #   - family: NotoSerifSC
-  #     fonts:
-  #       - asset: assets/fonts/NotoSerifSC-SemiBold.otf
-  #         weight: 600
+  # Noto Sans SC（SIL OFL，见 assets/fonts/OFL.txt）。
+  # 子集含 GB2312 与界面里出现的字符，真机和截图用同一套字，不依赖系统里是否装了中文。
+  fonts:
+    - family: NotoSansSC
+      fonts:
+        - asset: assets/fonts/NotoSansSC-Regular.otf
+        - asset: assets/fonts/NotoSansSC-Medium.otf
+          weight: 500
+        - asset: assets/fonts/NotoSansSC-Bold.otf
+          weight: 600
+        - asset: assets/fonts/NotoSansSC-Bold.otf
+          weight: 700

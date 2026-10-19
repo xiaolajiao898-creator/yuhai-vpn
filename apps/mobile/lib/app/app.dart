@@ -12,7 +12,7 @@ class YuhaiApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     ref.watch(selectedNodeHydrationProvider);
     return MaterialApp.router(
-      title: '宇海加密VPN',
+      title: '宇海VPN',
       theme: buildDeepSeaTheme(),
       routerConfig: ref.watch(routerProvider),
       debugShowCheckedModeBanner: false,

@@ -72,7 +72,7 @@ class _AboutPageState extends ConsumerState<AboutPage> {
       ('服务条款', safeReleaseLink(terms))
     ];
     return Scaffold(
-      appBar: AppBar(title: const Text('关于宇海')),
+      appBar: AppBar(title: const Text('关于宇海VPN')),
       body: ListView(padding: const EdgeInsets.all(YhSpace.page), children: [
         const SizedBox(height: 16),
         Center(
@@ -86,10 +86,13 @@ class _AboutPageState extends ConsumerState<AboutPage> {
                 child: const Icon(Icons.shield_moon_outlined,
                     size: 44, color: YhColors.glow))),
         const SizedBox(height: 16),
-        const Text('宇海',
+        const Text('宇海VPN',
             textAlign: TextAlign.center,
             style: TextStyle(
-                fontSize: 32, fontWeight: FontWeight.w800, letterSpacing: 4)),
+                fontSize: 32,
+                fontWeight: FontWeight.w600,
+                fontFamily: YhFont.ui,
+                letterSpacing: 0.4)),
         const SizedBox(height: 8),
         const Text('深海之中，自在连接',
             textAlign: TextAlign.center,

@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:yuhai_vpn/app/router.dart';
 import 'package:yuhai_vpn/app/theme/theme.dart';
 import 'package:yuhai_vpn/core/widgets/tide_ring_button.dart';
-import 'package:yuhai_vpn/features/account/presentation/support_sheet.dart';
 import 'package:yuhai_vpn/features/connection/presentation/connection_controller.dart';
 import 'package:yuhai_vpn/features/home/data/me_api.dart';
 import 'package:yuhai_vpn/features/home/presentation/home_page.dart';
@@ -31,9 +30,11 @@ void main() {
   testWidgets('redesign gallery', (tester) async {
     if (Platform.environment['YH_SCREENSHOTS'] != '1') return;
     FlutterSecureStorage.setMockInitialValues({});
-    tester.view.physicalSize = const Size(390, 844);
-    tester.view.devicePixelRatio = 1;
+    // 1080×2400 物理像素，3 倍，逻辑宽度 360。和常见安卓手机同一套像素。
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
 
     Future<void> shoot(String name) async {
       await tester.pump();
@@ -84,7 +85,11 @@ void main() {
           vpnEngineProvider.overrideWithValue(UnavailableVpnEngine()),
           ...overrides,
         ],
-        child: MaterialApp(theme: buildDeepSeaTheme(), home: home),
+        child: MaterialApp(
+          theme: buildDeepSeaTheme(),
+          debugShowCheckedModeBanner: false,
+          home: home,
+        ),
       );
     }
 

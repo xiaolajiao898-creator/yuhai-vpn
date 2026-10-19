@@ -239,6 +239,7 @@ void main() {
   test('邀请码只接受指定六位字符及两种分享文本', () {
     expect(parseInviteCode(' abcd23 '), 'ABCD23');
     expect(parseInviteCode('宇海邀请码 BCD234'), 'BCD234');
+    expect(parseInviteCode('宇海VPN邀请码 BCD234'), 'BCD234');
     expect(parseInviteCode('YHINVITE:BCD234'), 'BCD234');
     for (final invalid in [
       'A0CD23',

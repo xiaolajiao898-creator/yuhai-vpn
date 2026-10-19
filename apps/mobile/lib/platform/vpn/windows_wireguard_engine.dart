@@ -140,7 +140,7 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
     // `net session` 只有管理员才能成功，用来判断是否以管理员身份运行。
     final admin = await _run('net', ['session']);
     if (admin.exitCode != 0) {
-      _fail('PERMISSION_DENIED', '请右键宇海图标，选择「以管理员身份运行」');
+      _fail('PERMISSION_DENIED', '请右键宇海VPN图标，选择「以管理员身份运行」');
       return false;
     }
     return true;

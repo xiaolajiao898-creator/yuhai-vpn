@@ -51,12 +51,11 @@ h1, h2, h3, p { margin: 0; }
 .nav .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; }
 .brand { display: inline-flex; align-items: center; gap: 10px; color: var(--yh-ink); text-decoration: none; }
 .brand-mark { width: 30px; height: 30px; flex-shrink: 0; }
-.brand-name { font-weight: 600; font-size: 17px; letter-spacing: .08em; }
-.brand-latin { font-size: 11px; letter-spacing: .16em; color: var(--yh-sub); }
+.brand-name { font-weight: 600; font-size: 16px; letter-spacing: .04em; }
 .nav-links { display: flex; align-items: center; gap: 22px; }
 .nav-links a { color: var(--yh-sub); text-decoration: none; font-size: 14px; }
 .nav-links a:hover { color: var(--yh-ink); }
-@media (max-width: 720px) { .hide-sm { display: none; } .brand-latin { display: none; } }
+@media (max-width: 720px) { .hide-sm { display: none; } }
 
 /* ---------- 按钮 ---------- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; padding: 11px 22px; border-radius: 14px; border: 1px solid transparent; font: 500 15px/1.3 var(--sans); text-decoration: none; cursor: pointer; transition: transform .16s ease, background .16s ease; white-space: nowrap; }
@@ -89,7 +88,8 @@ h1, h2, h3, p { margin: 0; }
 
 /* ---------- 产品画面示意（与 App 同一套深色组件） ---------- */
 .phone { position: relative; width: 290px; max-width: 86vw; min-height: 540px; border-radius: 44px; background: var(--app-bg); border: 8px solid #14201c; box-shadow: 0 40px 60px -40px rgba(20, 32, 28, .45); padding: 18px 18px 16px; color: var(--app-ink); display: flex; flex-direction: column; font-size: 13px; line-height: 1.5; z-index: 1; }
-.phone-top { display: flex; justify-content: space-between; align-items: center; color: var(--app-sub); font-size: 11px; }
+.phone-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; color: var(--app-sub); font-size: 11px; }
+.phone-top span { white-space: nowrap; }
 .phone-notch { width: 70px; height: 5px; border-radius: 5px; background: var(--app-line); }
 .phone-title { font-weight: 600; font-size: 16px; margin: 14px 0 6px; }
 .app-status { display: flex; align-items: center; justify-content: center; gap: 7px; margin-top: 18px; font-size: 16px; color: var(--app-sub); }

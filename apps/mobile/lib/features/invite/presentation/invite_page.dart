@@ -213,7 +213,7 @@ class _InvitePageState extends ConsumerState<InvitePage> {
                                       letterSpacing: 4)),
                               const SizedBox(height: 16),
                               FilledButton.icon(
-                                  onPressed: () => _copy('宇海邀请码 ${i.code}'),
+                                  onPressed: () => _copy('宇海VPN邀请码 ${i.code}'),
                                   icon: const Icon(Icons.copy),
                                   label: const Text('复制邀请码')),
                               if (i.url != null)

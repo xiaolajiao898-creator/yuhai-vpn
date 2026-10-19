@@ -17,11 +17,12 @@ ThemeData buildDeepSeaTheme() {
   const body = TextStyle(
     color: YhColors.moonlight,
     height: YhFont.lineHeight,
+    fontFamily: YhFont.ui,
     fontFamilyFallback: [
-      'Noto Sans CJK SC',
-      'Noto Sans SC',
+      YhFont.ui,
       'PingFang SC',
       'Microsoft YaHei',
+      'Noto Sans CJK SC',
       'sans-serif',
     ],
   );
@@ -35,6 +36,7 @@ ThemeData buildDeepSeaTheme() {
   );
   return ThemeData(
     useMaterial3: true,
+    fontFamily: YhFont.ui,
     colorScheme: scheme,
     scaffoldBackgroundColor: YhColors.abyss,
     textTheme: text,
@@ -55,7 +57,10 @@ ThemeData buildDeepSeaTheme() {
       scrolledUnderElevation: 0,
       centerTitle: false,
       titleTextStyle: TextStyle(
-          color: YhColors.ink, fontSize: 18, fontWeight: FontWeight.w600),
+          color: YhColors.ink,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+          fontFamily: YhFont.ui),
     ),
     navigationBarTheme: NavigationBarThemeData(
       backgroundColor: YhColors.paper,
@@ -67,6 +72,7 @@ ThemeData buildDeepSeaTheme() {
               : YhColors.sub)),
       labelTextStyle: WidgetStateProperty.resolveWith((states) => TextStyle(
           fontSize: 12,
+          fontFamily: YhFont.ui,
           color: states.contains(WidgetState.selected)
               ? YhColors.accent
               : YhColors.sub)),
@@ -86,7 +92,8 @@ ThemeData buildDeepSeaTheme() {
         minimumSize: const Size.fromHeight(56),
         shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(YhRadius.button)),
-        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+        textStyle: const TextStyle(
+            fontSize: 16, fontWeight: FontWeight.w600, fontFamily: YhFont.ui),
       ),
     ),
     // 填充圆角框不能用 OutlineInputBorder。描边框把浮动标签钉在上边线中央，
