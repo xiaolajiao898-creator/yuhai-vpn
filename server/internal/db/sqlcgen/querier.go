@@ -25,14 +25,17 @@ type Querier interface {
 	GetActiveDeviceByUID(ctx context.Context, deviceUid pgtype.UUID) (Device, error)
 	GetOrderByNo(ctx context.Context, orderNo string) (Order, error)
 	GetOrderForUpdate(ctx context.Context, id int64) (Order, error)
+	GetRedeemCodeByHash(ctx context.Context, codeHash string) (GetRedeemCodeByHashRow, error)
 	GetUserByID(ctx context.Context, id int64) (User, error)
 	GetUserByInviteCode(ctx context.Context, inviteCode string) (GetUserByInviteCodeRow, error)
 	GetUserBySecretLookup(ctx context.Context, secretLookup string) (User, error)
 	InsertDeviceBindLog(ctx context.Context, arg InsertDeviceBindLogParams) error
+	ListEnabledRedeemCardTypes(ctx context.Context) ([]ListEnabledRedeemCardTypesRow, error)
 	ListOrdersByUser(ctx context.Context, arg ListOrdersByUserParams) ([]Order, error)
 	// 零行是陈旧租约或已终结状态，不能去掉版本条件重试。数据库错误必须向上传递。
 	MarkOutboxDone(ctx context.Context, arg MarkOutboxDoneParams) error
 	MarkOutboxFailed(ctx context.Context, arg MarkOutboxFailedParams) error
+	MarkRedeemCodeUsed(ctx context.Context, arg MarkRedeemCodeUsedParams) (int64, error)
 	// 唯一尾数分配（方案 6.2）：返回行 = 分配成功；无行 = 槽位被占用
 	TryLockAmount(ctx context.Context, arg TryLockAmountParams) (string, error)
 }

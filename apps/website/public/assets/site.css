@@ -363,7 +363,8 @@ table.data th { color: var(--yh-sub); font-weight: 600; }
 .account-stat b.mono { font-family: var(--mono); font-size: 14px; font-weight: 560; letter-spacing: 0; }
 .account-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .account-actions .btn { margin-top: 8px; }
-#logout { justify-self: start; }
+.account-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--yh-sub); font-size: 14px; }
+.account-foot a { color: var(--yh-ink); }
 @media (max-width: 860px) {
   .auth-layout, .account-grid, .account-actions { grid-template-columns: 1fr; }
   .hero .wrap { align-items: start; }

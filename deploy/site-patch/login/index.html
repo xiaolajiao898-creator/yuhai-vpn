@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B4AA2">
+<title>登录宇海账户</title>
+<meta name="description" content="用你的 USDT（TRC20）地址和密码登录宇海，查看套餐和到期时间，领取 24 小时免费试用或输入兑换码。">
+<meta property="og:title" content="登录宇海账户">
+<meta property="og:description" content="用你的 USDT（TRC20）地址和密码登录宇海。">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml"><link rel="icon" href="/favicon-32x32.png?v=2" type="image/png" sizes="32x32"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" sizes="180x180">
+<meta name="yuhai-api" content="https://api.yhvpn.io"><link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+<style>
+.reg-layout{display:grid;grid-template-columns:minmax(0,560px) minmax(0,1fr);gap:24px;align-items:start}
+@media (max-width:860px){.reg-layout{grid-template-columns:1fr}}
+.reg-card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:clamp(22px,3vw,32px);display:grid;gap:16px}
+.reg-card .field input{width:100%;height:48px;border:1px solid var(--line);border-radius:10px;padding:0 14px;font:16px/1.4 var(--sans);color:var(--ink);background:#fff}
+.reg-card .field input.mono{font-family:var(--mono);letter-spacing:.02em}
+.reg-card .hint,.pow{margin:0;color:var(--muted);font-size:13px}
+.reg-card .btn{width:100%}
+.reg-card .btn:disabled{opacity:.6;cursor:default}
+.form-error{margin:0;color:#9b2c2c;font-size:14px}
+.hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+.done-address{font-family:var(--mono);font-size:15px;word-break:break-all;color:var(--ink)}
+.login-dl{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:520px){.login-dl{grid-template-columns:1fr}}
+.login-dl .btn{height:56px;font-size:17px}
+.reg-card h2{margin:0;font-size:20px}
+.reg-card .sub{margin:-8px 0 0;color:var(--muted);font-size:14px}
+.or-line{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:13px}
+.or-line::before,.or-line::after{content:"";flex:1;height:1px;background:var(--line)}
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="/" aria-label="宇海 首页"><svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#bbef68"/><g fill="none" stroke="#14201c" stroke-width="4" stroke-linecap="round"><path d="M13 22q9-8 19 0t19 0M13 32q9-8 19 0t19 0M13 42q9-8 19 0t19 0"/></g></svg><span class="brand-name">宇海</span><span class="brand-latin">Yuhai</span></a><nav class="nav-links" aria-label="主导航"><a class="hide-sm" href="/#features">产品优势</a><a class="hide-sm" href="/#account">账户与安全</a><a class="hide-sm" href="/#faq">常见问题</a><a class="btn btn-outline btn-sm" href="/login/" aria-current="page" style="color:var(--ink);background:#fff">登录</a><a class="btn btn-outline btn-sm" href="/register/" style="color:var(--ink);background:#fff">注册</a><a class="btn btn-primary btn-sm" href="/download/">下载</a></nav></div></header>
+<main>
+<section class="page-head"><div class="wrap"><span class="kicker">登录</span><h1>登录宇海账户</h1><p>用注册时的 USDT（TRC20）地址和密码登录。登录后可以查看套餐和到期时间，领取 24 小时免费试用，或输入兑换码开通。</p></div></section>
+<section class="section"><div class="wrap reg-layout">
+<form class="reg-card auth-form" data-login-form method="post" action="/login/" novalidate><div class="field"><label for="page-address">USDT 地址（TRC20）</label><input class="mono" id="page-address" name="address" type="text" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" placeholder="T 开头，共 34 位" required></div><div class="field"><label for="page-password">密码</label><input id="page-password" name="password" type="password" autocomplete="current-password" maxlength="128" placeholder="注册时自己设置的密码" required></div><p class="form-error" data-login-error hidden></p><p class="pow" data-login-pow>提交时自动完成人机验证，大约一两秒，不使用第三方验证码。</p><button class="btn btn-primary" type="submit" data-login-submit>登录</button><p class="or-line">新用户</p><a class="btn btn-outline" href="/register/">还没有账户？去注册</a><p class="hint" style="text-align:center">也可以在<a href="/download/">安卓或 Windows 客户端</a>里用同样的地址和密码登录。</p></form>
+<aside class="box-card"><h3>忘记密码？</h3><p>密码不能在网页上重设。在 App 登录页点「忘记密码」，从注册地址向 App 显示的官方地址转一笔约 1 TRX（金额带小数，请照抄）。链上确认后即可重设密码。</p><p>账号就是你的 USDT 地址，只有掌握这个地址的人才能完成验证，别人没法冒用你的账号。</p><p class="note">网页登录只保存在这个浏览器里，12 小时后自动退出。公用电脑用完请点「退出登录」。</p></aside>
+</div></section>
+</main>
+<footer class="footer"><div class="wrap"><a class="brand" href="/" aria-label="宇海 首页"><svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#bbef68"/><g fill="none" stroke="#14201c" stroke-width="4" stroke-linecap="round"><path d="M13 22q9-8 19 0t19 0M13 32q9-8 19 0t19 0M13 42q9-8 19 0t19 0"/></g></svg><span class="brand-name">宇海</span></a><nav aria-label="页脚导航"><a href="/login/">登录</a><a href="/register/">注册</a><a href="/download/">下载</a><a href="/#account">账户与安全</a><a href="/#faq">常见问题</a></nav><span>© 2026 宇海 · 官方网站仅 yhvpn.io</span></div></footer>
+<script src="/assets/web-login.js" defer></script>
+</body>
+</html>

@@ -2,6 +2,7 @@
 import Base from '../../layouts/Base.astro';
 ---
 <Base title="我的账户 · 宇海VPN" description="查看宇海VPN 账户、当前套餐、到期时间和设备数。可以领取 24 小时免费试用或输入兑换码。">
+  <meta slot="head" name="robots" content="noindex" />
   <meta slot="head" name="yuhai-api" content="https://api.yhvpn.io" />
   <section class="page-head">
     <div class="wrap">
@@ -59,7 +60,10 @@ import Base from '../../layouts/Base.astro';
             </form>
           </article>
         </div>
-        <button class="btn btn-outline" id="logout" type="button">退出登录</button>
+        <div class="account-foot">
+          <span>连接请使用<a href="/download/">安卓或 Windows 客户端</a>，用同样的地址和密码登录。</span>
+          <button class="btn btn-outline btn-sm" id="logout" type="button">退出登录</button>
+        </div>
       </div>
     </div>
   </section>

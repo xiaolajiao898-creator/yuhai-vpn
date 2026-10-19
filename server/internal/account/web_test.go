@@ -141,7 +141,7 @@ func TestDeployedRegisterPageIsSelfContained(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bytes.Contains(html, js) || !bytes.Contains(html, []byte(`<script src="/register/register.js"></script>`)) {
+	if bytes.Contains(html, js) || !bytes.Contains(html, []byte(`src="/register/register.js"`)) {
 		t.Fatal("register/index.html must load register.js as an external script")
 	}
 	for _, needle := range []string{

@@ -203,6 +203,18 @@ type AdminPlanMutation struct {
 	CreatedAt   time.Time
 }
 
+type AdminRedeemMutation struct {
+	AdminUserID int64
+	OperationID pgtype.UUID
+	ActionCode  string
+	RequestHash string
+	TargetID    int64
+	SessionID   int64
+	ProofHash   string
+	Response    []byte
+	CreatedAt   time.Time
+}
+
 type AdminRiskMutation struct {
 	AdminUserID int64
 	OperationID pgtype.UUID
@@ -726,6 +738,47 @@ type ReceiveAddress struct {
 	UpdatedAt  time.Time
 }
 
+type RedeemBatch struct {
+	ID        int64
+	CardType  string
+	Quantity  int32
+	Note      pgtype.Text
+	CodesEnc  []byte
+	CreatedBy int64
+	CreatedAt time.Time
+}
+
+type RedeemCardType struct {
+	Code         string
+	Name         string
+	DurationDays int32
+	Tier         int16
+	DeviceLimit  int32
+	TrafficBytes pgtype.Int8
+	Enabled      bool
+	CreatedAt    time.Time
+}
+
+type RedeemCode struct {
+	ID           int64
+	CodeHash     string
+	CodeHint     string
+	BatchID      int64
+	CardType     string
+	DurationDays int32
+	Tier         int16
+	DeviceLimit  int32
+	TrafficBytes pgtype.Int8
+	Note         pgtype.Text
+	CreatedBy    int64
+	CreatedAt    time.Time
+	Status       string
+	RedeemedBy   pgtype.Int8
+	RedeemedAt   *time.Time
+	RevokedBy    pgtype.Int8
+	RevokedAt    *time.Time
+}
+
 type SharedPayAddress struct {
 	Address      string
 	Note         pgtype.Text
@@ -815,6 +868,15 @@ type TrafficReport struct {
 	TotalUp     int64
 	TotalDown   int64
 	ReceivedAt  time.Time
+}
+
+type TrialGrant struct {
+	UserID          int64
+	DeviceID        pgtype.Int8
+	InstallID       pgtype.UUID
+	FingerprintHash pgtype.Text
+	GrantedAt       time.Time
+	ExpireAt        time.Time
 }
 
 type User struct {
