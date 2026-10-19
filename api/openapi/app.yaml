@@ -612,6 +612,11 @@ paths:
       security: []
       summary: 网页查询订单的 CORS 预检
       description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema: { type: string }
       responses:
         '204': { description: 允许的来源 }
         '403': { description: 来源或请求头不在允许名单 }
@@ -646,6 +651,11 @@ paths:
       security: []
       summary: 网页取消订单的 CORS 预检
       description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema: { type: string }
       responses:
         '204': { description: 允许的来源 }
         '403': { description: 来源或请求头不在允许名单 }

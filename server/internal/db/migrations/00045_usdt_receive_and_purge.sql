@@ -33,6 +33,8 @@ INSERT INTO admin_role_permissions(role_id,permission_code)
 -- ip_hash_purge 要把 30 天前的设备绑定日志里的 ip_hash 置空。
 -- 这张表是只追加的：00039 收回了整表 UPDATE，触发器也会拒绝任何修改，
 -- 于是这个任务每小时报一次权限错误。只放行「把 ip_hash 置为 NULL」这一件事。
+-- goose 会按分号切语句，函数体必须整段执行。
+-- +goose StatementBegin
 CREATE OR REPLACE FUNCTION redact_bind_log_ip() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE
@@ -52,6 +54,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+-- +goose StatementEnd
 
 DROP TRIGGER IF EXISTS trg_device_bind_logs_append_only ON device_bind_logs;
 CREATE TRIGGER trg_device_bind_logs_append_only
