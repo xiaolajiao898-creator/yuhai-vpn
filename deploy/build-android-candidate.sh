@@ -1,6 +1,6 @@
 #!/bin/bash
 # 宇海VPN 安卓「多协议候选版」一键构建与自检（在你的 Mac 上运行，可重复执行）
-# - 独立包名 com.yuhai.yuhai_vpn.candidate、名称「宇海多协议测试版」，和正式版并存，不覆盖正式版
+# - 独立包名 com.yuhai.yuhai_vpn.candidate、名称「宇海VPN」，和正式版并存，不覆盖正式版
 # - 用与正式版相同的签名钥匙；连接正式后台 https://api.yhvpn.io（后台未升级前只会显示 WireGuard 线路）
 # - 构建前先跑：Flutter 静态检查 + Flutter 测试 + 安卓原生单元测试；任何一项失败就停止
 set -euo pipefail
