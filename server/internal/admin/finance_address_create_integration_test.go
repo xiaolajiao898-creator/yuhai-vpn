@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -55,11 +56,20 @@ func TestCreateReceiveAddressIsSingleAdminAndStoresNoKeyIntegration(t *testing.T
 		t.Fatalf("signature=%v key=%v status=%s id=%s", sig, key, status, out.ID)
 	}
 	var audits int
-	if err := f.owner.QueryRow(f.ctx, `SELECT count(*) FROM admin_audit_logs WHERE action_code='finance.address_create' AND target_id=$1`, id).Scan(&audits); err != nil {
+	var after string
+	if err := f.owner.QueryRow(f.ctx, `SELECT count(*), COALESCE(max(after_data::text),'') FROM admin_audit_logs WHERE action_code='finance.address_create' AND target_id=$1`, id).Scan(&audits, &after); err != nil {
 		t.Fatal(err)
 	}
 	if audits != 1 {
 		t.Fatalf("audits=%d", audits)
+	}
+	if !strings.Contains(after, `"status":"PAUSED"`) || !strings.Contains(after, `"target_type":"receive_address"`) {
+		t.Fatalf("audit snapshot %s", after)
+	}
+	for _, forbidden := range []string{`"address"`, `"network"`, tron.OfficialUSDT} {
+		if strings.Contains(after, forbidden) {
+			t.Fatalf("audit snapshot leaked %s: %s", forbidden, after)
+		}
 	}
 
 	again := in

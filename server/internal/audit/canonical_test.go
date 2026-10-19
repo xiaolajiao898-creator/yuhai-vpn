@@ -50,6 +50,7 @@ func TestSnapshotRejectsSensitiveAmbiguousAndUnboundedInput(t *testing.T) {
 		`{"status":{"name":"hidden"}}`, `{"status":["x"]}`, `[]`, `{"status":true}`, `{"enabled":"true"}`,
 		`{"name":"\ud800"}`, `{"name":"\udc00"}`, `{"name":"\ud800\ud800"}`, `{"name":"\u0000"}`,
 		`{"name":"Bearer secret-value"}`, `{"decision_note":"private_key=secret-value"}`, `{"payload":"raw request"}`,
+		`{"address":"TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"}`, `{"network":"TRON"}`,
 		`{"status":"DRAFT"} {}`, `{"status":"DRAFT",}`, "{\"name\":\"\xff\"}",
 		`{"decision_note":"` + strings.Repeat("字", 501) + `"}`, strings.Repeat(" ", maxSnapshotBytes) + "null",
 	}

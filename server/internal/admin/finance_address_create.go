@@ -101,9 +101,11 @@ func (s *FinanceAddressService) CreateReceiveAddress(ctx context.Context, p Appr
 			if entry.Status != "PAUSED" {
 				return 0, nil, nil, nil, httpx.Internal
 			}
+			// 审计快照只接受白名单里的短字段。地址原文不进快照（见 audit.snapshotFields），
+			// 这一行用 target_id 指回 receive_addresses。请求哈希已经绑住提交的地址。
 			after, _ := json.Marshal(map[string]any{
 				"target_id": entry.ID, "target_type": "receive_address",
-				"network": entry.Network, "address": entry.Address, "status": entry.Status,
+				"status":        entry.Status,
 				"decision_note": in.Reason,
 			})
 			return id, entry, nil, after, nil
