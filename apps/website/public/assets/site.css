@@ -364,9 +364,24 @@ table.data th { color: var(--yh-sub); font-weight: 600; }
 .account-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .account-actions .btn { margin-top: 8px; }
 .account-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; color: var(--yh-sub); font-size: 14px; }
+.buy-card { display: grid; gap: 14px; }
+.buy-card h3 { margin: 0; }
+.buy-card > p { margin: 0; color: var(--yh-sub); }
+.plan-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.buy-plan { border: 1px solid var(--yh-line); border-radius: 18px; padding: 16px; display: grid; gap: 8px; background: var(--yh-soft); }
+.buy-plan strong { font-size: 18px; letter-spacing: -.02em; }
+.buy-plan b { font-variant-numeric: tabular-nums; font-size: 22px; }
+.pay-kicker { margin: 0; color: var(--yh-sub); font-size: 13px; font-weight: 650; }
+.pay-amount { margin: 0; font-size: clamp(32px, 5vw, 44px); letter-spacing: -.04em; font-variant-numeric: tabular-nums; color: var(--yh-ink); }
+.pay-note, #pay-countdown, #pay-status { margin: 0; color: var(--yh-sub); }
+.pay-address { margin: 0; word-break: break-all; font-size: 14px; }
+.pay-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.pay-qr { display: grid; grid-template-columns: repeat(var(--n), 1fr); width: 196px; height: 196px; padding: 10px; background: #f4f7f2; border-radius: 16px; }
+.pay-qr i { display: block; }
+.pay-qr i.on { background: #14201c; }
 .account-foot a { color: var(--yh-ink); }
 @media (max-width: 860px) {
-  .auth-layout, .account-grid, .account-actions { grid-template-columns: 1fr; }
+  .auth-layout, .account-grid, .account-actions, .plan-list { grid-template-columns: 1fr; }
   .hero .wrap { align-items: start; }
 }
 @media (prefers-color-scheme: dark) {

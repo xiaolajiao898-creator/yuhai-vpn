@@ -55,6 +55,14 @@ void main() {
     expect(find.text('新用户免费试用 24 小时'), findsOneWidget);
     expect(find.text('月卡'), findsOneWidget);
     expect(find.text('30 天 · 不限流量 · 3 台设备'), findsOneWidget);
+    await tester.pumpWidget(plansApp([
+      ..._newUserTrial(),
+      plansProvider.overrideWith((ref) async => const [
+            PlanItem(code: 'Q', name: 'L1 九十天', type: 'TIME', tier: 1, listPrice: '16', durationDays: 90, deviceLimit: 3),
+          ]),
+    ]));
+    await tester.pumpAndSettle();
+    expect(find.text('季卡 · 90 天 · 不限流量 · 3 台设备'), findsOneWidget);
     expect(find.textContaining('9.9'), findsOneWidget);
     expect(find.textContaining('不自动续费'), findsOneWidget);
     expect(find.text('回首页领取'), findsNothing);

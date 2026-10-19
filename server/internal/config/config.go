@@ -38,7 +38,7 @@ type Config struct {
 	JWTKeyID       string
 	FieldEncKey    []byte // 字段信封加密数据密钥（开发环境直接给；生产由 KMS 解封）
 	FieldEncKeyID  string
-	FundAddrPubKey string // 资金系统收款地址签名公钥（Base64）
+	FundAddrPubKey string // 可选。只用于校验旧的资金密钥签名；新收款地址由管理员审批，不需要这把公钥
 	FundAddrKeyID  string
 	TronGridAPIKey string
 	// 忘记密码时用户转 TRX 的官方收款地址（只收不付，不需要私钥）。为空则找回功能关闭。
@@ -160,6 +160,9 @@ func (c Config) validate() error {
 	if c.PasswordResetPayTo != "" && !tron.ValidAddress(c.PasswordResetPayTo) {
 		errs = append(errs, errors.New("PASSWORD_RESET_PAY_TO 不是有效的 TRON 地址"))
 	}
+	if c.USDTContract != tron.OfficialUSDT {
+		errs = append(errs, errors.New("USDT_TRC20_CONTRACT 只能是 TRON 官方 USDT（TRC20）合约"))
+	}
 	if c.IsProduction() {
 		// 铁律：生产环境出现开发开关直接拒绝启动
 		if c.DevToolsEnabled {
@@ -168,10 +171,10 @@ func (c Config) validate() error {
 		if c.InviteRewardsEnabled {
 			errs = append(errs, errors.New("生产环境必须显式关闭 INVITE_REWARDS_ENABLED，待完整验收后再单独启用"))
 		}
-		if c.FundAddrPubKey == "" {
-			errs = append(errs, errors.New("生产环境必须配置 FUND_ADDRESS_PUBKEY_B64"))
-		} else if key, err := base64.StdEncoding.Strict().DecodeString(c.FundAddrPubKey); err != nil || len(key) != 32 || allSame(key) {
-			errs = append(errs, errors.New("生产环境资金地址公钥格式无效"))
+		if c.FundAddrPubKey != "" {
+			if key, err := base64.StdEncoding.Strict().DecodeString(c.FundAddrPubKey); err != nil || len(key) != 32 || allSame(key) {
+				errs = append(errs, errors.New("生产环境资金地址公钥格式无效"))
+			}
 		}
 		if allSame(c.SecretPepper) || allSame(c.JWTSeed) || allSame(c.FieldEncKey) {
 			errs = append(errs, errors.New("生产环境检测到示例密钥，拒绝启动"))
@@ -179,7 +182,7 @@ func (c Config) validate() error {
 		if bytes.Equal(c.SecretPepper, c.JWTSeed) || bytes.Equal(c.JWTSeed, c.FieldEncKey) || bytes.Equal(c.FieldEncKey, c.SecretPepper) {
 			errs = append(errs, errors.New("生产环境认证与加密密钥必须独立"))
 		}
-		for name, id := range map[string]string{"JWT_KEY_ID": c.JWTKeyID, "FIELD_ENC_KEY_ID": c.FieldEncKeyID, "FUND_ADDRESS_KEY_ID": c.FundAddrKeyID} {
+		for name, id := range map[string]string{"JWT_KEY_ID": c.JWTKeyID, "FIELD_ENC_KEY_ID": c.FieldEncKeyID} {
 			if strings.TrimSpace(id) != id || id == "" || strings.Contains(strings.ToLower(id), "dev") {
 				errs = append(errs, fmt.Errorf("生产环境必须显式设置正式 %s", name))
 			}

@@ -75,6 +75,8 @@ func TestWebCORSAllowlist(t *testing.T) {
 	allowedPaths := []string{
 		"/v1/auth/web/challenge", "/v1/auth/web/register", "/v1/auth/web/login",
 		"/v1/auth/web/logout", "/v1/auth/web/account", "/v1/auth/web/trial", "/v1/auth/web/redeem",
+		"/v1/auth/web/plans", "/v1/auth/web/quotes", "/v1/auth/web/orders",
+		"/v1/auth/web/orders/YH202610190001", "/v1/auth/web/orders/YH202610190001/cancel",
 	}
 	for _, path := range allowedPaths {
 		w := webDo(r, http.MethodOptions, path, "203.0.113.10", webRegisterOrigin, nil, "content-type")

@@ -1,14 +1,14 @@
 ---
 import Base from '../../layouts/Base.astro';
 ---
-<Base title="我的账户 · 宇海VPN" description="查看宇海VPN 账户、当前套餐、到期时间和设备数。可以领取 24 小时免费试用或输入兑换码。">
+  <Base title="我的账户 · 宇海VPN" description="查看宇海VPN 账户、当前套餐和到期时间。可以领取试用、输入兑换码，或用 USDT 购买月卡、季卡和年卡。">
   <meta slot="head" name="robots" content="noindex" />
   <meta slot="head" name="yuhai-api" content="https://api.yhvpn.io" />
   <section class="page-head">
     <div class="wrap">
       <span class="kicker">用户中心</span>
       <h1>我的账户</h1>
-      <p>查看套餐和设备。新账户可以领取 24 小时免费试用，有兑换码也可以在这里开通。</p>
+      <p>查看套餐和设备。可以领取试用、输入兑换码，或用 USDT 购买在售套餐。</p>
     </div>
   </section>
   <section class="section">
@@ -48,7 +48,7 @@ import Base from '../../layouts/Base.astro';
           </article>
           <article class="box-card">
             <h3>兑换码开通</h3>
-            <p>输入兑换码后按卡面天数开通。价格即将公布，这里不显示金额。</p>
+            <p>输入兑换码后按卡面天数开通。</p>
             <form id="redeem-form" method="post" action="/account/" novalidate>
               <div class="field">
                 <label for="redeem-code">兑换码</label>
@@ -60,6 +60,27 @@ import Base from '../../layouts/Base.astro';
             </form>
           </article>
         </div>
+        <article class="box-card buy-card" id="buy-card">
+          <h3>购买套餐</h3>
+          <p>使用 TRON 网络的 USDT（TRC20）。到账数量必须和下面的金额完全一致，两位尾数用来认出是你的付款。</p>
+          <div id="plan-list" class="plan-list"></div>
+          <p class="form-error" id="buy-error" hidden></p>
+          <div id="pay-panel" hidden>
+            <p class="pay-kicker">到账数量必须等于</p>
+            <p class="pay-amount" id="pay-amount"></p>
+            <p class="pay-note">请勿四舍五入。从交易所提币时，到账数量要等于这个数，手续费另计。转错网络无法找回。</p>
+            <div id="pay-qr"></div>
+            <p class="mono pay-address" id="pay-address"></p>
+            <p id="pay-countdown"></p>
+            <p id="pay-status"></p>
+            <p class="form-ok" id="pay-ok" hidden></p>
+            <div class="pay-actions">
+              <button class="btn btn-primary" id="pay-copy-amount" type="button">复制金额</button>
+              <button class="btn btn-outline" id="pay-copy-address" type="button">复制地址</button>
+              <button class="btn btn-outline" id="pay-cancel" type="button">取消订单</button>
+            </div>
+          </div>
+        </article>
         <div class="account-foot">
           <span>连接请使用<a href="/download/">安卓或 Windows 客户端</a>，用同样的地址和密码登录。</span>
           <button class="btn btn-outline btn-sm" id="logout" type="button">退出登录</button>

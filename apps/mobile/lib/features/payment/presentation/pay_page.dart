@@ -13,7 +13,8 @@ import '../../home/data/me_api.dart';
 import '../data/orders_api.dart';
 
 /// P09 USDT 支付页（方案 9.9）：
-/// - 展示地址前用内置公钥校验 address_proof，失败不展示
+/// - 旧地址带 address_proof 时用内置公钥校验，失败不展示
+/// - 管理员审批的地址没有证明，直接展示
 /// - 二维码只编码地址；金额由用户手动核对，尾数用星辉色突出
 /// - 倒计时以 server_time 校准；每 3 秒轮询（If-None-Match），终态停止
 class PayPage extends ConsumerStatefulWidget {
@@ -29,6 +30,7 @@ class _PayPageState extends ConsumerState<PayPage> {
   OrderView? _order;
   String? _etag;
   bool? _proofOk;
+  bool _signed = false;
   Timer? _poll, _tick;
   Duration _clockOffset = Duration.zero;
   String? _error;
@@ -45,13 +47,19 @@ class _PayPageState extends ConsumerState<PayPage> {
   Future<void> _apply(OrderView o) async {
     _clockOffset = o.serverTime.difference(DateTime.now().toUtc());
     final proof = o.addressProof;
-    final ok = proof != null && o.receiveAddress != null && o.network != null
-        ? await proof.verify(network: o.network!, address: o.receiveAddress!, pubKeys: fundAddressPubKeys)
-        : false;
+    var ok = false;
+    var signed = false;
+    if (o.receiveAddress != null && proof == null) {
+      ok = true;
+    } else if (proof != null && o.receiveAddress != null && o.network != null) {
+      ok = await proof.verify(network: o.network!, address: o.receiveAddress!, pubKeys: fundAddressPubKeys);
+      signed = ok;
+    }
     if (!mounted) return;
     setState(() {
       _order = o;
       _proofOk = ok;
+      _signed = signed;
     });
     if (o.isFinal) {
       _poll?.cancel();
@@ -142,7 +150,7 @@ class _PayPageState extends ConsumerState<PayPage> {
             Row(children: [
               Text('收款地址 · ${o.network == 'MOCK' ? '模拟网络' : 'TRON（TRC20）'}', style: text.labelSmall),
               const Spacer(),
-              if (_proofOk == true) const Icon(Icons.verified, color: YhColors.glow, size: 16),
+              if (_signed) const Icon(Icons.verified, color: YhColors.glow, size: 16),
             ]),
             const SizedBox(height: YhSpace.unit),
             if (_proofOk == true && o.receiveAddress != null) ...[
@@ -186,18 +194,21 @@ class _PayPageState extends ConsumerState<PayPage> {
   }
 }
 
-/// "167.604300" → ("167.60", "43")：尾数为小数点后第 3–4 位（方案 6.2）。
+/// "6.010000" → ("6", ".01")：突出 0.01 步进的尾数。
 (String, String) _splitTail(String amount) {
   final t = _trimAmount(amount);
   final dot = t.indexOf('.');
-  if (dot < 0 || t.length - dot - 1 <= 2) return (t, '');
-  return (t.substring(0, dot + 3), t.substring(dot + 3));
+  if (dot < 0) return (t, '');
+  var frac = t.substring(dot + 1);
+  if (frac.length < 2) frac = frac.padRight(2, '0');
+  return (t.substring(0, dot), '.${frac.substring(0, 2)}');
 }
 
 String _trimAmount(String amount) {
   var s = amount;
   if (s.contains('.')) s = s.replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
-  if (s.contains('.') && s.length - s.indexOf('.') - 1 < 4) s = s.padRight(s.indexOf('.') + 5, '0');
+  if (!s.contains('.')) return '$s.00';
+  if (s.length - s.indexOf('.') - 1 < 2) s = s.padRight(s.indexOf('.') + 3, '0');
   return s;
 }
 

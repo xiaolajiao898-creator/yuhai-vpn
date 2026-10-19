@@ -129,7 +129,7 @@ func TestProductionRequiresIndependentKeysAndFormalIdentifiers(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct{ key, value string }{
-		{"JWT_KEY_ID", "jwt-dev-1"}, {"FIELD_ENC_KEY_ID", ""}, {"FUND_ADDRESS_KEY_ID", "fund-dev-1"},
+		{"JWT_KEY_ID", "jwt-dev-1"}, {"FIELD_ENC_KEY_ID", ""},
 		{"JWT_ED25519_SEED_HEX", os.Getenv("SECRET_PEPPER_HEX")},
 		{"FIELD_ENC_KEY_HEX", os.Getenv("JWT_ED25519_SEED_HEX")},
 		{"FUND_ADDRESS_PUBKEY_B64", "not-a-public-key"},
@@ -140,5 +140,28 @@ func TestProductionRequiresIndependentKeysAndFormalIdentifiers(t *testing.T) {
 				t.Fatal("unsafe production configuration accepted")
 			}
 		})
+	}
+}
+
+func TestProductionAllowsReceiveAddressesWithoutFundsKey(t *testing.T) {
+	testConfigEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("SECRET_PEPPER_HEX", "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+	t.Setenv("JWT_ED25519_SEED_HEX", "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+	t.Setenv("FIELD_ENC_KEY_HEX", "02030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021")
+	t.Setenv("JWT_KEY_ID", "jwt-prod-2026")
+	t.Setenv("FIELD_ENC_KEY_ID", "fek-prod-2026")
+	t.Setenv("FUND_ADDRESS_PUBKEY_B64", "")
+	t.Setenv("FUND_ADDRESS_KEY_ID", "fund-dev-1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FundAddrPubKey != "" || cfg.USDTContract != "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" {
+		t.Fatalf("pubkey=%q contract=%s", cfg.FundAddrPubKey, cfg.USDTContract)
+	}
+	t.Setenv("USDT_TRC20_CONTRACT", "TR7NHqjeKQxGTCi8q8ZY4pxL8otSzgjLj6t")
+	if _, err := Load(); err == nil {
+		t.Fatal("non-official USDT contract accepted")
 	}
 }

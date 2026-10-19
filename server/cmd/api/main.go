@@ -121,9 +121,11 @@ func buildRouter(d routerDeps) *gin.Engine {
 	v1.GET("/bootstrap", notImplemented)
 	trialSvc := &trial.Service{Pool: d.Pool, Clock: d.Clock}
 	redeemSvc := &redeem.Service{Pool: d.Pool, Clock: d.Clock}
-	(&account.Handler{Svc: d.Account, MW: d.MW, Trials: trialSvc, Redeems: redeemSvc}).Mount(v1)
-	(&plan.Handler{Svc: &plan.Service{Pool: d.Pool, Clock: d.Clock}, MW: d.MW}).Mount(v1)
-	(&order.Handler{Svc: &order.Service{Pool: d.Pool, Clock: d.Clock, Production: d.Config.IsProduction()}, MW: d.MW}).Mount(v1)
+	planSvc := &plan.Service{Pool: d.Pool, Clock: d.Clock}
+	orderSvc := &order.Service{Pool: d.Pool, Clock: d.Clock, Production: d.Config.IsProduction()}
+	(&account.Handler{Svc: d.Account, MW: d.MW, Trials: trialSvc, Redeems: redeemSvc, Plans: planSvc, Orders: orderSvc}).Mount(v1)
+	(&plan.Handler{Svc: planSvc, MW: d.MW}).Mount(v1)
+	(&order.Handler{Svc: orderSvc, MW: d.MW}).Mount(v1)
 	(&node.Handler{Svc: &node.ListService{Pool: d.Pool, Clock: d.Clock}, MW: d.MW}).Mount(v1)
 	appInviteHandler(d.Pool, d.Clock, d.MW, d.Config.InviteRewardsEnabled, d.InviteBaseURL).Mount(v1)
 	(&traffic.Handler{Svc: &traffic.Service{Pool: d.Pool, Clock: d.Clock}, MW: d.MW}).Mount(v1)

@@ -631,13 +631,23 @@ export interface paths {
         };
         /**
          * 收款地址列表（只读，无查询参数）
-         * @description **不返回地址签名本身**。签名是发给客户端验证地址归属的材料；运维核对只需要知道
-         *     「用的是哪个签名密钥、是否还在有效期内」，把签名原文放进后台列表没有用处，
-         *     只是多一个可泄露面。最多 500 条。
+         * @description **不返回地址签名本身**。旧地址可能带签名密钥编号；管理员登记的地址没有资金密钥，
+         *     sig_key_id 为空字符串。最多 500 条。
          */
         get: operations["listReceiveAddresses"];
         put?: never;
-        post?: never;
+        /**
+         * 管理员登记收款地址（不保存私钥）
+         * @description 需要 finance.address_create（L2）；二次验证 action_code=finance.address_create，
+         *     operation_id 幂等，审计日志记下是谁登记的。
+         *
+         *     收款地址只收 USDT。请求体里没有私钥字段，服务端也不接受未知字段。
+         *     signature 与 sig_key_id 写入空值。新地址一律是 PAUSED，要再调用
+         *     POST /receive-addresses/{id}/status 才会分配给新订单。
+         *
+         *     未填写 valid_until 时默认十年。重复地址返回 40901。
+         */
+        post: operations["createReceiveAddress"];
         delete?: never;
         options?: never;
         head?: never;
@@ -702,7 +712,7 @@ export interface paths {
          *
          *     两处拦截：
          *
-         *     - **启用一个签名有效期已过的地址返回 40001**：pickAddress 会立刻跳过它，
+         *     - **启用一个有效期已过的地址返回 40001**：pickAddress 会立刻跳过它，
          *       启用成功只是个假象。
          *     - **停用后一个可用地址返回 40901**，除非请求里带 `confirm_last_address: true`。
          *       没有可用地址时下单直接返回 50301「支付通道暂不可用」；全站停收款是正当操作，
@@ -3560,6 +3570,53 @@ export interface operations {
                         }[];
                         /** Format: date-time */
                         observed_at: string;
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    createReceiveAddress: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description L2/L3 操作必需；由 POST /step-up 签发，绑定 action_code 与 payload_hash */
+                "X-Step-Up-Token": components["parameters"]["StepUp"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Format: uuid */
+                    operation_id: string;
+                    reason: string;
+                    /** @enum {string} */
+                    network: "TRON" | "MOCK";
+                    address: string;
+                    label?: string;
+                    /** Format: date-time */
+                    valid_until?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 已登记为暂停；Cache-Control no-store */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        id: string;
+                        network: string;
+                        address: string;
+                        label: string | null;
+                        /** @enum {string} */
+                        status: "PAUSED";
+                        /** Format: date-time */
+                        valid_until: string;
                     };
                 };
             };

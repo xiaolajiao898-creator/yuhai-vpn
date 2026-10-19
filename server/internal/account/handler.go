@@ -15,6 +15,8 @@ import (
 	"github.com/yuhai-vpn/server/internal/auth"
 	"github.com/yuhai-vpn/server/internal/httpx"
 	"github.com/yuhai-vpn/server/internal/ids"
+	"github.com/yuhai-vpn/server/internal/order"
+	"github.com/yuhai-vpn/server/internal/plan"
 	"github.com/yuhai-vpn/server/internal/redeem"
 	"github.com/yuhai-vpn/server/internal/trial"
 )
@@ -24,6 +26,8 @@ type Handler struct {
 	MW      *auth.Middleware
 	Trials  *trial.Service
 	Redeems *redeem.Service
+	Plans   *plan.Service
+	Orders  *order.Service
 }
 
 // Mount 挂载账户相关路由（方案 11.3）。限流阈值见 11.8。

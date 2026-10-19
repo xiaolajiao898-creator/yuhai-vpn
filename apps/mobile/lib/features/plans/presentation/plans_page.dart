@@ -239,10 +239,16 @@ class _PlanCard extends StatelessWidget {
   final bool recommended;
   final VoidCallback onTap;
 
+  String _span(PlanItem plan) {
+    final days = plan.durationDays;
+    if (days == 90 && !plan.name.contains('季卡')) return '季卡 · 90 天';
+    return '$days 天';
+  }
+
   String get _meta {
     if (plan.type == 'TIME') {
       return [
-        if (plan.durationDays != null) '${plan.durationDays} 天',
+        if (plan.durationDays != null) _span(plan),
         plan.quotaBytes == null ? '不限流量' : '含流量额度',
         if (plan.deviceLimit != null) '${plan.deviceLimit} 台设备',
       ].join(' · ');

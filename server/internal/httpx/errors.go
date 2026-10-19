@@ -61,6 +61,7 @@ const (
 	// 隧道地址池已耗尽：运维需扩容地址池，不是客户端可以重试解决的问题。
 	// 方案 11.7 的错误码表需同步补这一行。
 	ErrWGAddressExhausted Code = 50304
+	ErrPayQueueFull       Code = 50305 // 同一地址 99 个 0.01 尾数都已被未支付订单占用
 )
 
 // Error 是可直接写回响应的业务错误。Message 为默认中文文案，网关按 Accept-Language 替换。
@@ -96,7 +97,7 @@ var Internal = NewError(ErrInternal, "服务器内部错误")
 // Sanity check：错误码前三位必须是合法 HTTP 状态码
 func init() {
 	for _, c := range []Code{ErrBadRequest, ErrTokenMissing, ErrInsufficientFunds, ErrNoPlan, ErrNotFound,
-		ErrConflict, ErrQuoteExpired, ErrSelfInvite, ErrVersionTooLow, ErrRateLimited, ErrInternal, ErrNoAmountSlot,
+		ErrConflict, ErrQuoteExpired, ErrSelfInvite, ErrVersionTooLow, ErrRateLimited, ErrInternal, ErrNoAmountSlot, ErrPayQueueFull,
 		ErrWGAddressExhausted} {
 		if http.StatusText(c.HTTPStatus()) == "" {
 			panic(fmt.Sprintf("非法错误码 %d", c))

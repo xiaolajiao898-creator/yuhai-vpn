@@ -4,11 +4,13 @@ package order
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"strconv"
 	"time"
 
@@ -31,8 +33,7 @@ const (
 	OrderTTL        = 30 * time.Minute
 	DefaultCooldown = 2 * time.Hour
 	MaxPending      = 3
-	TailAttempts    = 20
-	TokenContract   = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" // TRON USDT
+	TokenContract   = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" // TRON USDT 官方合约
 	defaultTopupMin = 1 * money.OneUSDT
 	defaultTopupMax = 1000 * money.OneUSDT
 )
@@ -267,15 +268,13 @@ type receiveAddress struct {
 	ID         int64
 	Network    string
 	Address    string
-	Signature  string
-	KeyID      string
 	ValidUntil time.Time
 }
 
 // pickAddress 选择负载最低的启用地址（按当前锁定槽位数升序）。
 func (s *Service) pickAddress(ctx context.Context, tx pgx.Tx) ([]receiveAddress, error) {
 	rows, err := tx.Query(ctx, `
-		SELECT a.id, a.network, a.address, a.signature, a.sig_key_id, a.valid_until
+		SELECT a.id, a.network, a.address, a.valid_until
 		  FROM receive_addresses a
 		 WHERE a.status = 'ACTIVE' AND a.valid_until > now() AND ($1 = false OR a.network = 'TRON')
 		 ORDER BY (SELECT count(*) FROM amount_locks l WHERE l.receive_address_id = a.id AND l.locked_until > now()), a.id`, s.Production)
@@ -286,7 +285,7 @@ func (s *Service) pickAddress(ctx context.Context, tx pgx.Tx) ([]receiveAddress,
 	var out []receiveAddress
 	for rows.Next() {
 		var a receiveAddress
-		if err := rows.Scan(&a.ID, &a.Network, &a.Address, &a.Signature, &a.KeyID, &a.ValidUntil); err != nil {
+		if err := rows.Scan(&a.ID, &a.Network, &a.Address, &a.ValidUntil); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
@@ -297,16 +296,44 @@ func (s *Service) pickAddress(ctx context.Context, tx pgx.Tx) ([]receiveAddress,
 	return out, rows.Err()
 }
 
-// allocateTail 方案 6.2：每地址最多 20 次随机尾数尝试，全部失败换下一地址；所有地址都满返回 50301。
+// allocateTail 为订单分配 0.01–0.99 的尾数。同一地址上未过期的应付金额必须唯一。
+// 99 个尾数都占满时换下一个地址；全部地址都满返回 50305，请用户稍后再试。
 func (s *Service) allocateTail(ctx context.Context, tx pgx.Tx, addrs []receiveAddress, base money.Micro, orderNo string, expires time.Time) (money.Micro, int64, error) {
 	lockedUntil := expires.Add(s.cooldown(ctx))
 	for _, a := range addrs {
-		for i := 0; i < TailAttempts; i++ {
-			tail, err := money.RandomTail()
-			if err != nil {
+		rows, err := tx.Query(ctx, `
+			SELECT amount_micro FROM amount_locks
+			 WHERE receive_address_id = $1 AND locked_until > now()`, a.ID)
+		if err != nil {
+			return 0, 0, err
+		}
+		taken := map[int64]struct{}{}
+		for rows.Next() {
+			var amt int64
+			if err := rows.Scan(&amt); err != nil {
+				rows.Close()
 				return 0, 0, err
 			}
-			amount := base + tail
+			taken[amt] = struct{}{}
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return 0, 0, err
+		}
+		free := make([]int64, 0, money.TailSlots)
+		for slot := int64(1); slot <= money.TailSlots; slot++ {
+			amt := int64(base) + slot*int64(money.TailStep)
+			if _, ok := taken[amt]; !ok {
+				free = append(free, amt)
+			}
+		}
+		if len(free) == 0 {
+			continue
+		}
+		if err := shuffleInt64(free); err != nil {
+			return 0, 0, err
+		}
+		for _, amt := range free {
 			var got string
 			err = tx.QueryRow(ctx, `
 				INSERT INTO amount_locks (receive_address_id, amount_micro, order_no, locked_until)
@@ -314,16 +341,28 @@ func (s *Service) allocateTail(ctx context.Context, tx pgx.Tx, addrs []receiveAd
 				ON CONFLICT (receive_address_id, amount_micro) DO UPDATE
 				   SET order_no = EXCLUDED.order_no, locked_until = EXCLUDED.locked_until
 				 WHERE amount_locks.locked_until < now()
-				RETURNING order_no`, a.ID, int64(amount), orderNo, lockedUntil).Scan(&got)
+				RETURNING order_no`, a.ID, amt, orderNo, lockedUntil).Scan(&got)
 			if err == nil {
-				return amount, a.ID, nil
+				return money.Micro(amt), a.ID, nil
 			}
 			if !errors.Is(err, pgx.ErrNoRows) {
 				return 0, 0, err
 			}
 		}
 	}
-	return 0, 0, httpx.NewError(httpx.ErrNoAmountSlot, "当前下单人数较多，请稍后再试")
+	return 0, 0, httpx.NewError(httpx.ErrPayQueueFull, "99 个付款尾数都在使用中，请稍后再试")
+}
+
+func shuffleInt64(v []int64) error {
+	for i := len(v) - 1; i > 0; i-- {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(i+1)))
+		if err != nil {
+			return err
+		}
+		j := int(n.Int64())
+		v[i], v[j] = v[j], v[i]
+	}
+	return nil
 }
 
 func (s *Service) insertOrder(ctx context.Context, tx pgx.Tx, orderNo string, userID int64, orderType string, planID *int64, quoteID *string, snapshot []byte,
@@ -406,9 +445,13 @@ func (s *Service) loadTx(ctx context.Context, tx pgx.Tx, orderNo string, userID 
 			v.PlanName = d.Plan.Name
 		}
 	}
-	if v.PayMethod == "USDT_TRC20" && address != nil {
+	if v.PayMethod == "USDT_TRC20" && address != nil && network != nil {
 		v.Network, v.Token, v.TokenContract, v.ReceiveAddress = *network, "USDT", TokenContract, *address
-		v.AddressProof = &AddressProof{KeyID: *keyID, ValidUntil: validUntil.Unix(), Signature: *sig}
+		// 管理员审批的地址没有资金密钥签名。没有证明就直接把地址给客户端；
+		// 带了证明的旧地址仍要验签，验不过则不展示。
+		if sig != nil && *sig != "" && keyID != nil && *keyID != "" && validUntil != nil {
+			v.AddressProof = &AddressProof{KeyID: *keyID, ValidUntil: validUntil.Unix(), Signature: *sig}
+		}
 	}
 	if txHash != nil {
 		v.Chain = &Chain{TxHash: *txHash, DetectedAt: *detectedAt, Solidified: solidified != nil && *solidified}

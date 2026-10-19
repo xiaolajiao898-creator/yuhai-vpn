@@ -410,7 +410,7 @@ func (h *Handler) mountWeb(v1 *gin.RouterGroup) {
 	prefix := func(c *gin.Context) string { return ipPrefix(auth.ClientIP(c)) }
 	web := v1.Group("/auth/web", webCORS())
 	// OPTIONS 由 webCORS 直接结束；这里挂上路由，预检才不会落到 404。
-	for _, path := range []string{"/challenge", "/register", "/login", "/logout", "/account", "/trial", "/redeem"} {
+	for _, path := range []string{"/challenge", "/register", "/login", "/logout", "/account", "/trial", "/redeem", "/plans", "/quotes", "/orders", "/orders/:order_no", "/orders/:order_no/cancel"} {
 		web.OPTIONS(path, func(*gin.Context) {})
 	}
 	web.POST("/challenge",
@@ -433,6 +433,7 @@ func (h *Handler) mountWeb(v1 *gin.RouterGroup) {
 		h.MW.RateLimitMessage("redeem_user", 10, time.Hour, true, "尝试太频繁", webUserKey),
 		h.MW.RateLimitMessage("redeem_ip", 30, time.Hour, true, "尝试太频繁", ip),
 		h.webRedeem)
+	h.mountWebPurchase(web, ip)
 }
 
 func (h *Handler) webChallenge(c *gin.Context) {

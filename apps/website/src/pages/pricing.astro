@@ -7,12 +7,12 @@ const slots = [
   { name: '年卡', days: '约 365 天' },
 ];
 ---
-<Base title="价格 · 宇海VPN" description="新用户可免费试用 24 小时。付费套餐的 USDT 价格在 App 里显示，官网不刊登尚未公布的金额。">
+  <Base title="价格 · 宇海VPN" description="新用户可免费试用 24 小时。月卡、季卡和年卡的 USDT 价格在用户中心按当前在售套餐显示。">
   <section class="page-head">
     <div class="wrap">
       <span class="kicker">价格</span>
-      <h1>先试用 24 小时，价格以 App 为准。</h1>
-      <p>具体价格在 App 里。这里不写还没公布的金额，也不换算成人民币或美元。</p>
+      <h1>先试用 24 小时，价格在用户中心。</h1>
+      <p>月卡、季卡和年卡的价格跟着在售套餐走。这里不写死金额，也不换算成人民币或美元。</p>
     </div>
   </section>
 
@@ -29,11 +29,11 @@ const slots = [
           <article class="plan">
             <h3>{slot.name}</h3>
             <p>{slot.days}。名称和天数以 App 里的套餐为准。</p>
-            <p class="price">价格即将公布</p>
+            <p class="price"><a href="/account/">登录后查看价格</a></p>
           </article>
         ))}
       </div>
-      <p style="margin-top: 18px; color: var(--yh-sub);">有兑换码的话，登录后在用户中心输入，也可以在 App 的「设置」或套餐页输入。价格即将公布。</p>
+      <p style="margin-top: 18px; color: var(--yh-sub);">登录后在<a href="/account/">用户中心</a>用 USDT 购买，或输入兑换码。App 的套餐页也可以买。</p>
     </div>
   </section>
 

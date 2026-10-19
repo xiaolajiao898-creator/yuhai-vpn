@@ -19,8 +19,8 @@ import (
 	"github.com/yuhai-vpn/server/internal/nodecontrol"
 	"github.com/yuhai-vpn/server/internal/order"
 	"github.com/yuhai-vpn/server/internal/outbox"
-
 	"github.com/yuhai-vpn/server/internal/safelog"
+	"github.com/yuhai-vpn/server/internal/tron"
 )
 
 // 任务表（间隔见方案 6.4、8.5、7.4、12.3）。每个任务必须可重入。
@@ -31,7 +31,7 @@ type job struct {
 }
 
 var schedule = []job{
-	{"chain_scan", 10 * time.Second, nil},         // 阶段二：TronGrid 增量扫描
+	{"chain_scan", 10 * time.Second, nil},         // TronGrid 扫描官方 USDT TRC20
 	{"deposit_settle", 5 * time.Second, nil},      // 处理 chain_transfers 中未结算记录
 	{"order_expire", 30 * time.Second, nil},       // PENDING 到期 → EXPIRED
 	{"subscription_expire", 1 * time.Minute, nil}, // expire:{user_id}:{unix}
@@ -79,6 +79,7 @@ func main() {
 	)
 	orderSvc := &order.Service{Pool: pool, Clock: clk}
 	depositSvc := &deposit.Service{Pool: pool, Clock: clk, Production: cfg.IsProduction()}
+	tronGrid := deposit.TronSource{Grid: &tron.TronGrid{APIKey: cfg.TronGridAPIKey}}
 	rewardJobs, rewardHandlers, err := wireInviteRewards(cfg.InviteRewardsEnabled, &invite.RewardService{Pool: pool, Clock: clk})
 	if err != nil {
 		slog.Error("邀请奖励任务配置错误，拒绝启动", "err", safelog.Error(err))
@@ -90,6 +91,10 @@ func main() {
 	dispatcher := &outbox.Dispatcher{Pool: pool, Handlers: rewardHandlers}
 	for i := range jobs {
 		switch jobs[i].name {
+		case "chain_scan":
+			jobs[i].run = func(ctx context.Context, now time.Time) error {
+				return depositSvc.ScanUSDT(ctx, tronGrid, now)
+			}
 		case "ip_hash_purge":
 			jobs[i].run = accountJobs.PurgeIPHashes
 		case "order_expire":
