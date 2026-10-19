@@ -44,7 +44,7 @@ done
 echo "==> 3/4 安装候选版（约 30 秒）"
 adb install -r "$APK" >/dev/null || die "安装失败"
 
-echo "==> 4/4 打开宇海多协议测试版"
+echo "==> 4/4 打开宇海VPN"
 adb shell monkey -p "$PKG" -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1 || true
 echo
-echo "✅ 已在模拟器里打开「宇海多协议测试版」。看完直接关掉模拟器窗口即可。"
+echo "✅ 已在模拟器里打开「宇海VPN」。看完直接关掉模拟器窗口即可。"
