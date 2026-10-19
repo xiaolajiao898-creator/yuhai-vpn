@@ -179,6 +179,7 @@ jobs:
           YH_CANDIDATE: multiproto
           YH_ABI: x86_64
           YH_RELEASE_DEBUG_SIGN: "1"
+          YH_VPN_PROBE: "1"
         run: |
           set -euo pipefail
           if [ ! -f "$HOME/.android/debug.keystore" ]; then
@@ -231,3 +232,42 @@ jobs:
         with:
           name: yuhai-candidate-x86_64-release-debugsigned
           path: apps/mobile/build/app/outputs/flutter-apk/app-x86_64-release.apk
+  android-x64-emulator:
+    needs: android-x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/download-artifact@v4
+        with:
+          name: yuhai-candidate-x86_64-release-debugsigned
+          path: emulator-apk
+      - name: 准备日志目录
+        run: mkdir -p emulator-probe/tombstones && echo pending > emulator-probe/logcat.txt && echo pending > emulator-probe/exit-info.txt
+      - name: x86_64 模拟器上探测隧道和会话
+        uses: reactivecircus/android-emulator-runner@v2.34.0
+        env:
+          PROBE_APK: ${{ github.workspace }}/emulator-apk/app-x86_64-release.apk
+          PROBE_OUT: ${{ github.workspace }}/emulator-probe
+        with:
+          api-level: "33"
+          target: google_apis
+          arch: x86_64
+          ram-size: 2048M
+          cores: "2"
+          emulator-boot-timeout: 600
+          script: bash apps/mobile/android/ci/emulator-vpn-probe.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yuhai-emulator-x86_64-logcat
+          path: |
+            emulator-probe/logcat.txt
+            emulator-probe/exit-info.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yuhai-emulator-x86_64-tombstones
+          path: emulator-probe/tombstones/

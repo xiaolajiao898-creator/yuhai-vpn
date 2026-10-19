@@ -12,3 +12,8 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# mobile_scanner 自带的规则只保留 com.google.mlkit.*，不含子包。
+# R8 会删掉这些 Registrar 的无参构造，启动时反射就报 NoSuchMethodException。
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**

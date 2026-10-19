@@ -14,6 +14,14 @@
             <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
         </service>
         <!-- 出口（Xray 内核）隧道：只由本应用启动，系统以 BIND_VPN_SERVICE 绑定。 -->
+        <!-- 不导出。只有 YH_VPN_PROBE=1 的测试包启用，用来在模拟器里启动本地黑洞隧道。 -->
+        <activity
+            android:name=".VpnProbeActivity"
+            android:enabled="${vpnProbeEnabled}"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
         <service android:name=".XrayVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE" android:exported="false">
             <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
