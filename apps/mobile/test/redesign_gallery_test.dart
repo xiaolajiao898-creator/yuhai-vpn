@@ -23,12 +23,16 @@ import 'package:yuhai_vpn/features/settings/presentation/settings_page.dart';
 import 'package:yuhai_vpn/platform/vpn/unavailable_vpn_engine.dart';
 import 'package:yuhai_vpn/platform/vpn/vpn_engine.dart';
 
+import 'screenshot_fonts.dart';
+
 /// 只在本地截图时写出 PNG。CI 不设置 YH_SCREENSHOTS，因此不会依赖字体光栅。
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets('redesign gallery', (tester) async {
     if (Platform.environment['YH_SCREENSHOTS'] != '1') return;
+    // pubspec fonts are not installed in flutter_test. Load them in this zone too.
+    await tester.runAsync(loadScreenshotFonts);
     FlutterSecureStorage.setMockInitialValues({});
     // 1080×2400 物理像素，3 倍，逻辑宽度 360。和常见安卓手机同一套像素。
     tester.view.physicalSize = const Size(1080, 2400);
