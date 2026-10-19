@@ -1,7 +1,7 @@
 ---
 const { title = '宇海 · 一键连接的加密网络', description = '宇海：打开就能连，选择新加坡、美国、日本等地区线路，连接状态清清楚楚。WireGuard 加密，USDT 地址注册与付款，官方签名安卓客户端。' } = Astro.props;
-// 统一品牌标识：深海蓝底 + 两道潮线 + 一点亮蓝（与 App、后台同一符号）。
-const mark = `<svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#143951"/><path d="M6 18.5c2.8 0 2.8-2.2 5.7-2.2s2.9 2.2 5.7 2.2 2.8-2.2 5.7-2.2c1.4 0 2.1.5 2.9 1.1" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><path d="M8.5 23c2.3 0 2.3-1.6 4.7-1.6s2.4 1.6 4.7 1.6 2.4-1.6 4.7-1.6" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" stroke-linecap="round"/><circle cx="21.5" cy="10" r="2.4" fill="#79D0E3"/></svg>`;
+// 品牌标识：与 favicon 同一张 64×64 图，圆角 16，底 #bbef68，波浪 #14201c。
+const mark = `<svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#bbef68"/><g fill="none" stroke="#14201c" stroke-width="4" stroke-linecap="round"><path d="M13 22q9-8 19 0t19 0M13 32q9-8 19 0t19 0M13 42q9-8 19 0t19 0"/></g></svg>`;
 ---
 <!doctype html>
 <html lang="zh-CN">
@@ -15,6 +15,8 @@ const mark = `<svg class="brand-mark" viewBox="0 0 32 32" fill="none" aria-hidde
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/assets/site.css" />
     <script is:inline>document.documentElement.classList.add('js')</script>
     <script src="/assets/site.js" defer></script>

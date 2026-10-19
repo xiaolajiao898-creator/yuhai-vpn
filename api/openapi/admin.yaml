@@ -2642,9 +2642,9 @@ components:
         node_name: { type: string, maxLength: 64 }
         node_status: { type: string, enum: [ONLINE, OFFLINE, MAINTENANCE, DISABLED] }
         confirmed: { type: boolean, description: 该节点已确认这些凭据不存在 }
-        confirmed_absent_at: { type: string, format: date-time, nullable: true }
-        heartbeat_sequence: { type: string, pattern: '^[1-9][0-9]{0,18}$', nullable: true }
-        snapshot_checksum: { type: string, pattern: '^[a-f0-9]{64}$', nullable: true }
+        confirmed_absent_at: { type: [string, 'null'], format: date-time }
+        heartbeat_sequence: { type: [string, 'null'], pattern: '^[1-9][0-9]{0,18}$' }
+        snapshot_checksum: { type: [string, 'null'], pattern: '^[a-f0-9]{64}$' }
     DeviceRevocationReceipts:
       type: object
       additionalProperties: false

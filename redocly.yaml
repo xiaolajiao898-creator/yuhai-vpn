@@ -1,0 +1,13 @@
+# 未固定版本的 Redocly 会把 recommended 里的文档风格规则当成错误。
+# 这三份规范本来就没有给每个操作写 summary、security 和 4xx，那些检查保持警告。
+# 结构错误（例如 OpenAPI 3.1 里非法的 nullable）仍然让 lint 失败。
+extends:
+  - recommended
+rules:
+  operation-summary: warn
+  security-defined: warn
+  operation-4xx-response: warn
+  tag-description: warn
+  info-license: warn
+  no-unused-components: warn
+  no-server-example.com: warn

@@ -92,6 +92,11 @@ func TestRegistrationConcurrentReplayIntegration(t *testing.T) {
 		t.Fatal("changed body accepted under same key")
 	}
 	// 真实数据库中的到账、重复处理和重复付款不重复入账。
+	// 收款地址不随迁移入库（那是资金系统签发的）。测试自己放一个短期 MOCK 地址。
+	if _, err := pool.Exec(ctx, `INSERT INTO receive_addresses(network,address,signature,sig_key_id,valid_until,status)
+		VALUES('MOCK',$1,'integration-only','integration',now()+interval '1 day','ACTIVE')`, "reg-"+uuid.NewString()); err != nil {
+		t.Fatal(err)
+	}
 	var userID int64
 	if err := pool.QueryRow(ctx, "SELECT user_id FROM devices WHERE device_uid=$1", in.DeviceUID).Scan(&userID); err != nil {
 		t.Fatal(err)
