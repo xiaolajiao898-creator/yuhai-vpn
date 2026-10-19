@@ -86,16 +86,20 @@ class SessionController extends AsyncNotifier<Session?> {
   }
 
   void _clearConnectionState() {
+    forgetSelectedNode(ref);
     ref.invalidate(connectionControllerProvider);
     ref.invalidate(nodesProvider);
-    ref.invalidate(selectedNodeProvider);
     ref.invalidate(latencyProvider);
     ref.invalidate(connectionFailureProvider);
   }
 
   Future<void> signOut() async {
     _clearConnectionState();
-    await ref.read(sessionStoreProvider).clearSession();
+    try {
+      await ref.read(sessionStoreProvider).clearSession();
+    } catch (_) {
+      // A keystore error must not trap the user on the retry screen.
+    }
     state = const AsyncData(null);
   }
 }

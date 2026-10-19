@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../../core/storage/app_secure_storage.dart';
 import 'vpn_engine.dart';
 import 'wireguard_profile.dart';
 
@@ -20,9 +21,7 @@ abstract interface class WireGuardKeyStore {
 
 class SecureKeyStore implements WireGuardKeyStore {
   SecureKeyStore([FlutterSecureStorage? storage])
-      : _s = storage ??
-            const FlutterSecureStorage(
-                mOptions: MacOsOptions(useDataProtectionKeyChain: false));
+      : _s = storage ?? appSecureStorage;
   final FlutterSecureStorage _s;
   @override
   Future<String?> read(String key) => _s.read(key: key);

@@ -221,11 +221,22 @@ func (s *Service) Restore(ctx context.Context, in RestoreInput, ipHash string) (
 	return s.signInUser(ctx, u, in.DeviceInfo, now, ipHash)
 }
 
-// signInUser 把已验证身份的账户登录到新设备：设备满时返回 40902 + restore_ticket，
-// 客户端用 replace-device 移除一台后继续。账户密钥恢复与地址密码登录共用。
+// signInUser 把已验证身份的账户登录到当前设备。同一 device_uid 再次登录复用原设备行，
+// 避免一台手机每登一次就占一个名额。设备满时返回 40902 + restore_ticket。
+// 账户密钥恢复与地址密码登录共用。调用方必须已经核对密码或账户密钥。
 func (s *Service) signInUser(ctx context.Context, u userRow, d DeviceInfo, now time.Time, ipHash string) (RestoreResult, error) {
 	if u.Status == "BANNED" {
 		return RestoreResult{}, httpx.NewError(httpx.ErrAccountDisabled, "账户已停用")
+	}
+	existing, err := s.Repo.findDeviceByUID(ctx, s.Repo.Pool, d.DeviceUID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return RestoreResult{}, err
+	}
+	if err == nil {
+		if existing.UserID != u.ID {
+			return RestoreResult{}, httpx.NewError(httpx.ErrConflict, "设备标识已存在，请重新生成")
+		}
+		return s.resumeDevice(ctx, u, existing, d, now, ipHash)
 	}
 	limit, err := s.Repo.deviceLimit(ctx, s.Repo.Pool, u.ID, now)
 	if err != nil {
@@ -235,19 +246,103 @@ func (s *Service) signInUser(ctx context.Context, u userRow, d DeviceInfo, now t
 	if err != nil {
 		return RestoreResult{}, err
 	}
-	if count >= limit {
-		devices, err := s.Repo.listDevices(ctx, u.ID)
-		if err != nil {
-			return RestoreResult{}, err
-		}
-		ticket, err := s.Redis.PutTicket(ctx, "restore", strconv.FormatInt(u.ID, 10), restoreTicketTTL)
-		if err != nil {
-			return RestoreResult{}, httpx.NewError(httpx.ErrMaintenance, "系统繁忙，请稍后再试").Wrap(err)
-		}
-		return RestoreResult{}, httpx.NewError(httpx.ErrDeviceLimit, "设备数量已达上限").
-			WithDetails(map[string]any{"device_limit": limit, "restore_ticket": ticket, "devices": devices})
+	if deviceSignInPlan(false, false, false, count, limit) == "limit" {
+		return RestoreResult{}, s.deviceLimitError(ctx, u.ID, limit)
 	}
 	return s.attachDevice(ctx, u, d, now, ipHash, 0)
+}
+
+// deviceSignInPlan 决定一次已通过身份验证的登录如何使用 device_uid。
+// 同一用户的仍活跃设备直接复用，不占新名额；已停用的设备在名额允许时恢复。
+func deviceSignInPlan(found, sameUser, active bool, activeCount, limit int) string {
+	switch {
+	case !found:
+		if activeCount >= limit {
+			return "limit"
+		}
+		return "create"
+	case !sameUser:
+		return "conflict"
+	case active:
+		return "resume"
+	case activeCount >= limit:
+		return "limit"
+	default:
+		return "reactivate"
+	}
+}
+
+func (s *Service) deviceLimitError(ctx context.Context, userID int64, limit int) error {
+	devices, err := s.Repo.listDevices(ctx, userID)
+	if err != nil {
+		return err
+	}
+	ticket, err := s.Redis.PutTicket(ctx, "restore", strconv.FormatInt(userID, 10), restoreTicketTTL)
+	if err != nil {
+		return httpx.NewError(httpx.ErrMaintenance, "系统繁忙，请稍后再试").Wrap(err)
+	}
+	return httpx.NewError(httpx.ErrDeviceLimit, "设备数量已达上限").
+		WithDetails(map[string]any{"device_limit": limit, "restore_ticket": ticket, "devices": devices})
+}
+
+// resumeDevice 在密码或账户密钥已经验证之后，把令牌发给这台手机原来的设备记录。
+func (s *Service) resumeDevice(ctx context.Context, u userRow, existing deviceIdentity, d DeviceInfo, now time.Time, ipHash string) (RestoreResult, error) {
+	var res RestoreResult
+	err := db.InTx(ctx, s.Repo.Pool, func(tx pgx.Tx) error {
+		var status, accountNo string
+		var version int
+		if err := tx.QueryRow(ctx, `SELECT status, secret_version, account_no FROM users WHERE id = $1 FOR NO KEY UPDATE`, u.ID).Scan(&status, &version, &accountNo); err != nil {
+			return err
+		}
+		if status == "BANNED" {
+			return httpx.NewError(httpx.ErrAccountDisabled, "账户已停用")
+		}
+		if version != u.SecretVersion {
+			return httpx.NewError(httpx.ErrSecretRotated, "账户密钥已重置，请用新密钥恢复")
+		}
+		dev, err := s.Repo.findDeviceByUID(ctx, tx, d.DeviceUID)
+		if errors.Is(err, pgx.ErrNoRows) || (err == nil && dev.UserID != u.ID) {
+			return httpx.NewError(httpx.ErrConflict, "设备标识已存在，请重新生成")
+		} else if err != nil {
+			return err
+		}
+		if dev.ID != existing.ID {
+			return httpx.NewError(httpx.ErrConflict, "设备标识已存在，请重新生成")
+		}
+		reactivating := dev.Status != "ACTIVE"
+		if reactivating {
+			limit, err := s.Repo.deviceLimit(ctx, tx, u.ID, now)
+			if err != nil {
+				return err
+			}
+			count, err := s.Repo.countActiveDevices(ctx, tx, u.ID)
+			if err != nil {
+				return err
+			}
+			if deviceSignInPlan(true, true, false, count, limit) == "limit" {
+				return s.deviceLimitError(ctx, u.ID, limit)
+			}
+		}
+		name := d.Model
+		if name == "" {
+			name = d.Platform
+		}
+		if err := s.Repo.resumeDeviceRecord(ctx, tx, dev.ID, d, name, now); err != nil {
+			return err
+		}
+		if reactivating {
+			if err := s.Repo.insertBindLog(ctx, tx, u.ID, dev.ID, "RESTORE", "USER", ipHash, "resume:"+d.DeviceUID+":"+strconv.FormatInt(now.UnixNano(), 10)); err != nil {
+				return err
+			}
+		}
+		tokens, err := s.issueTokens(ctx, tx, u.ID, dev.ID, d.DevicePubKey, version, now)
+		if err != nil {
+			return err
+		}
+		res = RestoreResult{AccountNo: accountNo, DeviceID: strconv.FormatInt(dev.ID, 10), Tokens: tokens, ServerTime: now}
+		return nil
+	})
+	return res, err
 }
 
 // ReplaceDevice 恢复时设备已满：用票据移除一台后继续。

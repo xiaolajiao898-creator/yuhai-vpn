@@ -65,9 +65,9 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             if (!disposed) try {
                 executor.execute {
                     val gen = generation.get(); val id = identity
-                    if (xrayUp && id != null) { try { stop() } catch (_: Exception) {}; event(gen, id, mapOf("type" to "error", "code" to "VPN_REVOKED")) }
+                    if (xrayUp && id != null) { try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }; event(gen, id, mapOf("type" to "error", "code" to "VPN_REVOKED")) }
                 }
-            } catch (_: Exception) {} // 执行器已关闭（页面已销毁）：隧道已随之停止
+            } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) } // 执行器已关闭（页面已销毁）：隧道已随之停止
         }
     }
 
@@ -89,13 +89,13 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                 if (intent == null) result.success(true) else {
                     permission = result; permissionInFlight = true
                     try { activity.startActivityForResult(intent, PERMISSION_REQUEST) }
-                    catch (_: Exception) { permission = null; permissionInFlight = false; failure(result,"PERMISSION_DENIED") }
+                    catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); permission = null; permissionInFlight = false; failure(result,"PERMISSION_DENIED") }
                 }
             }
             "publicKey" -> {
                 val id = call.argument<String>("identity") ?: ""
                 if (!validIdentity(id)) { failure(result,"CONNECT_FAILED"); return }
-                executor.execute { try { success(result,keyPair(id).publicKey.toBase64()) } catch (_: Exception) { failure(result,"CONNECT_FAILED") } }
+                executor.execute { try { success(result,keyPair(id).publicKey.toBase64()) } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); failure(result, NativeFailures.code(t)) } }
             }
             "connect" -> {
                 val gen = WireGuardPolicy.integer(call.argument<Any>("generation")) ?: -1
@@ -115,7 +115,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                 generation.set(gen) // invalidate an in-flight connection immediately
                 permission?.success(false); permission = null
                 executor.execute {
-                    try { stop(); identity = null; success(result,null) } catch (_: Exception) { failure(result,"DISCONNECT_FAILED") }
+                    try { stop(); identity = null; success(result,null) } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); failure(result,"DISCONNECT_FAILED") }
                 }
             }
             "probe" -> {
@@ -123,7 +123,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                 val port=call.argument<Number>("port")?.toInt() ?: 0
                 val timeout=call.argument<Number>("timeoutMs")?.toInt() ?: 2000
                 if (!WireGuardPolicy.host(host) || port !in 1..65535 || timeout !in 1..5000) { result.success(null); return }
-                probes.execute { val start=SystemClock.elapsedRealtime(); try { Socket().use { it.connect(InetSocketAddress(host,port),timeout) };success(result,SystemClock.elapsedRealtime()-start) } catch (_: Exception) { success(result,null) } }
+                probes.execute { val start=SystemClock.elapsedRealtime(); try { Socket().use { it.connect(InetSocketAddress(host,port),timeout) };success(result,SystemClock.elapsedRealtime()-start) } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); success(result,null) } }
             }
             else -> result.notImplemented()
         }
@@ -143,7 +143,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
         try {
             if (gen != generation.get()) { failure(result,"CONNECT_FAILED"); return }
             val profile = try { XrayPolicy.parse(call.arguments as? Map<*, *> ?: emptyMap<Any,Any>(), System.currentTimeMillis()) }
-                catch (_: Exception) { failure(result,"PROFILE_INVALID"); return }
+                catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); failure(result,"PROFILE_INVALID"); return }
             if (VpnService.prepare(activity) != null) { failure(result,"PERMISSION_DENIED"); return }
             stop()
             if (gen != generation.get()) { failure(result,"CONNECT_FAILED"); return }
@@ -156,9 +156,10 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             success(result,null)
             confirmXray(gen,id)
             main.postDelayed({ sampleXray(gen,id) },1000)
-        } catch (_: Exception) {
-            try { stop() } catch (_: Exception) {}
-            failure(result,"CONNECT_FAILED")
+        } catch (t: Throwable) {
+            NativeFailures.rethrowIfFatal(t)
+            try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+            failure(result, NativeFailures.code(t))
         }
     }
     /** 「已连通」只在经出口的真实 HTTPS 请求成功后才上报；25 秒内不成功即断开并报超时。 */
@@ -176,40 +177,47 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                     connected = true; startedMono = SystemClock.elapsedRealtime()
                     event(gen,id,mapOf("type" to "status","status" to "connected","handshakeConfirmed" to true,"handshakeAt" to Instant.ofEpochMilli(now).toString()))
                 } else {
-                    try { stop() } catch (_: Exception) {}
+                    try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
                     event(gen,id,mapOf("type" to "error","code" to "HANDSHAKE_TIMEOUT"))
                 }
             }
         }
-    } catch (_: Exception) {}
+    } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
     /** 从探测线程回到执行器；页面已销毁、执行器已关闭时静默放弃（隧道已随销毁停止）。 */
-    private fun later(block: () -> Unit) { try { executor.execute(block) } catch (_: Exception) {} }
+    private fun later(block: () -> Unit) { try { executor.execute(block) } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) } }
     private fun sampleXray(gen: Long, id: String) {
         if (disposed || gen != generation.get()) return
         executor.execute {
-            if (gen != generation.get() || !xrayUp) return@execute
-            if (!XrayTunnel.running) {
-                try { stop() } catch (_: Exception) {}
-                event(gen,id,mapOf("type" to "error","code" to "NETWORK_UNAVAILABLE")); return@execute
-            }
-            val (up, down) = XrayTunnel.traffic()
-            lastTx += up; lastRx += down
-            if (connected) {
-                val mono = SystemClock.elapsedRealtime(); val delta = (mono - lastMono).coerceAtLeast(1)
-                event(gen,id,mapOf("type" to "stats","upBytes" to lastTx,"downBytes" to lastRx,"upSpeed" to up*1000/delta,"downSpeed" to down*1000/delta,"since" to startedAt))
-                lastMono = mono
-                // 每分钟经出口复核一次；连不上就如实进入「重连中」，恢复后重新确认。
-                if (++xraySamples % 60 == 0) try { probes.execute {
-                    if (XrayTunnel.probe() == null) later {
-                        if (gen == generation.get() && xrayUp && connected) {
-                            connected = false; startedAt = System.currentTimeMillis()
-                            event(gen,id,mapOf("type" to "status","status" to "reconnecting"))
-                            confirmXray(gen,id)
+            try {
+                if (gen != generation.get() || !xrayUp) return@execute
+                if (!XrayTunnel.running) {
+                    try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+                    event(gen,id,mapOf("type" to "error","code" to "NETWORK_UNAVAILABLE")); return@execute
+                }
+                val (up, down) = XrayTunnel.traffic()
+                lastTx += up; lastRx += down
+                if (connected) {
+                    val mono = SystemClock.elapsedRealtime(); val delta = (mono - lastMono).coerceAtLeast(1)
+                    event(gen,id,mapOf("type" to "stats","upBytes" to lastTx,"downBytes" to lastRx,"upSpeed" to up*1000/delta,"downSpeed" to down*1000/delta,"since" to startedAt))
+                    lastMono = mono
+                    // 每分钟经出口复核一次；连不上就如实进入「重连中」，恢复后重新确认。
+                    if (++xraySamples % 60 == 0) try { probes.execute {
+                        if (XrayTunnel.probe() == null) later {
+                            if (gen == generation.get() && xrayUp && connected) {
+                                connected = false; startedAt = System.currentTimeMillis()
+                                event(gen,id,mapOf("type" to "status","status" to "reconnecting"))
+                                confirmXray(gen,id)
+                            }
                         }
-                    }
-                } } catch (_: Exception) {}
-            } else lastMono = SystemClock.elapsedRealtime()
-            main.postDelayed({ sampleXray(gen,id) },1000)
+                    } } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+                } else lastMono = SystemClock.elapsedRealtime()
+                main.postDelayed({ sampleXray(gen,id) },1000)
+            } catch (t: Throwable) {
+                NativeFailures.rethrowIfFatal(t)
+                try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+                val code = if (NativeFailures.code(t) == "ENGINE_NATIVE") "ENGINE_NATIVE" else "NETWORK_UNAVAILABLE"
+                event(gen,id,mapOf("type" to "error","code" to code))
+            }
         }
     }
     private fun connect(call: MethodCall, result: MethodChannel.Result, gen: Long) {
@@ -244,9 +252,10 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             if(gen != generation.get()) { stop();failure(result,"CONNECT_FAILED");return }
             success(result,null)
             main.postDelayed({ sample(gen,id,current) },1000)
-        } catch (_: Exception) {
-            if(owned!=null && tunnel===owned) { try { stop() } catch (_: Exception) {} }
-            failure(result,"CONNECT_FAILED")
+        } catch (t: Throwable) {
+            NativeFailures.rethrowIfFatal(t)
+            if(owned!=null && tunnel===owned) { try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) } }
+            failure(result, NativeFailures.code(t))
         }
     }
     private fun sample(gen: Long,id: String,current: Tunnel) {
@@ -266,7 +275,12 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                 }
                 if(!connected && mono-startedMono>30000) { stop();event(gen,id,mapOf("type" to "error","code" to "HANDSHAKE_TIMEOUT"));return@execute }
                 if(connected && handshake>0 && now-handshake>180000) { connected=false;startedMono=mono;startedAt=now;event(gen,id,mapOf("type" to "status","status" to "reconnecting")) }
-            } catch (_: Exception) { try { stop() } catch (_: Exception) {};event(gen,id,mapOf("type" to "error","code" to "NETWORK_UNAVAILABLE"));return@execute }
+            } catch (t: Throwable) {
+                NativeFailures.rethrowIfFatal(t)
+                try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+                val code = if (NativeFailures.code(t) == "ENGINE_NATIVE") "ENGINE_NATIVE" else "NETWORK_UNAVAILABLE"
+                event(gen,id,mapOf("type" to "error","code" to code));return@execute
+            }
             main.postDelayed({ sample(gen,id,current) },1000)
         }
     }
@@ -299,6 +313,6 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
     fun dispose() {
         disposed=true;generation.incrementAndGet();permission?.success(false);permission=null;sink=null
         XrayTunnel.onRevoked = null
-        executor.execute { try { stop() } catch (_: Exception) {} };executor.shutdown();probes.shutdownNow()
+        executor.execute { try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) } };executor.shutdown();probes.shutdownNow()
     }
 }

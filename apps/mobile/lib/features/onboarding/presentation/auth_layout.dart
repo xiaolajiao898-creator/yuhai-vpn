@@ -37,9 +37,25 @@ class AuthLayout extends StatelessWidget {
   }
 }
 
-/// 设备数量已满时，让用户选一台移除。
+String _deviceTitle(Map<String, dynamic> device) {
+  final name = (device['display_name'] ?? '').toString().trim();
+  final platform = (device['platform'] ?? '').toString().trim();
+  final model = (device['model'] ?? '').toString().trim();
+  if (name.isNotEmpty && name.toLowerCase() != platform.toLowerCase()) {
+    return name;
+  }
+  if (model.isNotEmpty && model.toLowerCase() != platform.toLowerCase()) {
+    return model;
+  }
+  if (platform.isNotEmpty) return platform;
+  return '设备 ${device['id'] ?? ''}';
+}
+
+/// 设备数量已满时，让用户选一台移除。关闭弹层表示这次不登录。
 Future<String?> pickDeviceToRemove(
-    BuildContext context, List<Map<String, dynamic>> devices) {
+    BuildContext context, List<Map<String, dynamic>> devices,
+    {int limit = 0}) {
+  final cap = limit > 0 ? '（最多 $limit 台）' : '';
   return showModalBottomSheet<String>(
     context: context,
     builder: (ctx) => SafeArea(
@@ -49,21 +65,21 @@ Future<String?> pickDeviceToRemove(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('设备数量已达上限', style: Theme.of(ctx).textTheme.titleLarge),
+            Text('设备数量已达上限$cap', style: Theme.of(ctx).textTheme.titleLarge),
             const SizedBox(height: YhSpace.unit),
-            Text('选择一台设备移除后，本设备才能登录。',
+            Text('当前套餐的设备名额已满。选择一台移除后，这台手机才能登录。',
                 style: Theme.of(ctx).textTheme.labelSmall),
             const SizedBox(height: YhSpace.unit * 2),
             for (final d in devices)
               ListTile(
                 contentPadding: EdgeInsets.zero,
-                title: Text((d['display_name'] ?? d['platform'] ?? '').toString()),
+                title: Text(_deviceTitle(d)),
                 subtitle: Text(d['last_seen_at'] != null
                     ? '最近活跃 ${d['last_seen_at']}'
                     : '从未活跃'),
                 trailing: const Icon(Icons.remove_circle_outline,
                     color: YhColors.coral),
-                onTap: () => Navigator.pop(ctx, d['id'] as String),
+                onTap: () => Navigator.pop(ctx, d['id']?.toString()),
               ),
           ],
         ),

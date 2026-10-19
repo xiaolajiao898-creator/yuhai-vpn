@@ -30,7 +30,8 @@ class DeviceKeyChannel(private val context: Context) {
                 "regenerate" -> { deleteKey(); generate(); result.success(null) }
                 else -> result.notImplemented()
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
+            NativeFailures.rethrowIfFatal(e)
             result.error("DEVICE_KEY", "Device key operation failed", null)
         }
     }
@@ -53,7 +54,9 @@ class DeviceKeyChannel(private val context: Context) {
                 kpg.initialize(builder.setIsStrongBoxBacked(true).build())
                 kpg.generateKeyPair()
                 return
-            } catch (_: Exception) { /* 无 StrongBox，退化到 TEE */ }
+            } catch (t: Throwable) {
+                NativeFailures.rethrowIfFatal(t) /* 无 StrongBox，退化到 TEE */
+            }
         }
         kpg.initialize(builder.setIsStrongBoxBacked(false).build())
         kpg.generateKeyPair()

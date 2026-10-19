@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../../../core/storage/app_secure_storage.dart';
+
 /// 收藏与最近使用：只存在本机、只存线路编号，不含地址或凭据，也不同步到服务端。
 /// 编号失效（线路下架、改为不可用）时照常保留，界面按当前线路列表如实显示为不可用。
 class NodeShortcuts {
@@ -84,7 +86,7 @@ abstract interface class NodeShortcutsStorage {
 
 class SecureNodeShortcutsStorage implements NodeShortcutsStorage {
   SecureNodeShortcutsStorage([FlutterSecureStorage? storage])
-      : _storage = storage ?? const FlutterSecureStorage();
+      : _storage = storage ?? appSecureStorage;
   final FlutterSecureStorage _storage;
   static const storageKey = 'node_shortcuts_v1';
 

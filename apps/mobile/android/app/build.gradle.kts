@@ -7,6 +7,8 @@ import java.security.MessageDigest
 
 // 多协议候选版：独立包名与名称，和正式版并存安装、互不覆盖。仅由构建脚本设置。
 val multiprotoCandidate = System.getenv("YH_CANDIDATE") == "multiproto"
+// 模拟器测试包：release 模式但用公开的调试证书签名，不读取正式钥匙。正式构建不要设置。
+val debugSignedRelease = System.getenv("YH_RELEASE_DEBUG_SIGN") == "1"
 // Xray 内核（AndroidLibXrayLite v26.9.9，LGPL-3.0，预编译 AAR）；构建前核对 SHA-256。
 val xrayAar = "libs/libv2ray.aar"
 val xrayAarSha256 = "9ecf4c921568d8f4cb8550d3bafe08ff6f1d1984f45a6ad183dcdf52ee9302de"
@@ -41,6 +43,8 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         manifestPlaceholders["appLabel"] = if (multiprotoCandidate) "宇海多协议测试版" else "宇海"
+        // 仅 CI 模拟器探测打开。正式构建不设置，活动保持禁用。
+        manifestPlaceholders["vpnProbeEnabled"] = if (System.getenv("YH_VPN_PROBE") == "1") "true" else "false"
         if (multiprotoCandidate) applicationIdSuffix = ".candidate"
     }
 
@@ -48,9 +52,20 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            // Xray 内核每个架构约 35MB。候选版只带 64 位 ARM（近年安卓真机）：Flutter 插件会自行补全
-            // abiFilters，所以这里按路径排除其余架构，而不是依赖 abiFilters。
-            if (multiprotoCandidate) excludes += listOf("lib/armeabi-v7a/**", "lib/x86_64/**", "lib/x86/**")
+            // Xray / WireGuard 每个架构大约几十 MB。用打包排除而不是 abiFilters：
+            // Flutter 插件会自己补 abiFilters。
+            // YH_ABI=arm64-v8a | x86_64 | x86 | armeabi-v7a | all。
+            // 未设置时，多协议候选版仍只带 arm64-v8a（真机）。模拟器测试包设 YH_ABI=x86_64。
+            val requestedAbi = System.getenv("YH_ABI")?.trim().orEmpty()
+            val allAbis = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            val keep = when {
+                requestedAbi == "all" -> allAbis.toSet()
+                requestedAbi.isNotEmpty() -> setOf(requestedAbi)
+                multiprotoCandidate -> setOf("arm64-v8a")
+                else -> allAbis.toSet()
+            }
+            check(keep.all { it in allAbis }) { "YH_ABI 无效：$requestedAbi" }
+            excludes += allAbis.filter { it !in keep }.map { "lib/$it/**" }
         }
     }
 
@@ -71,7 +86,16 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("production")
+            signingConfig = if (debugSignedRelease) {
+                signingConfigs.getByName("debug").apply {
+                    storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                    storePassword = "android"
+                    keyAlias = "androiddebugkey"
+                    keyPassword = "android"
+                }
+            } else {
+                signingConfigs.getByName("production")
+            }
             isDebuggable = false
         }
     }
@@ -121,6 +145,13 @@ val verifyReleaseSecurity by tasks.registering {
             (uri.path.isNullOrEmpty() || uri.path == "/") &&
             (uri.port == -1 || uri.port in 1..65535)) {
             "Release API must be an HTTPS domain without credentials, query, or fragment"
+        }
+        if (debugSignedRelease) {
+            val signing = android.signingConfigs.getByName("debug")
+            check(signing.storeFile?.isFile == true && signing.keyAlias == "androiddebugkey") {
+                "Debug-signed release requires the Android debug keystore"
+            }
+            return@doLast
         }
         val signing = android.signingConfigs.getByName("production")
         check(signing.storeFile?.isFile == true &&

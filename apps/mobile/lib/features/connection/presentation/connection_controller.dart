@@ -8,6 +8,8 @@ import '../../../platform/vpn/native_vpn_engine.dart';
 import '../../../platform/vpn/unavailable_vpn_engine.dart';
 import '../../../platform/vpn/vpn_engine.dart';
 import '../../../platform/vpn/windows_wireguard_engine.dart';
+import '../../home/data/me_api.dart';
+import '../../nodes/data/auto_select.dart';
 import '../../nodes/data/node_selection.dart';
 import '../../nodes/data/node_shortcuts.dart';
 import '../../nodes/data/nodes_api.dart';
@@ -89,6 +91,16 @@ class ConnectionController extends Notifier<VpnStatus> {
     return VpnStatus.disconnected;
   }
 
+  /// 没有线路，和没有套餐，是两件不同的事。后者引导去购买或兑换。
+  Future<VpnFailure> _noLineOrPlan() async {
+    final me = ref.read(meProvider).valueOrNull;
+    final entitlement = me?['entitlement'];
+    if (entitlement is Map && entitlement['blocked_reason'] == 'NO_PLAN') {
+      return const VpnFailure('NO_PLAN', '没有可用套餐，请先购买或兑换套餐');
+    }
+    return const VpnFailure('NO_LINE', '暂时没有可用线路，请稍后刷新再试');
+  }
+
   bool _sameSession(Session expected) {
     final actual = ref.read(sessionProvider).valueOrNull;
     return actual?.accountNo == expected.accountNo &&
@@ -105,7 +117,7 @@ class ConnectionController extends Notifier<VpnStatus> {
     final nodes = await ref.refresh(nodesProvider.future);
     if (!current()) return;
     if (!validAttempt() || !usable(nodes)) {
-      throw const FormatException('线路暂不可用');
+      throw await _noLineOrPlan();
     }
     if (!await engine.prepare()) {
       if (current()) {
@@ -175,7 +187,8 @@ class ConnectionController extends Notifier<VpnStatus> {
       return;
     }
     final selected = ref.read(selectedNodeProvider);
-    // 出口（e 开头）走 Xray 内核：只能用户明确选择，不参与自动选择；目前只有安卓有该内核。
+    // 出口（e 开头）走 Xray 内核，目前只有安卓有该内核。用户点选时直接连；
+    // 自动选择只在没有可探测的 WireGuard 节点时才回落到出口。
     final egress = !demo && selected != null && selected.startsWith('e');
     if (egress && !egressPlatformSupported) {
       state = VpnStatus.error;
@@ -219,19 +232,33 @@ class ConnectionController extends Notifier<VpnStatus> {
       NodeItem? node;
       if (selected != null) {
         node = supported.where((n) => n.id == selected).firstOrNull;
+        if (node == null || node.probeHost == null || !validAttempt()) {
+          throw await _noLineOrPlan();
+        }
       } else {
-        final latencies = await probeNodes(
-            supported, (host, port) => engine.probe(host, port),
-            isCurrent: validAttempt);
-        if (!current()) return;
-        final candidates = supported
-            .where((n) => latencies[n.id] != null)
-            .toList()
-          ..sort((a, b) => latencies[a.id]!.compareTo(latencies[b.id]!));
-        node = candidates.firstOrNull;
-      }
-      if (node == null || node.probeHost == null || !validAttempt()) {
-        throw const FormatException('线路暂不可用');
+        final probeable = supported
+            .where((n) => n.probeHost != null && n.probePort != null)
+            .toList();
+        if (probeable.isNotEmpty) {
+          final latencies = await probeNodes(
+              probeable, (host, port) => engine.probe(host, port),
+              isCurrent: validAttempt);
+          if (!current()) return;
+          node = fastestProbed(probeable, latencies);
+          if (node == null || !validAttempt()) {
+            throw const VpnFailure('NO_LINE', '没有测到可用线路，请手动选择一条');
+          }
+        } else if (!demo &&
+            egressPlatformSupported &&
+            engine is WireGuardVpnEngine) {
+          final egressNode = preferredEgress(nodes);
+          if (egressNode == null || !validAttempt()) throw await _noLineOrPlan();
+          await _connectEgress(engine, egressNode.id, session!,
+              current: current, validAttempt: validAttempt);
+          return;
+        } else {
+          throw await _noLineOrPlan();
+        }
       }
       if (!await engine.prepare()) {
         if (current()) {
@@ -286,15 +313,19 @@ class ConnectionController extends Notifier<VpnStatus> {
             40107 ||
             40108 =>
               const VpnFailure('AUTH_REQUIRED', '登录或设备状态已变化，请重新登录'),
-            40301 => const VpnFailure('NO_PLAN', '没有可用套餐，请先开通套餐'),
+            40301 => const VpnFailure('NO_PLAN', '没有可用套餐，请先购买或兑换套餐'),
             40302 => const VpnFailure('TIER', '当前套餐等级不能使用该线路'),
             40303 => const VpnFailure('QUOTA_EXHAUSTED', '流量已用完，请补充流量后重试'),
             40305 => const VpnFailure('ACCOUNT_DISABLED', '账户暂不可用，请联系客服'),
             50304 =>
               const VpnFailure('ADDRESS_POOL_EXHAUSTED', '线路资源暂时不足，请稍后重试'),
-            _ => const VpnFailure('NODE_UNAVAILABLE', '线路暂不可用，请刷新后重新选择'),
+            _ => VpnFailure(
+                'REQUEST_FAILED', e.message.isEmpty ? '连接失败，请重试' : e.message),
           },
-        _ => const VpnFailure('NODE_UNAVAILABLE', '线路暂不可用，请刷新后重新选择'),
+        FormatException e => VpnFailure(
+            'NODE_UNAVAILABLE',
+            e.message.isEmpty ? '线路暂不可用，请刷新后重新选择' : e.message),
+        _ => const VpnFailure('CONNECT_FAILED', '连接失败，请重试'),
       };
     }
   }

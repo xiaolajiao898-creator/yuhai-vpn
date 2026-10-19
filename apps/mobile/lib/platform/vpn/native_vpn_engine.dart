@@ -89,6 +89,8 @@ class NativeVpnEngine implements WireGuardVpnEngine {
           const VpnFailure('DISCONNECT_FAILED', '断开未获确认，请重试'),
         'ENGINE_UNAVAILABLE' =>
           const VpnFailure('ENGINE_UNAVAILABLE', '当前安装包未启用 VPN 引擎'),
+        'ENGINE_NATIVE' => const VpnFailure('ENGINE_NATIVE',
+            '当前设备无法加载 VPN 内核。电脑模拟器请安装带 x86_64 的测试包后再连接'),
         'VPN_REVOKED' =>
           const VpnFailure('VPN_REVOKED', 'VPN 已被系统或其他 VPN 应用接管，请重新连接'),
         _ => const VpnFailure('CONNECT_FAILED', 'VPN 连接失败，请重试'),

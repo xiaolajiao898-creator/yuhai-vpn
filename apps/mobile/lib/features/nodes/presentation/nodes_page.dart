@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../platform/vpn/egress_profile.dart';
 import '../../connection/presentation/connection_controller.dart';
+import '../data/auto_select.dart';
 import '../data/countries.dart';
 import '../data/node_shortcuts.dart';
 import '../data/nodes_api.dart';
@@ -173,8 +174,10 @@ class _NodesPageState extends ConsumerState<NodesPage>
     final text = Theme.of(context).textTheme;
     final byId = {for (final n in list) n.id: n};
     final chosen = byId[selected];
-    final autoAvailable =
-        list.any((n) => n.available && !n.isEgress && n.probeHost != null);
+    final autoAvailable = list.any((n) =>
+        canAutoSelect(n, egressSupported: egressPlatformSupported));
+    final autoProbes = list.any((n) =>
+        n.available && !n.isEgress && n.probeHost != null && n.probePort != null);
     final matches = list
         .where((n) => matchesQuery(
             query: _query,
@@ -253,6 +256,9 @@ class _NodesPageState extends ConsumerState<NodesPage>
         _AutoTile(
             available: autoAvailable,
             selected: selected == null,
+            subtitle: autoAvailable
+                ? (autoProbes ? '连接时从本机检测延迟，选最低的可用线路' : '连接时自动使用可用线路')
+                : '暂时没有可自动选择的线路',
             onTap: autoAvailable ? () => _choose(null) : null),
         if (_probing) const LinearProgressIndicator(),
         if (_probeMessage != null)
@@ -370,8 +376,12 @@ class _Section extends StatelessWidget {
 
 class _AutoTile extends StatelessWidget {
   const _AutoTile(
-      {required this.available, required this.selected, required this.onTap});
+      {required this.available,
+      required this.selected,
+      required this.subtitle,
+      required this.onTap});
   final bool available, selected;
+  final String subtitle;
   final VoidCallback? onTap;
 
   @override
@@ -382,9 +392,8 @@ class _AutoTile extends StatelessWidget {
         child: ListTile(
           leading: const Icon(Icons.bolt, color: YhColors.accent),
           title: const Text('自动选择'),
-          subtitle: Text(
-              available ? '连接时从本机检测延迟，选最低的可用 WireGuard 线路' : '暂时没有可自动选择的线路',
-              style: Theme.of(context).textTheme.labelSmall),
+          subtitle:
+              Text(subtitle, style: Theme.of(context).textTheme.labelSmall),
         ),
       );
 }

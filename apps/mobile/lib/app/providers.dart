@@ -8,6 +8,8 @@ import '../core/network/api_client.dart';
 import '../core/platform/platform_name.dart';
 import '../core/security/device_key.dart';
 import '../core/security/software_device_key.dart';
+import '../core/storage/app_secure_storage.dart';
+import '../core/storage/durable_id_store.dart';
 import '../core/storage/session_store.dart';
 
 /// 全局依赖注入。测试时用 ProviderScope(overrides: ...) 替换。
@@ -54,7 +56,8 @@ String checkedApiBaseUrl() {
   return apiBaseUrl;
 }
 
-final sessionStoreProvider = Provider<SessionStore>((_) => SessionStore());
+final sessionStoreProvider = Provider<SessionStore>((ref) => SessionStore(
+    appSecureStorage, ref.watch(durableIdStoreProvider)));
 final deviceKeyProvider = Provider<DeviceKey>((_) =>
     !kIsWeb &&
             (defaultTargetPlatform == TargetPlatform.windows ||

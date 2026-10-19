@@ -6,6 +6,7 @@ import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../core/network/api_client.dart';
 import '../data/auth_api.dart';
+import 'auth_layout.dart';
 import 'onboarding_controller.dart';
 
 /// P04 恢复账户：输入密钥（扫码在第 7–8 周随 mobile_scanner 接入）。设备已满时选择移除一台。
@@ -31,8 +32,17 @@ class _RestorePageState extends ConsumerState<RestorePage> {
       if (mounted) context.go(Routes.home);
     } on DeviceLimitReached catch (e) {
       if (!mounted) return;
-      final removeId = await _pickDevice(e.devices);
-      if (removeId == null) return;
+      if (e.ticket.isEmpty || e.devices.isEmpty) {
+        setState(() => _error = e.message);
+        return;
+      }
+      final removeId =
+          await pickDeviceToRemove(context, e.devices, limit: e.limit);
+      if (!mounted) return;
+      if (removeId == null || removeId.isEmpty) {
+        setState(() => _error = e.message);
+        return;
+      }
       try {
         await ref.read(sessionProvider.notifier).replaceDevice(e.ticket, removeId);
         if (mounted) context.go(Routes.home);
@@ -46,35 +56,6 @@ class _RestorePageState extends ConsumerState<RestorePage> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  Future<String?> _pickDevice(List<Map<String, dynamic>> devices) {
-    return showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(YhSpace.panel),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('设备数量已达上限', style: Theme.of(ctx).textTheme.titleLarge),
-              const SizedBox(height: YhSpace.unit),
-              Text('选择一台设备移除后，本设备才能登录。', style: Theme.of(ctx).textTheme.labelSmall),
-              const SizedBox(height: YhSpace.unit * 2),
-              for (final d in devices)
-                ListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(d['display_name'] ?? d['platform'] ?? ''),
-                  subtitle: Text(d['last_seen_at'] != null ? '最近活跃 ${d['last_seen_at']}' : '从未活跃'),
-                  trailing: const Icon(Icons.remove_circle_outline, color: YhColors.coral),
-                  onTap: () => Navigator.pop(ctx, d['id'] as String),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 
   @override

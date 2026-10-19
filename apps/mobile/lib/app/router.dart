@@ -52,6 +52,34 @@ abstract final class Routes {
   static const balance = '/settings/balance'; // P18
   static const traffic = '/settings/traffic'; // P19
   static const about = '/settings/about'; // P20
+  static const sessionUnavailable = '/session-unavailable';
+}
+
+/// Where to send the user given the current session read.
+/// A storage error is not a logout: the welcome flow would mint a new device.
+String? sessionRedirect({
+  required bool loading,
+  required bool hasError,
+  required bool loggedIn,
+  required String location,
+}) {
+  if (loading) {
+    return location == Routes.splash ? null : Routes.splash;
+  }
+  if (hasError) {
+    return location == Routes.sessionUnavailable
+        ? null
+        : Routes.sessionUnavailable;
+  }
+  final inOnboarding = location.startsWith(Routes.onboarding);
+  if (location == Routes.splash) {
+    return loggedIn ? Routes.home : Routes.onboarding;
+  }
+  if (!loggedIn && !inOnboarding) return Routes.onboarding;
+  if (loggedIn && inOnboarding && location != Routes.backup) {
+    return Routes.home;
+  }
+  return null;
 }
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -63,22 +91,18 @@ final routerProvider = Provider<GoRouter>((ref) {
     refreshListenable: notifier,
     redirect: (_, state) {
       final session = ref.read(sessionProvider);
-      if (session.isLoading) {
-        return state.matchedLocation == Routes.splash ? null : Routes.splash;
-      }
-      final loggedIn = session.valueOrNull != null;
-      final inOnboarding = state.matchedLocation.startsWith(Routes.onboarding);
-      if (state.matchedLocation == Routes.splash) {
-        return loggedIn ? Routes.home : Routes.onboarding;
-      }
-      if (!loggedIn && !inOnboarding) return Routes.onboarding;
-      if (loggedIn && inOnboarding && state.matchedLocation != Routes.backup) {
-        return Routes.home;
-      }
-      return null;
+      return sessionRedirect(
+        loading: session.isLoading,
+        hasError: session.hasError,
+        loggedIn: session.valueOrNull != null,
+        location: state.matchedLocation,
+      );
     },
     routes: [
       GoRoute(path: Routes.splash, builder: (_, __) => const _Splash()),
+      GoRoute(
+          path: Routes.sessionUnavailable,
+          builder: (_, __) => const SessionUnavailablePage()),
       GoRoute(
           path: Routes.onboarding, builder: (_, __) => const OnboardingPage()),
       GoRoute(
@@ -141,5 +165,45 @@ class _Splash extends StatelessWidget {
 class _Notifier extends ChangeNotifier {
   _Notifier(Ref ref) {
     ref.listen(sessionProvider, (_, __) => notifyListeners());
+  }
+}
+
+/// Shown when secure storage fails. Retry keeps the account; signing in again
+/// is an explicit choice and does not happen by itself.
+class SessionUnavailablePage extends ConsumerWidget {
+  const SessionUnavailablePage({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final text = Theme.of(context).textTheme;
+    return Scaffold(
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+              Text('暂时无法读取登录状态', style: text.headlineMedium),
+              const SizedBox(height: 12),
+              Text('本机安全存储暂时出错，账户并没有在服务器上退出。请先重试。',
+                  style: text.bodyMedium),
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: () => ref.invalidate(sessionProvider),
+                child: const Text('重试'),
+              ),
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: () =>
+                    ref.read(sessionProvider.notifier).signOut(),
+                child: const Text('仍然无法读取，重新登录'),
+              ),
+              const Spacer(),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

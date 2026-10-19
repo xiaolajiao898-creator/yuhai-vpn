@@ -2,6 +2,9 @@ import 'dart:convert';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'app_secure_storage.dart';
+import 'durable_id_store.dart';
+
 /// 本地会话（方案 3.9）：设备标识、账户号、令牌存安全存储；账户密钥只在备份页展示，不落盘。
 class Session {
   const Session(
@@ -38,12 +41,11 @@ class Session {
 }
 
 class SessionStore {
-  SessionStore([FlutterSecureStorage? storage])
-      : _s = storage ??
-            // macOS 未签名/未配置钥匙串共享时，数据保护钥匙串会报错；用传统钥匙串。
-            const FlutterSecureStorage(
-                mOptions: MacOsOptions(useDataProtectionKeyChain: false));
+  SessionStore([FlutterSecureStorage? storage, DurableIdStore? ids])
+      : _s = storage ?? appSecureStorage,
+        _ids = ids ?? SharedPrefsDurableIdStore();
   final FlutterSecureStorage _s;
+  final DurableIdStore _ids;
   static const _kDeviceUid = 'device_uid';
   static const _kSession = 'session';
   Future<void> _sessionQueue = Future<void>.value();
@@ -57,9 +59,43 @@ class SessionStore {
     return result;
   }
 
-  Future<String?> deviceUid() => _s.read(key: _kDeviceUid);
-  Future<void> saveDeviceUid(String uid) =>
-      _s.write(key: _kDeviceUid, value: uid);
+  bool _usableUid(String? uid) =>
+      uid != null &&
+      uid.isNotEmpty &&
+      uid.length <= 64 &&
+      !RegExp(r'[\x00-\x1f]').hasMatch(uid);
+
+  /// Plain preferences are read first. The keystore copy is a fallback and is
+  /// repaired into preferences when that is the only surviving record.
+  Future<String?> deviceUid() async {
+    try {
+      final plain = await _ids.read(_kDeviceUid);
+      if (_usableUid(plain)) return plain;
+    } catch (_) {}
+    try {
+      final secure = await _s.read(key: _kDeviceUid);
+      if (!_usableUid(secure)) return null;
+      try {
+        await _ids.write(_kDeviceUid, secure);
+      } catch (_) {}
+      return secure;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Writes the plain copy first so a later keystore failure still leaves an id.
+  Future<void> saveDeviceUid(String uid) async {
+    if (!_usableUid(uid)) {
+      throw ArgumentError('device uid');
+    }
+    try {
+      await _ids.write(_kDeviceUid, uid);
+    } catch (_) {
+      // The secure copy below still records the id for this process.
+    }
+    await _s.write(key: _kDeviceUid, value: uid);
+  }
 
   Future<Session?> _readSession() async {
     final raw = await _s.read(key: _kSession);

@@ -85,3 +85,190 @@ jobs:
       - uses: subosito/flutter-action@v2
         with: { channel: stable }
       - run: cd apps/mobile && flutter pub get && flutter analyze && flutter test
+  android-x64:
+    # ubuntu-24.04 预装 Android SDK。ubuntu-latest 即将改为 26.04，固定镜像以免 SDK 路径变化。
+    # 不用 android-actions/setup-android@v3：它默认安装已下架的 tools 包，sdkmanager 会直接退出。
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: subosito/flutter-action@v2
+        with: { channel: stable }
+      - name: 核对并放入 Xray 内核
+        run: |
+          mkdir -p apps/mobile/android/app/libs
+          curl -fL --retry 3 -o apps/mobile/android/app/libs/libv2ray.aar \
+            https://github.com/2dust/AndroidLibXrayLite/releases/download/v26.9.9/libv2ray.aar
+          echo "9ecf4c921568d8f4cb8550d3bafe08ff6f1d1984f45a6ad183dcdf52ee9302de  apps/mobile/android/app/libs/libv2ray.aar" | sha256sum -c
+      - name: 构建 x86_64 调试候选包
+        working-directory: apps/mobile
+        env:
+          YH_CANDIDATE: multiproto
+          YH_ABI: x86_64
+        run: |
+          set -euo pipefail
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          sdkmanager="$sdk/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then
+            echo "预装 Android SDK 缺少 cmdline-tools：$sdkmanager"
+            exit 1
+          fi
+          if [ ! -w "$sdk" ]; then
+            sudo chmod -R a+w "$sdk"
+          fi
+          export ANDROID_SDK_ROOT="$sdk"
+          export ANDROID_HOME="$sdk"
+          export PATH="$sdk/cmdline-tools/latest/bin:$sdk/platform-tools:$PATH"
+          flutter config --android-sdk "$sdk"
+          set +o pipefail
+          yes | "$sdkmanager" --sdk_root="$sdk" --licenses >/dev/null || true
+          set -o pipefail
+          flutter_root="${FLUTTER_ROOT:-$(cd "$(dirname "$(command -v flutter)")/.." && pwd)}"
+          ext="$flutter_root/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt"
+          ndk="$(sed -n 's/.*ndkVersion: String = "\([^"]*\)".*/\1/p' "$ext" | head -1)"
+          compile_sdk="$(sed -n 's/.*compileSdkVersion: Int = \([0-9][0-9]*\).*/\1/p' "$ext" | head -1)"
+          if [ -z "$ndk" ] || [ -z "$compile_sdk" ]; then
+            echo "无法从 $ext 读取 Flutter 需要的 SDK 组件"
+            exit 1
+          fi
+          packages=()
+          if [ ! -d "$sdk/platforms/android-$compile_sdk" ]; then
+            packages+=("platforms;android-$compile_sdk")
+          fi
+          if [ ! -d "$sdk/ndk/$ndk" ]; then
+            packages+=("ndk;$ndk")
+          fi
+          if [ "${#packages[@]}" -gt 0 ]; then
+            if ! "$sdkmanager" --sdk_root="$sdk" "${packages[@]}"; then
+              echo "预装 sdkmanager 无法安装 ${packages[*]}，改用 cmdline-tools 22.0"
+              tmp="$(mktemp -d)"
+              curl -fL --retry 3 -o "$tmp/cmdtools.zip" \
+                https://dl.google.com/android/repository/commandlinetools-linux-15859902_latest.zip
+              unzip -q "$tmp/cmdtools.zip" -d "$tmp"
+              rm -rf "$sdk/cmdline-tools/22.0"
+              mv "$tmp/cmdline-tools" "$sdk/cmdline-tools/22.0"
+              rm -rf "$tmp"
+              sdkmanager="$sdk/cmdline-tools/22.0/bin/sdkmanager"
+              set +o pipefail
+              yes | "$sdkmanager" --sdk_root="$sdk" --licenses >/dev/null || true
+              set -o pipefail
+              "$sdkmanager" --sdk_root="$sdk" "${packages[@]}"
+            fi
+          fi
+          flutter pub get
+          flutter build apk --debug --target-platform android-x64 \
+            --dart-define=YH_API_BASE=https://api.yhvpn.io
+      - name: 安装包只含 x86_64 的 Xray 与 WireGuard
+        run: |
+          apk=apps/mobile/build/app/outputs/flutter-apk/app-debug.apk
+          unzip -l "$apk" > /tmp/apk-libs.txt
+          grep -q 'lib/x86_64/libgojni.so' /tmp/apk-libs.txt
+          grep -q 'lib/x86_64/libwg-go.so' /tmp/apk-libs.txt
+          if grep -E 'lib/(arm64-v8a|armeabi-v7a|x86)/' /tmp/apk-libs.txt; then
+            echo "安装包带了不该有的架构"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yuhai-candidate-x86_64-debug
+          path: apps/mobile/build/app/outputs/flutter-apk/app-debug.apk
+      - name: 构建更小的 x86_64 release（调试证书）
+        working-directory: apps/mobile
+        env:
+          YH_CANDIDATE: multiproto
+          YH_ABI: x86_64
+          YH_RELEASE_DEBUG_SIGN: "1"
+          YH_VPN_PROBE: "1"
+        run: |
+          set -euo pipefail
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            mkdir -p "$HOME/.android"
+            keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          flutter build apk --release --split-per-abi --target-platform android-x64 \
+            --dart-define=YH_API_BASE=https://api.yhvpn.io
+      - name: 核对 release 包名、调试签名和体积
+        run: |
+          set -euo pipefail
+          apk=apps/mobile/build/app/outputs/flutter-apk/app-x86_64-release.apk
+          if [ ! -f "$apk" ]; then
+            echo "没有生成 $apk"
+            ls -la apps/mobile/build/app/outputs/flutter-apk || true
+            exit 1
+          fi
+          unzip -l "$apk" > /tmp/apk-rel.txt
+          grep -q 'lib/x86_64/libgojni.so' /tmp/apk-rel.txt
+          grep -q 'lib/x86_64/libwg-go.so' /tmp/apk-rel.txt
+          if grep -E 'lib/(arm64-v8a|armeabi-v7a|x86)/' /tmp/apk-rel.txt; then
+            echo "安装包带了不该有的架构"
+            exit 1
+          fi
+          if grep -E 'assets/(geoip|geosite)' /tmp/apk-rel.txt; then
+            echo "内核数据文件没有被剔除"
+            exit 1
+          fi
+          python3 -c 'import sys,zipfile; apk=sys.argv[1]; z=zipfile.ZipFile(apk); natives=[i for i in z.infolist() if i.filename.startswith("lib/") and i.filename.endswith(".so")]; stored=[i.filename for i in natives if i.file_size>=1000000 and i.compress_type==zipfile.ZIP_STORED]; assert natives and not stored, stored; print("native libs", len(natives))' "$apk"
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          bt="$(ls -d "$sdk"/build-tools/*/ | sort -V | tail -1)"
+          if [ ! -x "${bt}aapt" ] || [ ! -x "${bt}apksigner" ]; then
+            echo "build-tools 缺少 aapt 或 apksigner：$bt"
+            exit 1
+          fi
+          "${bt}aapt" dump badging "$apk" > /tmp/badging.txt
+          grep -q "name='com.yuhai.yuhai_vpn.candidate'" /tmp/badging.txt
+          if grep -q 'application-debuggable' /tmp/badging.txt; then
+            echo "release 包不应是 debuggable"
+            exit 1
+          fi
+          "${bt}apksigner" verify --print-certs "$apk" > /tmp/certs.txt
+          grep -q 'CN=Android Debug' /tmp/certs.txt
+          bytes="$(stat -c%s "$apk")"
+          echo "yuhai-candidate-x86_64-release-debugsigned bytes=$bytes"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yuhai-candidate-x86_64-release-debugsigned
+          path: apps/mobile/build/app/outputs/flutter-apk/app-x86_64-release.apk
+  android-x64-emulator:
+    needs: android-x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/download-artifact@v4
+        with:
+          name: yuhai-candidate-x86_64-release-debugsigned
+          path: emulator-apk
+      - name: 准备日志目录
+        run: mkdir -p emulator-probe/tombstones && echo pending > emulator-probe/logcat.txt && echo pending > emulator-probe/exit-info.txt
+      - name: x86_64 模拟器上探测隧道和会话
+        uses: reactivecircus/android-emulator-runner@v2.34.0
+        env:
+          PROBE_APK: ${{ github.workspace }}/emulator-apk/app-x86_64-release.apk
+          PROBE_OUT: ${{ github.workspace }}/emulator-probe
+        with:
+          api-level: "33"
+          target: google_apis
+          arch: x86_64
+          ram-size: 4096M
+          cores: "4"
+          disable-animations: true
+          emulator-boot-timeout: 600
+          script: bash apps/mobile/android/ci/emulator-vpn-probe.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yuhai-emulator-x86_64-logcat
+          path: |
+            emulator-probe/logcat.txt
+            emulator-probe/exit-info.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: yuhai-emulator-x86_64-tombstones
+          path: emulator-probe/tombstones/

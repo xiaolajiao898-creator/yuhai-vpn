@@ -72,31 +72,34 @@ class AuthApi {
     }
   }
 
-  /// 恢复。设备已满抛出 [DeviceLimitReached]，携带 restore_ticket 与设备列表。
+  /// 恢复。沿用本机设备身份；标识已被其他账户占用时才轮换一次。
+  /// 设备已满抛出 [DeviceLimitReached]，携带 restore_ticket 与设备列表。
   Future<void> restore(String accountSecret) async {
     if (_restoring) throw ApiException(40901, '正在恢复账户，请稍候');
     _restoring = true;
     try {
-      await _requireSignedOut();
-      // Device records remain in the server after logout/revocation. Start a
-      // fresh device identity for this restoration, and retain it if the user
-      // must select a device to replace. Never rotate a still-signed-in device.
-      await deviceKey.regenerate();
-      await store.saveDeviceUid(const Uuid().v4());
-      final body = (await _deviceInfo())
-        ..['account_secret'] = accountSecret.trim();
+      await _restoreOnce(accountSecret, retried: false);
+    } finally {
+      _restoring = false;
+    }
+  }
+
+  Future<void> _restoreOnce(String accountSecret,
+      {required bool retried}) async {
+    await _requireSignedOut();
+    final body = (await _deviceInfo())
+      ..['account_secret'] = accountSecret.trim();
+    try {
       final d = await client.selfSigned('/v1/auth/restore', body);
       await _saveRestored(d);
     } on ApiException catch (e) {
-      if (e.code == 40902) {
-        throw DeviceLimitReached(
-          ticket: e.details!['restore_ticket'] as String,
-          devices: (e.details!['devices'] as List).cast<Map<String, dynamic>>(),
-        );
+      final limit = deviceLimitFrom(e);
+      if (limit != null) throw limit;
+      if (e.code == 40901 && !retried) {
+        await _rotateDeviceIdentity();
+        return _restoreOnce(accountSecret, retried: true);
       }
       rethrow;
-    } finally {
-      _restoring = false;
     }
   }
 
@@ -126,11 +129,15 @@ class AuthApi {
 
   // ---------------- 地址 + 密码 ----------------
 
-  /// 为「未登录」状态准备一个全新的设备身份：服务器上旧设备记录不会复用。
-  Future<void> _freshDeviceIdentity() async {
+  /// 只有设备标识冲突（40901，已被其他账户占用）时才换一把新身份。
+  /// 同一台手机反复登录必须沿用原来的 device_uid 和密钥，否则每登一次就占一台设备。
+  Future<void> _rotateDeviceIdentity() async {
     await deviceKey.regenerate();
     await store.saveDeviceUid(const Uuid().v4());
   }
+
+  /// 注册新账户时使用新身份，避免把上一账户的设备标识带过去。
+  Future<void> _freshDeviceIdentity() => _rotateDeviceIdentity();
 
   Future<void> _saveLogin(Map<String, dynamic> d, {String inviteCode = ''}) =>
       store.saveSession(Session(
@@ -163,28 +170,34 @@ class AuthApi {
     }
   }
 
-  /// 地址 + 密码登录。设备已满抛出 [DeviceLimitReached]，用 [replaceDevice] 继续。
+  /// 地址 + 密码登录。沿用本机设备身份。设备已满抛出 [DeviceLimitReached]。
   Future<void> loginWithPassword(String address, String password) async {
     if (_restoring) throw ApiException(40901, '正在登录，请稍候');
     _restoring = true;
     try {
-      await _requireSignedOut();
-      await _freshDeviceIdentity();
-      final body = (await _deviceInfo())
-        ..['address'] = address.trim()
-        ..['password'] = password;
+      await _loginOnce(address, password, retried: false);
+    } finally {
+      _restoring = false;
+    }
+  }
+
+  Future<void> _loginOnce(String address, String password,
+      {required bool retried}) async {
+    await _requireSignedOut();
+    final body = (await _deviceInfo())
+      ..['address'] = address.trim()
+      ..['password'] = password;
+    try {
       final d = await client.selfSigned('/v1/auth/address/login', body);
       await _saveLogin(d);
     } on ApiException catch (e) {
-      if (e.code == 40902) {
-        throw DeviceLimitReached(
-          ticket: e.details!['restore_ticket'] as String,
-          devices: (e.details!['devices'] as List).cast<Map<String, dynamic>>(),
-        );
+      final limit = deviceLimitFrom(e);
+      if (limit != null) throw limit;
+      if (e.code == 40901 && !retried) {
+        await _rotateDeviceIdentity();
+        return _loginOnce(address, password, retried: true);
       }
       rethrow;
-    } finally {
-      _restoring = false;
     }
   }
 
@@ -266,7 +279,33 @@ class ResetChallenge {
 }
 
 class DeviceLimitReached implements Exception {
-  DeviceLimitReached({required this.ticket, required this.devices});
+  DeviceLimitReached(
+      {required this.ticket, required this.devices, this.limit = 0});
   final String ticket;
   final List<Map<String, dynamic>> devices;
+  final int limit;
+
+  String get message => limit > 0
+      ? '设备数量已达上限（最多 $limit 台）。请选择一台旧设备移除后再登录。'
+      : '设备数量已达上限。请选择一台旧设备移除后再登录。';
+}
+
+/// 40902 的设备列表解析失败时仍给出明确提示，而不是掉进「网络不可用」。
+DeviceLimitReached? deviceLimitFrom(ApiException error) {
+  if (error.code != 40902) return null;
+  final details = error.details ?? const <String, dynamic>{};
+  final raw = details['devices'];
+  final devices = <Map<String, dynamic>>[];
+  if (raw is List) {
+    for (final item in raw) {
+      if (item is Map) devices.add(Map<String, dynamic>.from(item));
+    }
+  }
+  final ticket = details['restore_ticket'];
+  final limit = details['device_limit'];
+  return DeviceLimitReached(
+    ticket: ticket is String ? ticket : '',
+    devices: devices,
+    limit: limit is int ? limit : 0,
+  );
 }

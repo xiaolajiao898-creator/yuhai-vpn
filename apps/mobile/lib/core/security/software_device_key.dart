@@ -5,15 +5,14 @@ import 'dart:typed_data';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:pointycastle/export.dart';
 
+import '../storage/app_secure_storage.dart';
 import 'device_key.dart';
 
 /// 电脑版的设备密钥：P-256 私钥由系统凭据保护保存（Windows 凭据保护 / macOS 钥匙串），
 /// 签名在 Dart 里完成（确定性 ECDSA，RFC 6979）。手机上仍使用安全硬件里的 [NativeDeviceKey]。
 class SoftwareDeviceKey implements DeviceKey {
   SoftwareDeviceKey([FlutterSecureStorage? storage])
-      : _s = storage ??
-            const FlutterSecureStorage(
-                mOptions: MacOsOptions(useDataProtectionKeyChain: false));
+      : _s = storage ?? appSecureStorage;
 
   static const _kKey = 'device_key_p256_v1';
   static final _domain = ECCurve_prime256v1();

@@ -39,8 +39,17 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       if (mounted) context.go(Routes.home);
     } on DeviceLimitReached catch (e) {
       if (!mounted) return;
-      final removeId = await pickDeviceToRemove(context, e.devices);
-      if (removeId == null) return;
+      if (e.ticket.isEmpty || e.devices.isEmpty) {
+        setState(() => _error = e.message);
+        return;
+      }
+      final removeId =
+          await pickDeviceToRemove(context, e.devices, limit: e.limit);
+      if (!mounted) return;
+      if (removeId == null || removeId.isEmpty) {
+        setState(() => _error = e.message);
+        return;
+      }
       try {
         await ref.read(sessionProvider.notifier).replaceDevice(e.ticket, removeId);
         if (mounted) context.go(Routes.home);

@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yuhai_vpn/app/providers.dart';
 import 'package:yuhai_vpn/core/network/api_client.dart';
 import 'package:yuhai_vpn/core/storage/session_store.dart';
@@ -69,6 +70,7 @@ void main() {
   late MemoryPreferences preferences;
   setUp(() async {
     FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
     store = SessionStore();
     await store.saveSession(login('123'));
     await store.saveDeviceUid('device-uid');

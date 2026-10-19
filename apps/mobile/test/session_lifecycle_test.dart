@@ -7,9 +7,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:yuhai_vpn/app/providers.dart';
 import 'package:yuhai_vpn/core/network/api_client.dart';
 import 'package:yuhai_vpn/core/security/device_key.dart';
+import 'package:yuhai_vpn/core/storage/durable_id_store.dart';
 import 'package:yuhai_vpn/core/storage/session_store.dart';
 import 'package:yuhai_vpn/features/connection/presentation/connection_controller.dart';
 import 'package:yuhai_vpn/features/onboarding/data/auth_api.dart';
@@ -72,6 +74,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   setUp(() {
     FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
     PackageInfo.setMockInitialValues(
       appName: 'test',
       packageName: 'com.yuhai.test',
@@ -81,7 +84,7 @@ void main() {
     );
   });
 
-  test('退出或被移除后恢复使用新身份，设备替换沿用同次身份', () async {
+  test('恢复沿用本机设备身份，设备替换不再换钥匙', () async {
     final store = SessionStore();
     await store.saveDeviceUid('previous-device-uid');
     final key = TestDeviceKey();
@@ -100,7 +103,10 @@ void main() {
             'message': 'full',
             'details': {
               'restore_ticket': 'test-ticket',
-              'devices': <Map<String, dynamic>>[]
+              'device_limit': 3,
+              'devices': [
+                {'id': '9', 'display_name': '旧手机', 'platform': 'ANDROID'}
+              ]
             }
           }
         });
@@ -110,13 +116,78 @@ void main() {
         reply(request, handler, 200, {'data': restored('next-device')});
       }
     }));
-    await expectLater(
-        auth.restore('YH-test'), throwsA(isA<DeviceLimitReached>()));
-    expect(restoreBody!['device_uid'], isNot('previous-device-uid'));
-    expect(key.generations, 1);
+    await expectLater(auth.restore('YH-test'), throwsA(isA<DeviceLimitReached>()
+        .having((e) => e.limit, 'limit', 3)
+        .having((e) => e.ticket, 'ticket', 'test-ticket')
+        .having((e) => e.message, 'message', contains('最多 3 台'))));
+    expect(restoreBody!['device_uid'], 'previous-device-uid');
+    expect(key.generations, 0);
     await auth.replaceDevice('test-ticket', 'old-device');
     expect((await store.session())!.deviceId, 'next-device');
+    expect(await store.deviceUid(), 'previous-device-uid');
+    expect(key.generations, 0);
+  });
+
+  test('密码登录沿用设备身份，40901 只轮换一次', () async {
+    final store = SessionStore();
+    await store.saveDeviceUid('previous-device-uid');
+    final key = TestDeviceKey();
+    final client = clientFor(store, key);
+    final auth = AuthApi(client, key, store);
+    var logins = 0;
+    client.dio.interceptors
+        .add(InterceptorsWrapper(onRequest: (request, handler) {
+      final body = jsonDecode(utf8.decode(request.data as List<int>))
+          as Map<String, dynamic>;
+      logins++;
+      if (logins == 1) {
+        expect(body['device_uid'], 'previous-device-uid');
+        expect(body['device_pubkey'], 'test-public-key-0');
+        reply(request, handler, 409, {
+          'error': {'code': 40901, 'message': '设备标识已存在，请重新生成'}
+        });
+      } else {
+        expect(body['device_uid'], isNot('previous-device-uid'));
+        expect(body['device_pubkey'], 'test-public-key-1');
+        reply(request, handler, 200, {'data': restored('kept')});
+      }
+    }));
+    await auth.loginWithPassword('TAddress', 'secret');
+    expect(logins, 2);
     expect(key.generations, 1);
+    expect(await store.deviceUid(), isNot('previous-device-uid'));
+    expect((await store.session())!.deviceId, 'kept');
+  });
+
+  test('设备标识在安全存储被清空后仍从普通偏好读回', () async {
+    final ids = MemoryDurableIdStore();
+    final first = SessionStore(const FlutterSecureStorage(), ids);
+    await first.saveDeviceUid('phone-uid');
+    FlutterSecureStorage.setMockInitialValues(const {});
+    final second = SessionStore(const FlutterSecureStorage(), ids);
+    expect(await second.deviceUid(), 'phone-uid');
+  });
+
+  test('只有安全存储里还有设备标识时会回填到普通偏好', () async {
+    final ids = MemoryDurableIdStore();
+    FlutterSecureStorage.setMockInitialValues({'device_uid': 'secure-uid'});
+    final store = SessionStore(const FlutterSecureStorage(), ids);
+    expect(await store.deviceUid(), 'secure-uid');
+    expect(ids.values['device_uid'], 'secure-uid');
+  });
+
+  test('设备已满但列表解析失败时仍给出上限提示', () {
+    final parsed = deviceLimitFrom(ApiException(40902, '设备数量已达上限',
+        details: <String, dynamic>{
+          'device_limit': 3,
+          'restore_ticket': 'ticket',
+          'devices': 'not-a-list',
+        }));
+    expect(parsed, isNotNull);
+    expect(parsed!.devices, isEmpty);
+    expect(parsed.limit, 3);
+    expect(parsed.message, contains('最多 3 台'));
+    expect(deviceLimitFrom(ApiException(500, 'no')), isNull);
   });
 
   test('已登录时恢复不会破坏当前密钥、身份或会话', () async {
@@ -145,7 +216,7 @@ void main() {
     final first = auth.restore('YH-test');
     final (request, handler) = await pending.future;
     await expectLater(auth.restore('YH-test'), throwsA(isA<ApiException>()));
-    expect(key.generations, 1);
+    expect(key.generations, 0);
     reply(request, handler, 200, {'data': restored('new')});
     await first;
   });
