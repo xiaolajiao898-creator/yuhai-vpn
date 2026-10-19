@@ -35,7 +35,7 @@ func TestCandidateEligibilityAndNoMockFallback(t *testing.T) {
 				if !v.Available || v.Protocols[0] != "SHADOWSOCKS_2022" || v.ID != "9007199254740993" {
 					t.Fatal(v)
 				}
-			} else if v.Available || v.LockedReason == nil || *v.LockedReason != tc.reason || v.Probe != nil || v.Load != nil || len(v.Protocols) != 0 {
+			} else if v.Available || v.LockedReason == nil || *v.LockedReason != tc.reason || v.Probe != nil || v.Load != nil || v.OnlineCount != nil || v.CapacityUsers != nil || v.Saturated != nil || len(v.Protocols) != 0 {
 				t.Fatal("unready metadata escaped", v)
 			}
 		})
@@ -76,6 +76,23 @@ func TestNodeETagCoversVisibleFieldsAndExpiry(t *testing.T) {
 	tag, _ = listVersion([]View{same})
 	if tag != first {
 		t.Fatal("unchanged visible response changed ETag")
+	}
+}
+
+func TestSaturatedNodeStaysSelectableButNotRecommended(t *testing.T) {
+	now := time.Date(2032, 1, 1, 0, 0, 0, 0, time.UTC)
+	n := readyCandidate(now)
+	n.view.IsRecommended = true
+	n.online, n.capacity = 500, 500
+	v, err := project(n, 1, now)
+	if err != nil || !v.Available || v.IsRecommended || v.Saturated == nil || !*v.Saturated || v.OnlineCount == nil || *v.OnlineCount != 500 {
+		t.Fatal(v, err)
+	}
+	n.capacity = 0
+	n.online = 40
+	open, err := project(n, 1, now)
+	if err != nil || !open.Available || open.Saturated == nil || *open.Saturated || !open.IsRecommended {
+		t.Fatal("zero capacity is not full", open, err)
 	}
 }
 

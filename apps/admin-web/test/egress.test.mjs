@@ -4,13 +4,13 @@ import {readItem,readPage,readPreview,readSubscription,readImport,optionsProblem
 import {makePreviewEgress} from '../src/preview/egress.ts';
 
 const at='2026-09-28T01:00:00Z';
-const item=(p={})=>({id:'e12',name:'新加坡 · 01',protocol:'SOCKS5',host:'203.0.113.10',port:1080,country_code:'SG',city:'新加坡',region:'ASIA',kind:'PROXY',supports_udp:true,identity_hint:'al***',params:{source_kind:'IMPORT'},min_tier:1,status:'ENABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:at,updated_at:at,...p});
+const item=(p={})=>({id:'e12',name:'新加坡 · 01',protocol:'SOCKS5',host:'203.0.113.10',port:1080,country_code:'SG',city:'新加坡',region:'ASIA',kind:'PROXY',supports_udp:true,capacity_users:0,identity_hint:'al***',params:{source_kind:'IMPORT'},min_tier:1,status:'ENABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:at,updated_at:at,...p});
 const opts={default_protocol:'SOCKS5',default_udp:false,country_code:'SG',city:'',region:'ASIA',name_prefix:'',min_tier:1,enable:false,update_existing:false};
 function fetchMock(t,fn){const old=globalThis.fetch;globalThis.fetch=fn;t.after(()=>globalThis.fetch=old);}
 
 test('出口条目：形状严格，凭据类参数与不一致的 UDP 一律拒绝',()=>{
   assert.equal(readItem(item()).id,'e12');
-  for(const bad of [{id:'12'},{id:'e01'},{protocol:'HTTP',supports_udp:true},{params:{password:'x'}},{params:{uuid:'1'}},{identity_hint:'11111111-2222-4333-8444-555555555555'},{min_tier:0},{status:'ON'},{port:0}]){
+  for(const bad of [{id:'12'},{id:'e01'},{protocol:'HTTP',supports_udp:true},{capacity_users:-1},{params:{password:'x'}},{params:{uuid:'1'}},{identity_hint:'11111111-2222-4333-8444-555555555555'},{min_tier:0},{status:'ON'},{port:0}]){
     assert.throws(()=>readItem(item(bad)),undefined,JSON.stringify(bad));
   }
 });

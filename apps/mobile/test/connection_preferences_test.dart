@@ -59,6 +59,14 @@ void main() {
       expect(ConnectionPreferences.decode(raw), const ConnectionPreferences());
     }
     expect(ProtocolPreference.shadowsocks2022.wireValue, 'SS2022');
+    final legacy = ConnectionPreferences.decode(
+        '{"version":1,"protocol":"WIREGUARD","reduce_motion":false,"auto_connect":false}');
+    expect(legacy.autoRecover, isTrue);
+    expect(legacy.leakProtect, isTrue);
+    final off = ConnectionPreferences.decode(
+        '{"version":1,"protocol":"WIREGUARD","reduce_motion":false,"auto_connect":false,"auto_recover":false,"leak_protect":false}');
+    expect(off.autoRecover, isFalse);
+    expect(off.leakProtect, isFalse);
     for (final protocol in ProtocolPreference.values) {
       final preferences =
           ConnectionPreferences(protocol: protocol, reduceMotion: true);

@@ -1280,6 +1280,55 @@ paths:
                                     properties: { device_id: { type: string }, bytes: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 } }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/site/pageview:
+    post:
+      tags: [system]
+      operationId: recordSitePageview
+      x-auth-level: S0
+      security: []
+      summary: 官网匿名浏览上报
+      description: |
+        只允许来源正好是 https://yhvpn.io 或 https://www.yhvpn.io 的浏览器跨域读取。
+        不携带 Cookie，也不返回 Access-Control-Allow-Credentials。
+        请求体可空，或为 {"path":"/..."}；path 只做校验，不入库。
+        机器人、过短的 User-Agent、同一 IP 哈希 30 秒内重复、以及该哈希每天超过 30 次都不计数。
+        Redis 不可用时不计数。无论是否计数都返回 204，不回显地址。
+      responses:
+        '204': { description: 已接受（不一定计入统计） }
+        '403': { description: 来源不在允许名单 }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [system]
+      operationId: recordSitePageviewPreflight
+      x-auth-level: S0
+      security: []
+      summary: 官网浏览上报的 CORS 预检
+      description: 只允许 yhvpn.io 与 www.yhvpn.io，方法 POST，请求头 Content-Type。不返回通配来源，也不允许携带 Cookie。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/site/downloads/{channel}:
+    get:
+      tags: [system]
+      operationId: countSiteDownload
+      x-auth-level: S0
+      security: []
+      summary: 计数后跳转到官网静态安装包
+      description: |
+        channel 为 android、windows 或 android-legacy。始终 302 到 https://yhvpn.io 上的原始文件，
+        直接访问那些文件地址仍然可以下载。android 与 android-legacy 都算安卓，但分开计数。
+        同一 IP 哈希、同一通道、同一吉隆坡自然日只计一次；机器人与 Redis 故障不计数，但仍跳转。
+      parameters:
+        - name: channel
+          in: path
+          required: true
+          schema: { type: string, enum: [android, windows, android-legacy] }
+      responses:
+        '302': { description: 跳到静态安装包 }
+        '404': { description: 没有这个下载通道 }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/nodes:
     get:
       tags: [nodes]
@@ -1597,7 +1646,7 @@ components:
   schemas:
     EgressView:
       type: object
-      required: [id, name, country_code, city, region, protocol, supports_udp, available, locked_reason]
+      required: [id, name, country_code, city, region, protocol, supports_udp, capacity_users, available, locked_reason]
       properties:
         id: { type: string, pattern: '^e[1-9][0-9]*$' }
         name: { type: string }
@@ -1606,6 +1655,7 @@ components:
         region: { type: string }
         protocol: { type: string, enum: [SOCKS5, HTTP, HTTPS, SHADOWSOCKS, TROJAN, VLESS, VMESS, HYSTERIA2] }
         supports_udp: { type: boolean }
+        capacity_users: { type: integer, minimum: 0, maximum: 1000000, description: 0 表示未设上限。出口没有心跳，不返回在线人数。 }
         available: { type: boolean }
         locked_reason: { type: [string, 'null'], enum: [TIER, PROTOCOL_UNSUPPORTED, null] }
     EgressProfile:
@@ -2003,6 +2053,9 @@ components:
         available: { type: boolean }
         locked_reason: { type: [string, 'null'], enum: [TIER, MAINTENANCE, OFFLINE, NOT_READY, null] }
         load: { type: [integer, 'null'], minimum: 0, maximum: 100 }
+        online_count: { type: integer, minimum: 0, description: 仅可用节点返回。最近一次心跳上报的在线连接数。 }
+        capacity_users: { type: integer, minimum: 0, description: 仅可用节点返回。0 表示不按连接数判满。 }
+        saturated: { type: boolean, description: 仅可用节点返回。容量大于 0 且在线数达到容量时为 true。满载仍可手动选择，但不再推荐。 }
         is_recommended: { type: boolean }
         probe:
           type: [object, 'null']

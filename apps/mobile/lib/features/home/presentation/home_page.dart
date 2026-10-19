@@ -196,6 +196,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final demo = ref.watch(vpnDemoModeProvider);
     final failure = ref.watch(connectionFailureProvider);
     final notice = ref.watch(connectionNoticeProvider);
+    final held = ref.watch(trafficHeldProvider);
     final me = ref.watch(meProvider);
     final selectedNode = ref.watch(selectedNodeProvider);
     final nodeState = ref.watch(nodesProvider);
@@ -219,7 +220,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final (label, color) = switch (visual) {
       VpnStatus.connected => (demo ? '模拟已连接' : '已连接', YhColors.good),
       VpnStatus.connecting => ('正在连接', YhColors.accent),
-      VpnStatus.reconnecting => ('正在重连', YhColors.warn),
+      VpnStatus.reconnecting => ('重连中', YhColors.warn),
       VpnStatus.disconnecting => ('正在断开', YhColors.sub),
       VpnStatus.error => ('连接失败', YhColors.danger),
       VpnStatus.disconnected => ('未连接', YhColors.sub),
@@ -334,12 +335,20 @@ class _HomePageState extends ConsumerState<HomePage> {
               ),
             if (notice != null &&
                 (status == VpnStatus.connected ||
-                    status == VpnStatus.connecting))
+                    status == VpnStatus.connecting ||
+                    status == VpnStatus.reconnecting ||
+                    (held && status == VpnStatus.error)))
               Padding(
                 padding: const EdgeInsets.only(top: 12),
                 child: Text(notice,
                     textAlign: TextAlign.center,
                     style: text.labelSmall?.copyWith(color: YhColors.warn)),
+              ),
+            if (held && status != VpnStatus.disconnected)
+              TextButton(
+                onPressed: () =>
+                    ref.read(connectionControllerProvider.notifier).release(),
+                child: const Text('断开并恢复本地网络'),
               ),
             const SizedBox(height: 24),
             _LineCard(

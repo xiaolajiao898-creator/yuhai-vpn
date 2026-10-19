@@ -81,6 +81,7 @@ class _NodesPageState extends ConsumerState<NodesPage>
       _probeMessage = null;
     });
     ref.read(latencyProvider.notifier).state = {};
+    ref.read(probeQualityProvider.notifier).state = {};
     final generation = _generation;
     try {
       final pending = ref.refresh(nodesProvider.future);
@@ -105,16 +106,19 @@ class _NodesPageState extends ConsumerState<NodesPage>
         generation == _generation &&
         !ref.read(nodesProvider).isLoading &&
         identical(ref.read(nodesProvider).asData?.value, nodes);
-    final results = await probeNodes(
+    final quality = await probeNodeQuality(
         nodes, (host, port) => engine.probe(host, port),
         isCurrent: current);
     if (current()) {
-      ref.read(latencyProvider.notifier).state = results;
+      ref.read(probeQualityProvider.notifier).state = quality;
+      ref.read(latencyProvider.notifier).state = {
+        for (final entry in quality.entries) entry.key: entry.value.medianMs,
+      };
       final t = TimeOfDay.now();
       final hh = t.hour.toString().padLeft(2, '0');
       final mm = t.minute.toString().padLeft(2, '0');
       _probeMessage =
-          '$hh:$mm 从本机检测了 ${results.length} 条线路的延迟 · 每轮最多20条 · 延迟不代表下载速度';
+          '$hh:$mm 每条线路连了 4 次探测端口，取成功那几次的中位数。探测失败次数不是丢包率，也不代表下载速度';
     }
     if (mounted && generation == _generation) setState(() => _probing = false);
   }
@@ -129,6 +133,7 @@ class _NodesPageState extends ConsumerState<NodesPage>
     final nodes = ref.watch(nodesProvider);
     final selected = ref.watch(selectedNodeProvider);
     final latency = ref.watch(latencyProvider);
+    final quality = ref.watch(probeQualityProvider);
     final shortcuts =
         ref.watch(nodeShortcutsProvider).valueOrNull ?? const NodeShortcuts();
     final text = Theme.of(context).textTheme;
@@ -166,13 +171,15 @@ class _NodesPageState extends ConsumerState<NodesPage>
                 FilledButton.tonal(
                     onPressed: _refresh, child: const Text('重新加载')),
               ])),
-              data: (list) => _body(context, list, selected, latency, shortcuts),
+              data: (list) =>
+                  _body(context, list, selected, latency, quality, shortcuts),
             ),
     );
   }
 
   Widget _body(BuildContext context, List<NodeItem> list, String? selected,
-      Map<String, int?> latency, NodeShortcuts shortcuts) {
+      Map<String, int?> latency, Map<String, ProbeQuality> quality,
+      NodeShortcuts shortcuts) {
     final text = Theme.of(context).textTheme;
     final byId = {for (final n in list) n.id: n};
     final chosen = byId[selected];
@@ -192,6 +199,7 @@ class _NodesPageState extends ConsumerState<NodesPage>
     Widget tile(NodeItem n) => _LineTile(
           node: n,
           latency: latency,
+          quality: quality[n.id],
           selected: selected == n.id,
           favorite: shortcuts.favorites.contains(n.id),
           onTap: () => _choose(n.id),
@@ -264,6 +272,11 @@ class _NodesPageState extends ConsumerState<NodesPage>
                 : '暂时没有可自动选择的线路',
             onTap: autoAvailable ? () => _choose(null) : null),
         if (_probing) const LinearProgressIndicator(),
+        Padding(
+          padding: const EdgeInsets.only(top: 8),
+          child: Text('延迟是连到探测端口的耗时，不是下载速度。满载线路仍可手选，自动切换会避开。',
+              style: text.labelSmall),
+        ),
         if (_probeMessage != null)
           Padding(
               padding: const EdgeInsets.only(top: 8),
@@ -405,6 +418,7 @@ class _LineTile extends StatelessWidget {
   const _LineTile(
       {required this.node,
       required this.latency,
+      required this.quality,
       required this.selected,
       required this.favorite,
       required this.onTap,
@@ -412,6 +426,7 @@ class _LineTile extends StatelessWidget {
       this.onUpgrade});
   final NodeItem node;
   final Map<String, int?> latency;
+  final ProbeQuality? quality;
   final bool selected, favorite;
   final VoidCallback onTap, onFavorite;
   final VoidCallback? onUpgrade;
@@ -420,15 +435,23 @@ class _LineTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final n = node;
     final text = Theme.of(context).textTheme;
-    final ms = latency[n.id];
+    final ms = quality?.medianMs ?? latency[n.id];
+    final signal = signalLabel(ms);
     final details = n.available
         ? [
             if (n.city.isNotEmpty) n.city,
             if (n.isEgress) egressProtocolLabel(n.protocols.first),
             if (n.isEgress && n.supportsUdp == false) '不支持 UDP',
+            if (n.isSaturated) '满载',
+            if (signal.isNotEmpty) signal,
             if (ms != null) '延迟 $ms ms',
-            if (latency.containsKey(n.id) && ms == null) '本次检测未响应',
+            if (quality != null) '探测失败 ${quality!.failures} 次',
+            if (quality == null && latency.containsKey(n.id) && ms == null)
+              '本次检测未响应',
             if (n.load != null) '负载 ${n.load}%',
+            if (n.isEgress && (n.capacityUsers == null || n.capacityUsers == 0))
+              '未设上限',
+            if (n.isEgress && n.onlineCount == null) '在线人数未统计',
           ].join(' · ')
         : n.unavailableLabel;
     return _Frame(

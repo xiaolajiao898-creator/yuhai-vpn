@@ -344,6 +344,19 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
     }
   }
 
+  @override
+  bool get canRecover => false;
+  @override
+  Future<void> applyPolicy({required bool leakProtect}) async {}
+  @override
+  Future<int?> probeTunnel() async => null;
+  @override
+  Future<bool> holdTraffic() async => false;
+  @override
+  Future<void> releaseTraffic() async {}
+  @override
+  Future<int> networkEpoch() async => 0;
+
   void dispose() {
     if (_disposed) return;
     unawaited(disconnect().catchError((Object _) {}));

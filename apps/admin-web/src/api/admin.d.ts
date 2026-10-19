@@ -1927,7 +1927,7 @@ export interface components {
         };
         /** @description sections 列出本次实际包含的段；未列出的段不在响应里，不能当成 0。 */
         Dashboard: {
-            sections: ("users" | "nodes" | "traffic" | "finance" | "invite")[];
+            sections: ("users" | "nodes" | "traffic" | "finance" | "invite" | "site")[];
             users?: {
                 by_status: {
                     [key: string]: string;
@@ -1956,8 +1956,32 @@ export interface components {
             invite?: {
                 rewards_in_review: string;
             };
+            site?: {
+                /** @constant */
+                timezone: "Asia/Kuala_Lumpur";
+                pageviews: {
+                    today: string;
+                    history: string;
+                };
+                visitors: {
+                    today: string;
+                    history: string;
+                };
+                downloads: {
+                    android: components["schemas"]["DashboardSiteDownload"];
+                    windows: components["schemas"]["DashboardSiteDownload"];
+                    android_legacy: components["schemas"]["DashboardSiteDownload"];
+                };
+            };
             /** Format: date-time */
             observed_at: string;
+        };
+        DashboardSiteDownload: {
+            today: string;
+            week: string;
+            month: string;
+            previous_month: string;
+            history: string;
         };
         ManagedDeviceOverviewPage: {
             items: {
@@ -5302,6 +5326,8 @@ export interface operations {
                     min_tier?: number;
                     sort_order?: number;
                     supports_udp?: boolean;
+                    /** @description 0 表示不设上限。出口没有心跳，这个数字不是在线人数。 */
+                    capacity_users?: number;
                 };
             };
         };

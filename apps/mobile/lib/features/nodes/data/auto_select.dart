@@ -4,7 +4,7 @@ import 'nodes_api.dart';
 /// WireGuard nodes need a probe endpoint. Egress lines have no public host, so
 /// they count only where the Xray engine exists.
 bool canAutoSelect(NodeItem node, {required bool egressSupported}) {
-  if (!node.available) return false;
+  if (!node.available || node.isSaturated) return false;
   if (node.isEgress) return egressSupported;
   return node.probeHost != null &&
       node.probePort != null &&
@@ -22,7 +22,9 @@ NodeItem? fastestProbed(List<NodeItem> nodes, Map<String, int?> latency) {
 
 /// Stable choice when latency cannot be measured: recommended, then name, then id.
 NodeItem? preferredEgress(List<NodeItem> nodes) {
-  final list = nodes.where((node) => node.available && node.isEgress).toList()
+  final list = nodes
+      .where((node) => node.available && node.isEgress && !node.isSaturated)
+      .toList()
     ..sort((a, b) {
       if (a.isRecommended != b.isRecommended) {
         return a.isRecommended ? -1 : 1;

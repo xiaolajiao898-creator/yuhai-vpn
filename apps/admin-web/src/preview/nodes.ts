@@ -25,5 +25,13 @@ export function makePreviewNodes(session:AdminSession,now=()=>Date.now()):NodeSo
       const result:NodeDetail={node:snapshot(n,observed),observed_at:observed,sync_status:'UNAVAILABLE',inbounds:[{id:String(BigInt(id)*2n),protocol:'VLESS_REALITY',port:443,priority:100,status:'ENABLED'},{id:String(BigInt(id)*2n+1n),protocol:'WIREGUARD',port:51820,priority:200,status:'DISABLED'}]};
       return readNodeDetail(result,id);
     },
+    updateCapacity:async(id,capacity)=>{
+      guard();
+      if(!session.permissions.includes('nodes.write'))throw Object.assign(new Error('没有节点修改权限'),{status:403});
+      if(!Number.isInteger(capacity)||capacity<0||capacity>1000000)throw new Error('容量应在 0–1000000，0 表示不按连接数判满');
+      const n=nodes.find(v=>v.id===id);if(!n)throw Object.assign(new Error('节点不存在'),{status:404});
+      n.capacity_users=capacity;n.updated_at=new Date(now()).toISOString();
+      return readManagedNode(snapshot(n,n.updated_at),n.updated_at);
+    },
   };
 }

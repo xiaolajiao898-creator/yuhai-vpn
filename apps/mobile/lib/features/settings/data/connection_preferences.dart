@@ -22,6 +22,8 @@ class ConnectionPreferences {
     this.protocol = ProtocolPreference.auto,
     this.reduceMotion = false,
     this.autoConnect = false,
+    this.autoRecover = true,
+    this.leakProtect = true,
   });
 
   final ProtocolPreference protocol;
@@ -30,20 +32,32 @@ class ConnectionPreferences {
   /// 打开 App 且已有可用套餐时，调用一次现有的连接开关。默认关闭。
   final bool autoConnect;
 
+  /// 掉线、卡死或网络切换后自动重连，并在当前线路不行时改到同一国家/地区的其他线路。
+  final bool autoRecover;
+
+  /// 断开和重连期间拦住本地网络。只有用户点「断开」才放开。默认开启。
+  final bool leakProtect;
+
   ConnectionPreferences copyWith(
           {ProtocolPreference? protocol,
           bool? reduceMotion,
-          bool? autoConnect}) =>
+          bool? autoConnect,
+          bool? autoRecover,
+          bool? leakProtect}) =>
       ConnectionPreferences(
           protocol: protocol ?? this.protocol,
           reduceMotion: reduceMotion ?? this.reduceMotion,
-          autoConnect: autoConnect ?? this.autoConnect);
+          autoConnect: autoConnect ?? this.autoConnect,
+          autoRecover: autoRecover ?? this.autoRecover,
+          leakProtect: leakProtect ?? this.leakProtect);
 
   Map<String, Object> toJson() => {
         'version': 1,
         'protocol': protocol.wireValue,
         'reduce_motion': reduceMotion,
         'auto_connect': autoConnect,
+        'auto_recover': autoRecover,
+        'leak_protect': leakProtect,
       };
 
   /// Corrupted, unsupported or partially written records use safe defaults.
@@ -64,10 +78,14 @@ class ConnectionPreferences {
       for (final protocol in ProtocolPreference.values) {
         if (value['protocol'] == protocol.wireValue) {
           final auto = value['auto_connect'];
+          final recover = value['auto_recover'];
+          final protect = value['leak_protect'];
           return ConnectionPreferences(
               protocol: protocol,
               reduceMotion: value['reduce_motion'] as bool,
-              autoConnect: auto is bool && auto);
+              autoConnect: auto is bool && auto,
+              autoRecover: recover is bool ? recover : true,
+              leakProtect: protect is bool ? protect : true);
         }
       }
     } on FormatException {
@@ -81,9 +99,12 @@ class ConnectionPreferences {
       other is ConnectionPreferences &&
       other.protocol == protocol &&
       other.reduceMotion == reduceMotion &&
-      other.autoConnect == autoConnect;
+      other.autoConnect == autoConnect &&
+      other.autoRecover == autoRecover &&
+      other.leakProtect == leakProtect;
   @override
-  int get hashCode => Object.hash(protocol, reduceMotion, autoConnect);
+  int get hashCode =>
+      Object.hash(protocol, reduceMotion, autoConnect, autoRecover, leakProtect);
 }
 
 abstract interface class ConnectionPreferencesStorage {
@@ -146,6 +167,12 @@ class ConnectionPreferencesController
 
   Future<void> setAutoConnect(bool enabled) =>
       _update((current) => current.copyWith(autoConnect: enabled));
+
+  Future<void> setAutoRecover(bool enabled) =>
+      _update((current) => current.copyWith(autoRecover: enabled));
+
+  Future<void> setLeakProtect(bool enabled) =>
+      _update((current) => current.copyWith(leakProtect: enabled));
 
   Future<void> _update(
       ConnectionPreferences Function(ConnectionPreferences) change) {

@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/storage/durable_id_store.dart';
+import 'node_probe.dart';
 
 /// Selection is a preference, never a permission to reuse stale connection data.
 final selectedNodeProvider = StateProvider<String?>((_) => null);
 final latencyProvider = StateProvider<Map<String, int?>>((_) => {});
+final probeQualityProvider =
+    StateProvider<Map<String, ProbeQuality>>((_) => {});
 
 const selectedNodeStorageKey = 'selected_node_id_v1';
 final _nodeId = RegExp(r'^[A-Za-z0-9_-]{1,40}$');

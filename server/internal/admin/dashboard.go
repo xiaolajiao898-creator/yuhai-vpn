@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/yuhai-vpn/server/internal/httpx"
+	"github.com/yuhai-vpn/server/internal/sitestats"
 )
 
 // 后台总览（admin.yaml GET /dashboard）。
@@ -51,6 +52,35 @@ type DashboardInvite struct {
 	RewardsInReview string `json:"rewards_in_review"`
 }
 
+type DashboardSiteWindow struct {
+	Today   string `json:"today"`
+	History string `json:"history"`
+}
+
+type DashboardSiteDownload struct {
+	Today         string `json:"today"`
+	Week          string `json:"week"`
+	Month         string `json:"month"`
+	PreviousMonth string `json:"previous_month"`
+	History       string `json:"history"`
+}
+
+type DashboardSiteDownloads struct {
+	Android       DashboardSiteDownload `json:"android"`
+	Windows       DashboardSiteDownload `json:"windows"`
+	AndroidLegacy DashboardSiteDownload `json:"android_legacy"`
+}
+
+// DashboardSite 的「今天 / 本周 / 本月」按 Asia/Kuala_Lumpur 自然日。
+// 浏览量是限流后的次数；访客是去重哈希，历史访客不是每日访客相加。
+// 下载同一哈希、同一通道、同一天只计一次。旧版安卓包单独列出，不并进当前安卓包。
+type DashboardSite struct {
+	Timezone  string                 `json:"timezone"`
+	Pageviews DashboardSiteWindow    `json:"pageviews"`
+	Visitors  DashboardSiteWindow    `json:"visitors"`
+	Downloads DashboardSiteDownloads `json:"downloads"`
+}
+
 type Dashboard struct {
 	Sections   []string          `json:"sections"`
 	Users      *DashboardUsers   `json:"users,omitempty"`
@@ -58,6 +88,7 @@ type Dashboard struct {
 	Traffic    *DashboardTraffic `json:"traffic,omitempty"`
 	Finance    *DashboardFinance `json:"finance,omitempty"`
 	Invite     *DashboardInvite  `json:"invite,omitempty"`
+	Site       *DashboardSite    `json:"site,omitempty"`
 	ObservedAt time.Time         `json:"observed_at"`
 }
 
@@ -74,7 +105,10 @@ var dashboardSections = []struct{ name, capability string }{
 	{"traffic", trafficRead},
 	{"finance", financeRead},
 	{"invite", inviteRead},
+	{"site", siteStatsRead},
 }
+
+const siteStatsRead = "site.stats.read"
 
 // held 返回调用者当前实际持有的能力集合（只认 risk_level=0 的只读能力），
 // 同时完成与其他只读接口一致的会话核验。
@@ -228,6 +262,12 @@ func (s *DashboardService) section(ctx context.Context, tx pgx.Tx, name string, 
 		}
 		// REVIEW 是等人处置的那一批（见第 18 节），PENDING 归 worker，不算待办。
 		out.Invite = &DashboardInvite{RewardsInReview: review}
+	case "site":
+		site, err := loadSiteStats(ctx, tx, now)
+		if err != nil {
+			return err
+		}
+		out.Site = site
 	default:
 		return httpx.Internal
 	}
@@ -259,4 +299,60 @@ func countByStatus(ctx context.Context, tx pgx.Tx, query string) (map[string]str
 	}
 	sort.Strings(keys)
 	return out, nil
+}
+
+func loadSiteStats(ctx context.Context, tx pgx.Tx, now time.Time) (*DashboardSite, error) {
+	w := sitestats.KLWindows(now)
+	pageToday, err := sitestats.MetricSum(ctx, tx, "pageview", w.Today, w.Today)
+	if err != nil {
+		return nil, err
+	}
+	pageAll, err := sitestats.MetricSum(ctx, tx, "pageview", time.Time{}, time.Time{})
+	if err != nil {
+		return nil, err
+	}
+	var visitorsToday, visitorsAll string
+	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM site_visitor_days WHERE day=$1`, w.Today).Scan(&visitorsToday); err != nil {
+		return nil, err
+	}
+	if err = tx.QueryRow(ctx, `SELECT count(*)::text FROM site_visitors`).Scan(&visitorsAll); err != nil {
+		return nil, err
+	}
+	android, err := siteDownload(ctx, tx, "download_android", w)
+	if err != nil {
+		return nil, err
+	}
+	windows, err := siteDownload(ctx, tx, "download_windows", w)
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := siteDownload(ctx, tx, "download_android_legacy", w)
+	if err != nil {
+		return nil, err
+	}
+	return &DashboardSite{
+		Timezone:  w.LocationName,
+		Pageviews: DashboardSiteWindow{Today: pageToday, History: pageAll},
+		Visitors:  DashboardSiteWindow{Today: visitorsToday, History: visitorsAll},
+		Downloads: DashboardSiteDownloads{Android: android, Windows: windows, AndroidLegacy: legacy},
+	}, nil
+}
+
+func siteDownload(ctx context.Context, tx pgx.Tx, metric string, w sitestats.Windows) (DashboardSiteDownload, error) {
+	var out DashboardSiteDownload
+	var err error
+	if out.Today, err = sitestats.MetricSum(ctx, tx, metric, w.Today, w.Today); err != nil {
+		return out, err
+	}
+	if out.Week, err = sitestats.MetricSum(ctx, tx, metric, w.WeekStart, w.Today); err != nil {
+		return out, err
+	}
+	if out.Month, err = sitestats.MetricSum(ctx, tx, metric, w.MonthStart, w.Today); err != nil {
+		return out, err
+	}
+	if out.PreviousMonth, err = sitestats.MetricSum(ctx, tx, metric, w.PreviousStart, w.PreviousEnd); err != nil {
+		return out, err
+	}
+	out.History, err = sitestats.MetricSum(ctx, tx, metric, time.Time{}, time.Time{})
+	return out, err
 }

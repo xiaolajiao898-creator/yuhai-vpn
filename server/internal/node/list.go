@@ -37,6 +37,9 @@ type View struct {
 	Available     bool     `json:"available"`
 	LockedReason  *string  `json:"locked_reason"`
 	Load          *int     `json:"load"`
+	OnlineCount   *int     `json:"online_count,omitempty"`
+	CapacityUsers *int     `json:"capacity_users,omitempty"`
+	Saturated     *bool    `json:"saturated,omitempty"`
 	IsRecommended bool     `json:"is_recommended"`
 	Probe         *Probe   `json:"probe"`
 	Protocols     []string `json:"protocols"`
@@ -52,6 +55,7 @@ type candidate struct {
 	id                              int64
 	host, status                    string
 	port, load, minTier             int
+	online, capacity                int
 	lastHeartbeat, received, sentAt *time.Time
 	pin, receiptPin, checksum       *string
 	configVersion                   *int64
@@ -66,6 +70,9 @@ func project(n candidate, tier int, now time.Time) (View, error) {
 	v := n.view
 	v.ID = strconv.FormatInt(n.id, 10)
 	v.Protocols = []string{}
+	v.OnlineCount = nil
+	v.CapacityUsers = nil
+	v.Saturated = nil
 	if !nodewire.ValidProtocols(n.readyProtocols) {
 		return v, httpx.NewError(httpx.ErrNodeUnavailable, "节点就绪协议无效")
 	}
@@ -105,6 +112,14 @@ func project(n candidate, tier int, now time.Time) (View, error) {
 		}
 		v.Available = true
 		v.Load = &n.load
+		online, capacity := n.online, n.capacity
+		v.OnlineCount = &online
+		v.CapacityUsers = &capacity
+		saturated := capacity > 0 && online >= capacity
+		v.Saturated = &saturated
+		if saturated {
+			v.IsRecommended = false
+		}
 		v.Probe = &Probe{Host: n.host, Port: n.port}
 	}
 	return v, nil
@@ -132,6 +147,7 @@ func (s *ListService) List(ctx context.Context, userID int64) ([]View, string, e
 		_ = tx.Rollback(c)
 	}()
 	rows, err := tx.Query(ctx, `SELECT n.id,n.name,n.country_code,n.city,n.region,n.host,n.probe_port,n.status,n.is_recommended,n.load_score,
+  n.online_count,n.capacity_users,
   g.min_tier,n.last_heartbeat_at,n.agent_cert_fingerprint,h.received_at,h.sent_at,h.cert_fingerprint,h.config_version,h.snapshot_checksum,
   COALESCE(h.ready_protocols,'[]'::jsonb),
   ARRAY(SELECT i.protocol FROM node_inbounds i WHERE i.node_id=n.id AND i.status='ENABLED' ORDER BY i.priority,i.id LIMIT 65)
@@ -144,7 +160,7 @@ func (s *ListService) List(ctx context.Context, userID int64) ([]View, string, e
 	all := []candidate{}
 	for rows.Next() {
 		var n candidate
-		err = rows.Scan(&n.id, &n.view.Name, &n.view.CountryCode, &n.view.City, &n.view.Region, &n.host, &n.port, &n.status, &n.view.IsRecommended, &n.load, &n.minTier, &n.lastHeartbeat, &n.pin, &n.received, &n.sentAt, &n.receiptPin, &n.configVersion, &n.checksum, &n.readyProtocols, &n.protocols)
+		err = rows.Scan(&n.id, &n.view.Name, &n.view.CountryCode, &n.view.City, &n.view.Region, &n.host, &n.port, &n.status, &n.view.IsRecommended, &n.load, &n.online, &n.capacity, &n.minTier, &n.lastHeartbeat, &n.pin, &n.received, &n.sentAt, &n.receiptPin, &n.configVersion, &n.checksum, &n.readyProtocols, &n.protocols)
 		if err != nil {
 			return nil, "", err
 		}

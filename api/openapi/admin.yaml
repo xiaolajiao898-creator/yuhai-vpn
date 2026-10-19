@@ -89,8 +89,8 @@ paths:
       x-admin-level: L0
       summary: 后台总览（按调用者实际持有的能力分段）
       description: |
-        总览是跨域视图：users / nodes / traffic / finance / invite 五段分属 users.read、nodes.read、
-        traffic.read、finance.read、invite.read 五个独立能力。
+        总览是跨域视图：users / nodes / traffic / finance / invite / site 六段分属 users.read、nodes.read、
+        traffic.read、finance.read、invite.read、site.stats.read 六个独立能力。
 
         **只返回调用者实际持有能力的那几段，其余整块不出现**，并由 `sections` 列出本次包含了哪几段。
         少一段与「那段是 0」必须能区分：首页上一个孤零零的 0 会被读成「今天没单」，
@@ -104,6 +104,9 @@ paths:
         `users.devices_active` 是未撤销的设备记录数，不是在线会话数；
         `nodes.by_status` 是登记状态，不代表心跳新鲜；`invite.rewards_in_review` 只数 REVIEW
         （PENDING 归 worker，不是待办）。状态分布不硬编码枚举，数据库里有什么就返回什么。
+
+        `site` 按 Asia/Kuala_Lumpur 自然日。pageviews 是限流后的浏览次数（PV），visitors 是 IP 哈希去重（UV）；
+        历史访客不是每日访客相加。下载同一哈希、同一通道、同一天只计一次。android_legacy 是旧版安装包，不并进 android。
       responses:
         '200': { description: 概览指标, content: { application/json: { schema: { $ref: '#/components/schemas/Dashboard' } } } }
         default: { $ref: '#/components/responses/Error' }
@@ -2057,6 +2060,7 @@ paths:
                 min_tier: { type: integer, minimum: 1, maximum: 9 }
                 sort_order: { type: integer }
                 supports_udp: { type: boolean }
+                capacity_users: { type: integer, minimum: 0, maximum: 1000000, description: 0 表示不设上限。出口没有心跳，这个数字不是在线人数。 }
       responses:
         '200': { description: OK, content: { application/json: { schema: { type: object } } } }
         default: { $ref: '#/components/responses/Error' }
@@ -2416,7 +2420,7 @@ components:
       description: sections 列出本次实际包含的段；未列出的段不在响应里，不能当成 0。
       required: [sections, observed_at]
       properties:
-        sections: { type: array, items: { type: string, enum: [users, nodes, traffic, finance, invite] } }
+        sections: { type: array, items: { type: string, enum: [users, nodes, traffic, finance, invite, site] } }
         users:
           type: object
           additionalProperties: false
@@ -2454,7 +2458,45 @@ components:
           required: [rewards_in_review]
           properties:
             rewards_in_review: { type: string, pattern: '^[0-9]{1,20}$' }
+        site:
+          type: object
+          additionalProperties: false
+          required: [timezone, pageviews, visitors, downloads]
+          properties:
+            timezone: { type: string, const: "Asia/Kuala_Lumpur" }
+            pageviews:
+              type: object
+              additionalProperties: false
+              required: [today, history]
+              properties:
+                today: { type: string, pattern: '^[0-9]{1,20}$' }
+                history: { type: string, pattern: '^[0-9]{1,20}$' }
+            visitors:
+              type: object
+              additionalProperties: false
+              required: [today, history]
+              properties:
+                today: { type: string, pattern: '^[0-9]{1,20}$' }
+                history: { type: string, pattern: '^[0-9]{1,20}$' }
+            downloads:
+              type: object
+              additionalProperties: false
+              required: [android, windows, android_legacy]
+              properties:
+                android: { $ref: '#/components/schemas/DashboardSiteDownload' }
+                windows: { $ref: '#/components/schemas/DashboardSiteDownload' }
+                android_legacy: { $ref: '#/components/schemas/DashboardSiteDownload' }
         observed_at: { type: string, format: date-time }
+    DashboardSiteDownload:
+      type: object
+      additionalProperties: false
+      required: [today, week, month, previous_month, history]
+      properties:
+        today: { type: string, pattern: '^[0-9]{1,20}$' }
+        week: { type: string, pattern: '^[0-9]{1,20}$' }
+        month: { type: string, pattern: '^[0-9]{1,20}$' }
+        previous_month: { type: string, pattern: '^[0-9]{1,20}$' }
+        history: { type: string, pattern: '^[0-9]{1,20}$' }
     ManagedDeviceOverviewPage:
       type: object
       additionalProperties: false

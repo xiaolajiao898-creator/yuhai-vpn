@@ -19,7 +19,10 @@ class NodeItem {
       this.probeHost,
       this.probePort,
       required this.protocols,
-      this.supportsUdp});
+      this.supportsUdp,
+      this.onlineCount,
+      this.capacityUsers,
+      this.saturated});
   final String id, name, countryCode, city, region;
   final bool available, isRecommended;
   final String? lockedReason, probeHost;
@@ -28,6 +31,19 @@ class NodeItem {
 
   /// 仅出口有此信息：该出口是否支持 UDP（HTTP/HTTPS 代理恒为否）。WireGuard 节点为 null。
   final bool? supportsUdp;
+
+  /// 节点心跳上报的在线数和容量。出口没有心跳，容量为 0 表示未设上限。
+  final int? onlineCount;
+  final int? capacityUsers;
+  final bool? saturated;
+
+  bool get isSaturated {
+    if (saturated == true) return true;
+    final cap = capacityUsers;
+    final online = onlineCount;
+    if (cap == null || online == null) return false;
+    return cap > 0 && online >= cap;
+  }
 
   /// 出口（Xray 内核）编号以 e 开头，与 WireGuard 节点的纯数字编号区分，客户端据此选择引擎。
   bool get isEgress => id.startsWith('e');
@@ -58,6 +74,7 @@ class NodeItem {
       'region',
       'protocol',
       'supports_udp',
+      'capacity_users',
       'available',
       'locked_reason'
     };
@@ -73,6 +90,9 @@ class NodeItem {
         protocol is! String ||
         protocol.length > 32 ||
         j['supports_udp'] is! bool ||
+        j['capacity_users'] is! int ||
+        j['capacity_users'] < 0 ||
+        j['capacity_users'] > 1000000 ||
         j['available'] is! bool ||
         (j['locked_reason'] != null && !text(j['locked_reason'], 32)) ||
         (j['available'] == true && j['locked_reason'] != null) ||
@@ -93,7 +113,8 @@ class NodeItem {
             : (j['available'] == true ? 'PLATFORM' : j['locked_reason']),
         isRecommended: false,
         protocols: available ? List<String>.unmodifiable([protocol]) : const [],
-        supportsUdp: j['supports_udp']);
+        supportsUdp: j['supports_udp'],
+        capacityUsers: j['capacity_users'] as int);
   }
 
   static NodeItem fromJson(Map<String, dynamic> j, {bool allowMock = false}) {
@@ -140,6 +161,20 @@ class NodeItem {
     final reason = j['locked_reason'];
     final load = j['load'];
     final probe = j['probe'];
+    int? count(dynamic value) {
+      if (value == null) return null;
+      if (value is! int || value < 0 || value > 1000000) {
+        throw const FormatException('节点负载资料无效');
+      }
+      return value;
+    }
+
+    final online = count(j['online_count']);
+    final capacity = count(j['capacity_users']);
+    final saturatedFlag = j['saturated'];
+    if (saturatedFlag != null && saturatedFlag is! bool) {
+      throw const FormatException('节点负载资料无效');
+    }
     if ((reason != null && !text(reason, 32)) ||
         (load != null && (load is! int || load < 0 || load > 100)) ||
         (available &&
@@ -168,7 +203,10 @@ class NodeItem {
         isRecommended: j['is_recommended'],
         probeHost: available ? probe['host'] : null,
         probePort: available ? probe['port'] : null,
-        protocols: List<String>.unmodifiable(protocols));
+        protocols: List<String>.unmodifiable(protocols),
+        onlineCount: available ? online : null,
+        capacityUsers: available ? capacity : null,
+        saturated: available ? saturatedFlag as bool? : null);
   }
 }
 

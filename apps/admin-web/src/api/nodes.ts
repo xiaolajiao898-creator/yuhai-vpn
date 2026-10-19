@@ -12,7 +12,7 @@ export type NodeQuery={page:number;page_size:number;search?:string;status?:NodeS
 export type NodePage={items:ManagedNode[];total:string;page:number;page_size:number;observed_at:string};
 export type NodeInbound={id:string;protocol:'VLESS_REALITY'|'TROJAN'|'SS2022'|'WIREGUARD'|'HYSTERIA2';port:number;priority:number;status:'ENABLED'|'DISABLED'};
 export type NodeDetail={node:ManagedNode;inbounds:NodeInbound[];observed_at:string;sync_status:'UNAVAILABLE'};
-export type NodeSource={list(query:NodeQuery,signal?:AbortSignal):Promise<NodePage>;get(id:string,signal?:AbortSignal):Promise<NodeDetail>};
+export type NodeSource={list(query:NodeQuery,signal?:AbortSignal):Promise<NodePage>;get(id:string,signal?:AbortSignal):Promise<NodeDetail>;updateCapacity(id:string,capacity:number):Promise<ManagedNode>};
 const invalid=()=>new Error('节点资料返回不完整，请重新查询');
 const object=(v:unknown):v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
 const exact=(v:Record<string,unknown>,keys:string[])=>Object.keys(v).length===keys.length&&Object.keys(v).every(k=>keys.includes(k));
@@ -84,6 +84,11 @@ export const liveNodeSource:NodeSource={
     return readNodePage(await adminApi.get(`/nodes?${params}`,signal),q);
   },
   get:async(id,signal)=>{if(!validUserID(id))throw new Error('节点编号无效');return readNodeDetail(await adminApi.get(`/nodes/${id}`,signal),id);},
+  updateCapacity:async(id,capacity)=>{
+    if(!validUserID(id)||!Number.isInteger(capacity)||capacity<0||capacity>1000000)throw new Error('容量应在 0–1000000，0 表示不按连接数判满');
+    const observed=new Date().toISOString();
+    return readManagedNode(await adminApi.patch(`/nodes/${id}`,{operation_id:crypto.randomUUID(),capacity_users:capacity}),observed);
+  },
 };
 export async function boundedNodeRead<T>(read:(signal:AbortSignal)=>Promise<T>,signal:AbortSignal,timeoutMs=12000):Promise<T> {
   if(signal.aborted)throw new DOMException('请求已取消','AbortError');

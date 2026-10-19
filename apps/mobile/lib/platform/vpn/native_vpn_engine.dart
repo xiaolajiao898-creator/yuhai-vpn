@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'egress_profile.dart';
@@ -228,6 +230,58 @@ class NativeVpnEngine implements WireGuardVpnEngine {
           : null;
     } catch (_) {
       return null;
+    }
+  }
+
+  @override
+  bool get canRecover => !kIsWeb && Platform.isAndroid;
+
+  @override
+  Future<void> applyPolicy({required bool leakProtect}) async {
+    if (!canRecover) return;
+    try {
+      await _invoke<void>('setLeakProtect', {'enabled': leakProtect});
+    } catch (_) {}
+  }
+
+  @override
+  Future<int?> probeTunnel() async {
+    if (!canRecover) return null;
+    try {
+      final result = await _invoke<int>('probeTunnel', {})
+          .timeout(const Duration(seconds: 8));
+      if (result == null || result < 0 || result > 15000) return null;
+      return result;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<bool> holdTraffic() async {
+    if (!canRecover) return false;
+    try {
+      return await _invoke<bool>('holdTraffic', {}) == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<void> releaseTraffic() async {
+    if (!canRecover) return;
+    try {
+      await _invoke<void>('releaseTraffic', {});
+    } catch (_) {}
+  }
+
+  @override
+  Future<int> networkEpoch() async {
+    if (!canRecover) return 0;
+    try {
+      return await _invoke<int>('networkEpoch', {}) ?? 0;
+    } catch (_) {
+      return 0;
     }
   }
 

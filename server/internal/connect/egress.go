@@ -25,15 +25,16 @@ import (
 
 // EgressView 是 App 列表里的一条出口。不含主机、端口与任何凭据。
 type EgressView struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	CountryCode  string  `json:"country_code"`
-	City         string  `json:"city"`
-	Region       string  `json:"region"`
-	Protocol     string  `json:"protocol"`
-	SupportsUDP  bool    `json:"supports_udp"`
-	Available    bool    `json:"available"`
-	LockedReason *string `json:"locked_reason"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+	CountryCode   string  `json:"country_code"`
+	City          string  `json:"city"`
+	Region        string  `json:"region"`
+	Protocol      string  `json:"protocol"`
+	SupportsUDP   bool    `json:"supports_udp"`
+	CapacityUsers int     `json:"capacity_users"`
+	Available     bool    `json:"available"`
+	LockedReason  *string `json:"locked_reason"`
 }
 
 // EgressProfile 是下发给设备的连接材料。Config 是交给 Xray 内核的完整 JSON，原样使用。
@@ -98,7 +99,7 @@ func (s *Service) EgressList(ctx context.Context, userID int64) ([]EgressView, e
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.Query(ctx, `SELECT id,name,COALESCE(country_code,''),city,region,protocol,supports_udp,min_tier
+	rows, err := tx.Query(ctx, `SELECT id,name,COALESCE(country_code,''),city,region,protocol,supports_udp,capacity_users,min_tier
  FROM egress_endpoints WHERE status='ENABLED' ORDER BY min_tier,sort_order,id LIMIT 1001`)
 	if err != nil {
 		return nil, err
@@ -109,7 +110,7 @@ func (s *Service) EgressList(ctx context.Context, userID int64) ([]EgressView, e
 		var v EgressView
 		var id int64
 		var minTier int
-		if err := rows.Scan(&id, &v.Name, &v.CountryCode, &v.City, &v.Region, &v.Protocol, &v.SupportsUDP, &minTier); err != nil {
+		if err := rows.Scan(&id, &v.Name, &v.CountryCode, &v.City, &v.Region, &v.Protocol, &v.SupportsUDP, &v.CapacityUsers, &minTier); err != nil {
 			return nil, err
 		}
 		if len(out) >= 1000 {

@@ -61,6 +61,23 @@ abstract interface class VpnEngine {
   /// 到节点探测端口的 TCP 连接耗时（毫秒），失败返回 null
   Future<int?> probe(String host, int port,
       {Duration timeout = const Duration(seconds: 2)});
+
+  /// 连接成功后才允许自动重连。模拟引擎保持关闭，避免测试里空转。
+  bool get canRecover => false;
+
+  Future<void> applyPolicy({required bool leakProtect}) async {}
+
+  /// 经当前隧道的轻量探测。失败返回 null。
+  Future<int?> probeTunnel() async => null;
+
+  /// 拦住本地网络。返回 false 表示保护没有真正打开。
+  Future<bool> holdTraffic() async => false;
+
+  /// 只有用户点「断开」才调用，恢复本地网络。
+  Future<void> releaseTraffic() async {}
+
+  /// 系统网络变化的代数。没有这个能力时保持 0。
+  Future<int> networkEpoch() async => 0;
 }
 
 /// Native engines keep each account/device's private key inside native storage.

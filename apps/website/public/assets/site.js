@@ -6,9 +6,9 @@
   var android = /Android/i.test(ua);
   var windows = /Windows NT/i.test(ua);
   var direct = android
-    ? '/download/yuhai-vpn-candidate-0928.apk'
+    ? 'https://api.yhvpn.io/v1/site/downloads/android'
     : windows
-      ? '/download/YuhaiVPN-Windows-x64-candidate.exe'
+      ? 'https://api.yhvpn.io/v1/site/downloads/windows'
       : '';
   if (direct) {
     var primary = document.getElementById('primary-download');

@@ -139,12 +139,13 @@ function ImportDialog({source,onClose}:{source:EgressSource;onClose:(changed:boo
 }
 
 function EditDrawer({source,item,onClose}:{source:EgressSource;item:EgressItem;onClose:(changed:boolean)=>void}){
-  const [form,setForm]=useState({name:item.name,country_code:item.country_code,city:item.city,region:item.region,min_tier:item.min_tier,supports_udp:item.supports_udp});
+  const [form,setForm]=useState({name:item.name,country_code:item.country_code,city:item.city,region:item.region,min_tier:item.min_tier,supports_udp:item.supports_udp,capacity_users:item.capacity_users});
   const [error,setError]=useState(''),[saving,setSaving]=useState(false);
   const change=useMemo(()=>{const c:EgressUpdate={};
     if(form.name!==item.name)c.name=form.name.trim();if(form.country_code!==item.country_code)c.country_code=form.country_code;
     if(form.city!==item.city)c.city=form.city;if(form.region!==item.region)c.region=form.region;if(form.min_tier!==item.min_tier)c.min_tier=form.min_tier;
-    if(form.supports_udp!==item.supports_udp)c.supports_udp=form.supports_udp;return c;},[form,item]);
+    if(form.supports_udp!==item.supports_udp)c.supports_udp=form.supports_udp;
+    if(form.capacity_users!==item.capacity_users)c.capacity_users=form.capacity_users;return c;},[form,item]);
   const [op]=useState(newOp);
   const save=useCallback(async()=>{
     if(!Object.keys(change).length){onClose(false);return;}
@@ -158,6 +159,7 @@ function EditDrawer({source,item,onClose}:{source:EgressSource;item:EgressItem;o
       <div className="two"><label>国家代码<Input value={form.country_code} maxLength={2} onChange={e=>setForm({...form,country_code:e.target.value.toUpperCase()})}/></label><label>城市<Input value={form.city} maxLength={64} onChange={e=>setForm({...form,city:e.target.value})}/></label></div>
       <label>地区分组<Select value={form.region} onChange={v=>setForm({...form,region:v})} options={[{value:'',label:'不设置'},{value:'ASIA',label:'亚洲'},{value:'AMERICAS',label:'美洲'},{value:'EUROPE',label:'欧洲'},{value:'OCEANIA',label:'大洋洲'}]}/></label>
       <label>最低套餐等级<InputNumber min={1} max={9} value={form.min_tier} onChange={v=>setForm({...form,min_tier:Number(v??1)})}/></label>
+      <label>人数上限<InputNumber min={0} max={1000000} value={form.capacity_users} onChange={v=>setForm({...form,capacity_users:Number(v??0)})}/><span className="muted">0 表示不设上限。出口没有心跳，这里不是在线人数。</span></label>
       <Checkbox checked={form.supports_udp} disabled={item.protocol!=='SOCKS5'} onChange={e=>setForm({...form,supports_udp:e.target.checked})}>支持 UDP{item.protocol!=='SOCKS5'&&'（由协议决定，不能修改）'}</Checkbox>
       <p className="muted">地址、端口与凭据不能在这里修改：请用「批量导入」并勾选「已存在的出口用新内容覆盖」。</p>
       {error&&<Alert type="error" showIcon message={error}/>}

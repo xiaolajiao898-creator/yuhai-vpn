@@ -4,7 +4,7 @@ export const release = {
   build: 110,
   date: '2026-09-27',
   sizeMb: 78,
-  apk: '/download/yuhai-vpn-1.1.0.apk',
+  apk: 'https://api.yhvpn.io/v1/site/downloads/android-legacy',
   sha256: '3a681b3461f03676543437f07d4c590fb4424e3165c028d9dd335a73bcbd1080',
   certSha256: 'e8499d4722651046d88093586845e999b1db04a350f5c139a05cbfc7c4e9eafe',
   minAndroid: 'Android 8.0',

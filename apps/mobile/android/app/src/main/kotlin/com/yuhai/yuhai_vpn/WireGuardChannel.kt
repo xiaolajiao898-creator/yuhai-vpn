@@ -1,8 +1,13 @@
 package com.yuhai.yuhai_vpn
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
 import android.net.VpnService
+import android.provider.Settings
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -19,8 +24,10 @@ import com.wireguard.crypto.KeyPair
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.URL
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.time.Instant
@@ -54,10 +61,12 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
     private var lastMono = 0L
     private var lastRx = 0L
     private var lastTx = 0L
-    private var connected = false
+    @Volatile private var connected = false
     @Volatile private var disposed = false
     private var xrayUp = false
     private var xraySamples = 0
+    private val networkEpoch = AtomicLong(0)
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     init {
         // 被系统或其他 VPN 应用接管：如实报告，不自动抢回。
@@ -68,6 +77,21 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                     if (xrayUp && id != null) { try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }; event(gen, id, mapOf("type" to "error", "code" to "VPN_REVOKED")) }
                 }
             } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) } // 执行器已关闭（页面已销毁）：隧道已随之停止
+        }
+        watchNetwork()
+    }
+
+    private fun watchNetwork() {
+        try {
+            val cm = activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) { networkEpoch.incrementAndGet() }
+                override fun onLost(network: Network) { networkEpoch.incrementAndGet() }
+            }
+            networkCallback = callback
+            cm.registerDefaultNetworkCallback(callback)
+        } catch (t: Throwable) {
+            NativeFailures.rethrowIfFatal(t)
         }
     }
 
@@ -125,6 +149,46 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                 if (!WireGuardPolicy.host(host) || port !in 1..65535 || timeout !in 1..5000) { result.success(null); return }
                 probes.execute { val start=SystemClock.elapsedRealtime(); try { Socket().use { it.connect(InetSocketAddress(host,port),timeout) };success(result,SystemClock.elapsedRealtime()-start) } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); success(result,null) } }
             }
+            "setLeakProtect" -> {
+                XrayTunnel.leakProtect = call.argument<Boolean>("enabled") == true
+                result.success(null)
+            }
+            "probeTunnel" -> probes.execute {
+                val ms = when {
+                    XrayTunnel.running -> XrayTunnel.probe()
+                    tunnel != null && connected -> httpsThroughTunnel()
+                    else -> null
+                }
+                success(result, ms)
+            }
+            "holdTraffic" -> executor.execute {
+                try { success(result, XrayTunnel.hold(activity.applicationContext)) }
+                catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); success(result, false) }
+            }
+            "releaseTraffic" -> executor.execute {
+                try { stop(); identity = null; success(result, null) }
+                catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); failure(result, "DISCONNECT_FAILED") }
+            }
+            "networkEpoch" -> result.success(networkEpoch.get())
+            "lockdownState" -> {
+                val svc = XrayTunnel.serviceOrNull()
+                if (svc == null) {
+                    result.success(mapOf("running" to false, "alwaysOn" to false, "lockdown" to false))
+                } else {
+                    val alwaysOn = Build.VERSION.SDK_INT >= 24 && svc.isAlwaysOn
+                    val lockdown = Build.VERSION.SDK_INT >= 29 && svc.isLockdownEnabled
+                    result.success(mapOf("running" to true, "alwaysOn" to alwaysOn, "lockdown" to lockdown))
+                }
+            }
+            "openVpnSettings" -> {
+                try {
+                    activity.startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
+                    result.success(true)
+                } catch (t: Throwable) {
+                    NativeFailures.rethrowIfFatal(t)
+                    result.success(false)
+                }
+            }
             else -> result.notImplemented()
         }
     }
@@ -136,7 +200,35 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
         try { tunnel?.let { backend.setState(it,Tunnel.State.DOWN,null) } }
         finally {
             tunnel=null;peerKey=null;connected=false
-            if (xrayUp) { xrayUp=false; XrayTunnel.stop(activity.applicationContext) }
+            xrayUp=false
+            XrayTunnel.stop(activity.applicationContext)
+        }
+    }
+    /** 重连：保护开启时先架黑洞再拆当前隧道。用户点断开才走 stop。 */
+    private fun pauseForReconnect() {
+        if (!XrayTunnel.leakProtect) { stop(); return }
+        try { XrayTunnel.hold(activity.applicationContext) } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+        try { tunnel?.let { backend.setState(it, Tunnel.State.DOWN, null) } } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+        tunnel = null
+        peerKey = null
+        connected = false
+        xrayUp = false
+    }
+    /** 只在 WireGuard 隧道已经起来时调用。本应用流量会进隧道，不会走物理网卡。 */
+    private fun httpsThroughTunnel(): Long? {
+        val start = SystemClock.elapsedRealtime()
+        return try {
+            val conn = URL("https://www.gstatic.com/generate_204").openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = false
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.requestMethod = "GET"
+            val code = conn.responseCode
+            conn.disconnect()
+            if (code == 204 || code == 200) SystemClock.elapsedRealtime() - start else null
+        } catch (t: Throwable) {
+            NativeFailures.rethrowIfFatal(t)
+            null
         }
     }
     private fun connectXray(call: MethodCall, result: MethodChannel.Result, gen: Long) {
@@ -145,7 +237,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             val profile = try { XrayPolicy.parse(call.arguments as? Map<*, *> ?: emptyMap<Any,Any>(), System.currentTimeMillis()) }
                 catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); failure(result,"PROFILE_INVALID"); return }
             if (VpnService.prepare(activity) != null) { failure(result,"PERMISSION_DENIED"); return }
-            stop()
+            pauseForReconnect()
             if (gen != generation.get()) { failure(result,"CONNECT_FAILED"); return }
             val id = profile.identity
             identity=id;startedAt=System.currentTimeMillis();startedMono=SystemClock.elapsedRealtime();lastMono=startedMono;lastRx=0;lastTx=0;xraySamples=0
@@ -158,7 +250,8 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             main.postDelayed({ sampleXray(gen,id) },1000)
         } catch (t: Throwable) {
             NativeFailures.rethrowIfFatal(t)
-            try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+            try { if (XrayTunnel.leakProtect) XrayTunnel.hold(activity.applicationContext) else stop() }
+            catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
             failure(result, NativeFailures.code(t))
         }
     }
@@ -177,7 +270,9 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                     connected = true; startedMono = SystemClock.elapsedRealtime()
                     event(gen,id,mapOf("type" to "status","status" to "connected","handshakeConfirmed" to true,"handshakeAt" to Instant.ofEpochMilli(now).toString()))
                 } else {
-                    try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+                    try {
+                        if (XrayTunnel.leakProtect) XrayTunnel.hold(activity.applicationContext) else stop()
+                    } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
                     event(gen,id,mapOf("type" to "error","code" to "HANDSHAKE_TIMEOUT"))
                 }
             }
@@ -191,7 +286,9 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             try {
                 if (gen != generation.get() || !xrayUp) return@execute
                 if (!XrayTunnel.running) {
-                    try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+                    try {
+                        if (XrayTunnel.leakProtect) XrayTunnel.hold(activity.applicationContext) else stop()
+                    } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
                     event(gen,id,mapOf("type" to "error","code" to "NETWORK_UNAVAILABLE")); return@execute
                 }
                 val (up, down) = XrayTunnel.traffic()
@@ -200,10 +297,10 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                     val mono = SystemClock.elapsedRealtime(); val delta = (mono - lastMono).coerceAtLeast(1)
                     event(gen,id,mapOf("type" to "stats","upBytes" to lastTx,"downBytes" to lastRx,"upSpeed" to up*1000/delta,"downSpeed" to down*1000/delta,"since" to startedAt))
                     lastMono = mono
-                    // 每分钟经出口复核一次；连不上就如实进入「重连中」，恢复后重新确认。
-                    if (++xraySamples % 60 == 0) try { probes.execute {
+                    // 大约每 20 秒经出口复核。保护开启时不拆接口，交给 Dart 决定重连。
+                    if (++xraySamples % 20 == 0) try { probes.execute {
                         if (XrayTunnel.probe() == null) later {
-                            if (gen == generation.get() && xrayUp && connected) {
+                            if (gen == generation.get() && xrayUp && connected && !XrayTunnel.leakProtect) {
                                 connected = false; startedAt = System.currentTimeMillis()
                                 event(gen,id,mapOf("type" to "status","status" to "reconnecting"))
                                 confirmXray(gen,id)
@@ -214,7 +311,8 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                 main.postDelayed({ sampleXray(gen,id) },1000)
             } catch (t: Throwable) {
                 NativeFailures.rethrowIfFatal(t)
-                try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+                try { if (XrayTunnel.leakProtect) XrayTunnel.hold(activity.applicationContext) else stop() }
+                catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
                 val code = if (NativeFailures.code(t) == "ENGINE_NATIVE") "ENGINE_NATIVE" else "NETWORK_UNAVAILABLE"
                 event(gen,id,mapOf("type" to "error","code" to code))
             }
@@ -237,7 +335,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             // Route both families into the tunnel: IPv6 cannot silently bypass it.
             val peer=Peer.Builder().setPublicKey(key).parseEndpoint(endpoint).parseAllowedIPs("0.0.0.0/0, ::/0").setPersistentKeepalive(25).build()
             val config=Config.Builder().setInterface(iface).addPeer(peer).build()
-            stop()
+            pauseForReconnect()
             if(gen != generation.get() || expires<=System.currentTimeMillis()) { failure(result,"PROFILE_EXPIRED"); return }
             identity=id;startedAt=System.currentTimeMillis();startedMono=SystemClock.elapsedRealtime();lastMono=startedMono;lastRx=0;lastTx=0
             val current=object: Tunnel {
@@ -254,7 +352,10 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             main.postDelayed({ sample(gen,id,current) },1000)
         } catch (t: Throwable) {
             NativeFailures.rethrowIfFatal(t)
-            if(owned!=null && tunnel===owned) { try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) } }
+            if(owned!=null && tunnel===owned) {
+                try { if (XrayTunnel.leakProtect) XrayTunnel.hold(activity.applicationContext) else stop() }
+                catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+            }
             failure(result, NativeFailures.code(t))
         }
     }
@@ -273,11 +374,16 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                     event(gen,id,mapOf("type" to "stats","upBytes" to tx,"downBytes" to rx,"upSpeed" to ((tx-lastTx).coerceAtLeast(0)*1000/delta),"downSpeed" to ((rx-lastRx).coerceAtLeast(0)*1000/delta),"since" to startedAt))
                     lastRx=rx;lastTx=tx;lastMono=mono
                 }
-                if(!connected && mono-startedMono>30000) { stop();event(gen,id,mapOf("type" to "error","code" to "HANDSHAKE_TIMEOUT"));return@execute }
-                if(connected && handshake>0 && now-handshake>180000) { connected=false;startedMono=mono;startedAt=now;event(gen,id,mapOf("type" to "status","status" to "reconnecting")) }
+                if(!connected && mono-startedMono>30000) {
+                    try { if (XrayTunnel.leakProtect) XrayTunnel.hold(activity.applicationContext) else stop() }
+                    catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+                    event(gen,id,mapOf("type" to "error","code" to "HANDSHAKE_TIMEOUT"));return@execute
+                }
+                if(connected && handshake>0 && now-handshake>180000 && !XrayTunnel.leakProtect) { connected=false;startedMono=mono;startedAt=now;event(gen,id,mapOf("type" to "status","status" to "reconnecting")) }
             } catch (t: Throwable) {
                 NativeFailures.rethrowIfFatal(t)
-                try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+                try { if (XrayTunnel.leakProtect) XrayTunnel.hold(activity.applicationContext) else stop() }
+                catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
                 val code = if (NativeFailures.code(t) == "ENGINE_NATIVE") "ENGINE_NATIVE" else "NETWORK_UNAVAILABLE"
                 event(gen,id,mapOf("type" to "error","code" to code));return@execute
             }
@@ -313,6 +419,13 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
     fun dispose() {
         disposed=true;generation.incrementAndGet();permission?.success(false);permission=null;sink=null
         XrayTunnel.onRevoked = null
+        networkCallback?.let { callback ->
+            try {
+                val cm = activity.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                cm.unregisterNetworkCallback(callback)
+            } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+        }
+        networkCallback = null
         executor.execute { try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) } };executor.shutdown();probes.shutdownNow()
     }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme/tokens.dart';
@@ -64,11 +65,28 @@ class _ConnectionSettingsPageState
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('断网保护', style: Theme.of(context).textTheme.headlineMedium),
             const SizedBox(height: 8),
-            const Text('这个版本还不能在 VPN 断开后自动拦住其他流量。安卓可以在系统设置里打开：'),
+            Text(kKillSwitchEnforced
+                ? '系统的「始终开启 VPN」已由应用打开。'
+                : '应用自己不会改系统的「始终开启 VPN」。重连时会尽量把流量留在 VPN 接口里；进程被系统杀掉之后，只有下面这两项能继续拦住。'),
             const SizedBox(height: 8),
-            const Text('设置 → 网络和互联网 → VPN → 宇海VPN → 始终开启 VPN，并打开「阻断没有 VPN 的连接」。'),
+            const Text('安卓：设置 → 网络和互联网 → VPN → 宇海VPN → 打开「始终开启 VPN」和「无 VPN 时阻止连接」。'),
             const SizedBox(height: 8),
-            const Text('Windows 版暂时没有这个开关。'),
+            const Text('IPv6 和 DNS 会进隧道；隧道还在、内核已停时，这些包会被丢掉，不会改走本地网络。'),
+            const SizedBox(height: 8),
+            const Text('Windows：用防火墙拦住除本程序和 xray 以外的 IPv4/IPv6 出站。规则随进程退出消失。DHCP 仍可能走本地。请用管理员身份运行。'),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton(
+                onPressed: () async {
+                  try {
+                    await const MethodChannel('yuhai/vpn')
+                        .invokeMethod<bool>('openVpnSettings');
+                  } catch (_) {}
+                },
+                child: const Text('打开系统 VPN 设置'),
+              ),
+            ),
           ]),
         ),
       ),
@@ -193,12 +211,46 @@ class _ConnectionSettingsPageState
                       },
               ),
               const Divider(height: 1),
+              SwitchListTile(
+                key: const ValueKey('auto-recover'),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: YhSpace.panel, vertical: 4),
+                title: const Text('自动重连并切换线路'),
+                subtitle: const Text('掉线、卡死或切换 Wi-Fi / 移动数据时重连。当前线路不行，就改到同一国家或地区的其他线路'),
+                value: data.autoRecover,
+                onChanged: _saving
+                    ? null
+                    : (value) {
+                        final controller =
+                            ref.read(connectionPreferencesProvider.notifier);
+                        _save(() => controller.setAutoRecover(value),
+                            message: '自动重连已保存');
+                      },
+              ),
+              const Divider(height: 1),
+              SwitchListTile(
+                key: const ValueKey('leak-protect'),
+                contentPadding: const EdgeInsets.symmetric(
+                    horizontal: YhSpace.panel, vertical: 4),
+                title: const Text('断网保护'),
+                subtitle: const Text('重连期间拦住本地网络。只有点「断开」才恢复。默认开启'),
+                value: data.leakProtect,
+                onChanged: _saving
+                    ? null
+                    : (value) {
+                        final controller =
+                            ref.read(connectionPreferencesProvider.notifier);
+                        _save(() => controller.setLeakProtect(value),
+                            message: '断网保护已保存');
+                      },
+              ),
+              const Divider(height: 1),
               ListTile(
                 key: const ValueKey('kill-switch-guidance'),
-                title: const Text('断网保护'),
+                title: const Text('系统里的断网保护'),
                 subtitle: const Text(kKillSwitchEnforced
                     ? '隧道意外断开时阻断其他流量'
-                    : '这个版本还不能强制断网。点「说明」看系统里怎么开'),
+                    : '应用拦不住进程被杀之后的流量。点「说明」看系统里怎么开'),
                 trailing: const Text('说明'),
                 onTap: () => _killSwitchHelp(context),
               ),

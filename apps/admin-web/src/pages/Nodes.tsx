@@ -1,5 +1,5 @@
 import {useCallback,useEffect,useMemo,useState} from 'react';
-import {Alert,Button,Descriptions,Drawer,Empty,Input,Progress,Select,Spin,Table,Tag} from 'antd';
+import {Alert,Button,Descriptions,Drawer,Empty,Input,InputNumber,Progress,Select,Space,Spin,Table,Tag} from 'antd';
 import {CloudServerOutlined,GlobalOutlined,ReadOutlined,ReloadOutlined,SearchOutlined} from '@ant-design/icons';
 import type {AdminSession} from '../api/client';
 import {boundedNodeRead,nodeQueryProblem,readNodeDetail,readNodePage,type ManagedNode,type NodeDetail,type NodePage,type NodeQuery,type NodeSource,type NodeStatus,type HeartbeatState} from '../api/nodes';
@@ -12,6 +12,18 @@ const heartbeatLabels:Record<HeartbeatState,string>={FRESH:'心跳正常',STALE:
 const heartbeatColors:Record<HeartbeatState,string>={FRESH:'green',STALE:'orange',NEVER:'default',CLOCK_SKEW:'red'};
 const countryLabels:Record<string,string>={HK:'香港',JP:'日本',SG:'新加坡',US:'美国',DE:'德国',TW:'台湾',KR:'韩国',GB:'英国',CA:'加拿大',AU:'澳大利亚'};
 const regionLabels:Record<string,string>={ASIA:'亚洲',EUROPE:'欧洲',AMERICAS:'美洲',OCEANIA:'大洋洲',AFRICA:'非洲'};
+function CapacityEditor({source,node,canWrite,onSaved}:{source:NodeSource;node:ManagedNode;canWrite:boolean;onSaved:()=>void}){
+  const [value,setValue]=useState(node.capacity_users),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  if(!canWrite)return <span className="numeric">{node.online_count} / {node.capacity_users}</span>;
+  return <div>
+    <Space wrap>
+      <InputNumber min={0} max={1000000} value={value} onChange={v=>setValue(Number(v??0))}/>
+      <Button loading={busy} onClick={()=>{setBusy(true);setError('');source.updateCapacity(node.id,value).then(()=>onSaved()).catch(e=>setError(e instanceof Error?e.message:'没有保存')).finally(()=>setBusy(false));}}>保存容量</Button>
+    </Space>
+    <div className="cell-sub">最近上报 {node.last_heartbeat_at===null?'—':node.online_count} 人。0 表示不按连接数判满。改的是登记上限，不会断开已有连接。</div>
+    {error&&<Alert type="error" showIcon message={error} style={{marginTop:8}}/>}
+  </div>;
+}
 function useNodeRead<T>(key:string|undefined,read:(signal:AbortSignal)=>Promise<T>){
   const [state,setState]=useState<ReadState<T>>();
   const channel=useMemo(()=>createLatestRead<T>(setState),[]);
@@ -76,6 +88,7 @@ export function NodesPage({source,session}:{source:NodeSource;session:AdminSessi
           {key:'group',label:'节点分组',children:`${detail.node.group.name} · 等级 ${detail.node.group.min_tier} 起`},
           {key:'status',label:'配置状态',children:statusLabels[detail.node.status]},
           {key:'heartbeat',label:'最后心跳',children:detail.node.last_heartbeat_at?userTime(detail.node.last_heartbeat_at):'尚无心跳记录'},
+          {key:'capacity',label:'连接容量',children:<CapacityEditor source={source} node={detail.node} canWrite={session.permissions.includes('nodes.write')} onSaved={()=>setDetailRefresh(x=>x+1)}/>},
           {key:'agent',label:'节点程序版本',children:detail.node.agent_version||'尚无版本记录'},
           {key:'updated',label:'资料更新',children:userTime(detail.node.updated_at)},
           {key:'observed',label:'本次读取',children:userTime(detail.observed_at)},

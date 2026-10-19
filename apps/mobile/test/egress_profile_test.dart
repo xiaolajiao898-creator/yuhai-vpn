@@ -151,6 +151,7 @@ void main() {
           'region': 'ASIA',
           'protocol': 'SOCKS5',
           'supports_udp': true,
+          'capacity_users': 0,
           'available': true,
           'locked_reason': null,
           ...patch,

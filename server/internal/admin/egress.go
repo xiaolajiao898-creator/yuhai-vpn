@@ -180,6 +180,7 @@ type EgressItem struct {
 	Region         string            `json:"region"`
 	Kind           string            `json:"kind"`
 	SupportsUDP    bool              `json:"supports_udp"`
+	CapacityUsers  int               `json:"capacity_users"`
 	IdentityHint   string            `json:"identity_hint"`
 	Params         map[string]string `json:"params"`
 	MinTier        int               `json:"min_tier"`
@@ -226,7 +227,7 @@ func (s *EgressService) List(ctx context.Context, p Principal, f EgressFilter) (
 		if e := tx.QueryRow(c, `SELECT count(*) FROM egress_endpoints WHERE `+where, f.Status, f.Protocol, f.CountryCode, f.Search).Scan(&total); e != nil {
 			return e
 		}
-		rows, e := tx.Query(c, `SELECT id,name,protocol,host,port,COALESCE(country_code,''),city,region,kind,supports_udp,
+		rows, e := tx.Query(c, `SELECT id,name,protocol,host,port,COALESCE(country_code,''),city,region,kind,supports_udp,capacity_users,
  identity_hint,params,min_tier,status,sort_order,source,subscription_id::text,created_at,updated_at
  FROM egress_endpoints WHERE `+where+` ORDER BY min_tier,sort_order,id LIMIT $5 OFFSET $6`,
 			f.Status, f.Protocol, f.CountryCode, f.Search, f.PageSize, (f.Page-1)*f.PageSize)
@@ -240,7 +241,7 @@ func (s *EgressService) List(ctx context.Context, p Principal, f EgressFilter) (
 			var id int64
 			var params []byte
 			if e = rows.Scan(&id, &it.Name, &it.Protocol, &it.Host, &it.Port, &it.CountryCode, &it.City, &it.Region, &it.Kind,
-				&it.SupportsUDP, &it.IdentityHint, &params, &it.MinTier, &it.Status, &it.SortOrder, &it.Source,
+				&it.SupportsUDP, &it.CapacityUsers, &it.IdentityHint, &params, &it.MinTier, &it.Status, &it.SortOrder, &it.Source,
 				&it.SubscriptionID, &it.CreatedAt, &it.UpdatedAt); e != nil {
 				return e
 			}
@@ -403,15 +404,16 @@ func (s *EgressService) Import(ctx context.Context, p ApprovalProof, in EgressIm
 // ---------- 修改 ----------
 
 type EgressUpdate struct {
-	OperationID string  `json:"operation_id"`
-	Name        *string `json:"name"`
-	Status      *string `json:"status"`
-	CountryCode *string `json:"country_code"`
-	City        *string `json:"city"`
-	Region      *string `json:"region"`
-	MinTier     *int    `json:"min_tier"`
-	SortOrder   *int    `json:"sort_order"`
-	SupportsUDP *bool   `json:"supports_udp"`
+	OperationID   string  `json:"operation_id"`
+	Name          *string `json:"name"`
+	Status        *string `json:"status"`
+	CountryCode   *string `json:"country_code"`
+	City          *string `json:"city"`
+	Region        *string `json:"region"`
+	MinTier       *int    `json:"min_tier"`
+	SortOrder     *int    `json:"sort_order"`
+	SupportsUDP   *bool   `json:"supports_udp"`
+	CapacityUsers *int    `json:"capacity_users"`
 }
 
 func (s *EgressService) Update(ctx context.Context, p ApprovalProof, rawID string, in EgressUpdate) (json.RawMessage, error) {
@@ -420,7 +422,7 @@ func (s *EgressService) Update(ctx context.Context, p ApprovalProof, rawID strin
 		return nil, err
 	}
 	if in.Name == nil && in.Status == nil && in.CountryCode == nil && in.City == nil && in.Region == nil &&
-		in.MinTier == nil && in.SortOrder == nil && in.SupportsUDP == nil {
+		in.MinTier == nil && in.SortOrder == nil && in.SupportsUDP == nil && in.CapacityUsers == nil {
 		return nil, badEgress("没有要修改的字段")
 	}
 	if in.Status != nil && *in.Status != egress.StatusEnabled && *in.Status != egress.StatusDisabled {
@@ -431,6 +433,9 @@ func (s *EgressService) Update(ctx context.Context, p ApprovalProof, rawID strin
 	}
 	if in.SortOrder != nil && (*in.SortOrder < -100000 || *in.SortOrder > 100000) {
 		return nil, badEgress("sort_order 超出范围")
+	}
+	if in.CapacityUsers != nil && (*in.CapacityUsers < 0 || *in.CapacityUsers > 1000000) {
+		return nil, badEgress("capacity_users 必须在 0–1000000，0 表示不设上限")
 	}
 	return s.write(ctx, p, actionEgressUpdate, in.OperationID, func(c context.Context, tx pgx.Tx, _ int64, now time.Time) (int64, any, error) {
 		st, err := egress.LoadForConnect(c, tx, s.Cipher, id)
@@ -463,8 +468,9 @@ func (s *EgressService) Update(ctx context.Context, p ApprovalProof, rawID strin
 			return 0, nil, badEgress(err.Error())
 		}
 		tag, err := tx.Exec(c, `UPDATE egress_endpoints SET name=$2,country_code=NULLIF($3,''),city=$4,region=$5,supports_udp=$6,
- status=COALESCE($7,status),min_tier=COALESCE($8,min_tier),sort_order=COALESCE($9,sort_order),updated_at=$10 WHERE id=$1`,
-			id, e.Name, e.CountryCode, e.City, e.Region, e.SupportsUDP, in.Status, in.MinTier, in.SortOrder, now)
+ status=COALESCE($7,status),min_tier=COALESCE($8,min_tier),sort_order=COALESCE($9,sort_order),
+ capacity_users=COALESCE($10,capacity_users),updated_at=$11 WHERE id=$1`,
+			id, e.Name, e.CountryCode, e.City, e.Region, e.SupportsUDP, in.Status, in.MinTier, in.SortOrder, in.CapacityUsers, now)
 		if err != nil {
 			return 0, nil, err
 		}
@@ -479,9 +485,9 @@ func (s *EgressService) Update(ctx context.Context, p ApprovalProof, rawID strin
 func (s *EgressService) item(c context.Context, tx pgx.Tx, id int64) (EgressItem, error) {
 	var it EgressItem
 	var params []byte
-	err := tx.QueryRow(c, `SELECT name,protocol,host,port,COALESCE(country_code,''),city,region,kind,supports_udp,
+	err := tx.QueryRow(c, `SELECT name,protocol,host,port,COALESCE(country_code,''),city,region,kind,supports_udp,capacity_users,
  identity_hint,params,min_tier,status,sort_order,source,subscription_id::text,created_at,updated_at FROM egress_endpoints WHERE id=$1`, id).
-		Scan(&it.Name, &it.Protocol, &it.Host, &it.Port, &it.CountryCode, &it.City, &it.Region, &it.Kind, &it.SupportsUDP,
+		Scan(&it.Name, &it.Protocol, &it.Host, &it.Port, &it.CountryCode, &it.City, &it.Region, &it.Kind, &it.SupportsUDP, &it.CapacityUsers,
 			&it.IdentityHint, &params, &it.MinTier, &it.Status, &it.SortOrder, &it.Source, &it.SubscriptionID, &it.CreatedAt, &it.UpdatedAt)
 	if err != nil {
 		return it, err
