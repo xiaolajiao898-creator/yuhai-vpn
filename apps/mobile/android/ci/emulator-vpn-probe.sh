@@ -51,6 +51,7 @@ dump_diagnostics() {
   adb shell dumpsys activity exit-info "$PKG" > "$OUT/exit-info.txt" || true
   adb shell ls /data/tombstones > "$OUT/tombstone-list.txt" 2>/dev/null || true
   adb pull /data/tombstones "$OUT/tombstones" >/dev/null 2>&1 || true
+  mkdir -p "$OUT/tombstones"
   find "$OUT/tombstones" -type d -empty -exec touch {}/.keep \;
 }
 
