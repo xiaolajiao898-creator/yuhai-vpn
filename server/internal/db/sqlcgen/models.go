@@ -729,8 +729,8 @@ type ReceiveAddress struct {
 	Network    string
 	Address    string
 	Label      pgtype.Text
-	Signature  string
-	SigKeyID   string
+	Signature  pgtype.Text
+	SigKeyID   pgtype.Text
 	ValidUntil time.Time
 	Status     string
 	ApprovalID pgtype.Int8

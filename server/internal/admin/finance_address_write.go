@@ -112,7 +112,7 @@ func (s *FinanceAddressService) SetReceiveAddressStatus(ctx context.Context, p A
 			// 它会立刻被跳过。与其让人以为启用成功了，不如直接说清楚。
 			if in.Status == "ACTIVE" && !entry.ValidUntil.After(now) {
 				return 0, nil, nil, nil, httpx.NewError(httpx.ErrBadRequest,
-					"该地址的签名有效期已过，启用后仍不会被分配；请先更新地址有效期")
+					"该地址的有效期已过，启用后仍不会被分配；请先更新地址有效期")
 			}
 			if _, e = tx.Exec(c, `UPDATE receive_addresses SET status=$2,updated_at=$3 WHERE id=$1`,
 				addressID, in.Status, now); e != nil {

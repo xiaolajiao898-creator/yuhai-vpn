@@ -37,6 +37,7 @@ func Fail(c *gin.Context, err error) {
 		// server error messages or details that may contain a wrapped secret.
 		messages := map[Code]string{
 			ErrInternal: "服务器内部错误", ErrNoAmountSlot: "暂时没有可用收款通道",
+			ErrPayQueueFull:    "99 个付款尾数都在使用中，请稍后再试",
 			ErrNodeUnavailable: "节点暂不可用", ErrMaintenance: "服务维护中",
 			ErrWGAddressExhausted: "隧道地址暂不可用",
 		}

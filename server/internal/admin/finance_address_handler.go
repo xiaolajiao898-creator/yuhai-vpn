@@ -17,6 +17,7 @@ func (h *FinanceAddressHandler) Register(g *gin.RouterGroup) {
 	secured := g.Group("", h.Auth.Middleware())
 	secured.GET("/shared-pay-addresses", h.listShared)
 	secured.POST("/shared-pay-addresses", h.addShared)
+	secured.POST("/receive-addresses", h.create)
 	secured.POST("/receive-addresses/:id/status", h.setStatus)
 	secured.POST("/receive-addresses/import", h.importPackage)
 }
@@ -49,6 +50,22 @@ func (h *FinanceAddressHandler) addShared(c *gin.Context) {
 		return
 	}
 	out, err := h.Write.AddSharedPayAddress(c.Request.Context(), approvalProof(c, raw), in)
+	if err != nil {
+		nodeReadFailure(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	c.JSON(http.StatusCreated, out)
+}
+
+func (h *FinanceAddressHandler) create(c *gin.Context) {
+	var in CreateReceiveAddressInput
+	raw, err := nodeWriteBody(c, &in)
+	if err != nil {
+		nodeReadFailure(c, err)
+		return
+	}
+	out, err := h.Write.CreateReceiveAddress(c.Request.Context(), approvalProof(c, raw), in)
 	if err != nil {
 		nodeReadFailure(c, err)
 		return

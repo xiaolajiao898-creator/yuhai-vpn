@@ -461,7 +461,7 @@ func (s *FinanceReadService) DepositExceptions(ctx context.Context, p Principal,
 func (s *FinanceReadService) ReceiveAddresses(ctx context.Context, p Principal) (out ManagedReceiveAddressList, err error) {
 	err = s.read(ctx, p, func(c context.Context, tx pgx.Tx, now time.Time) error {
 		// 注意这里**没有** signature 一列——见文件开头第 2 条。
-		rows, e := tx.Query(c, `SELECT id::text,network,address,label,sig_key_id,valid_until,status,created_at
+		rows, e := tx.Query(c, `SELECT id::text,network,address,label,COALESCE(sig_key_id,''),valid_until,status,created_at
  FROM receive_addresses ORDER BY status,id LIMIT 501`)
 		if e != nil {
 			return e

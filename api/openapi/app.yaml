@@ -467,6 +467,199 @@ paths:
         '204': { description: 允许的来源 }
         '403': { description: 来源或请求头不在允许名单 }
 
+  /v1/auth/web/plans:
+    get:
+      tags: [account]
+      operationId: listWebPlans
+      x-auth-level: web-session
+      security: []
+      summary: 网页在售套餐
+      description: 返回当前在售套餐，含 30 天、90 天、365 天时长卡。需要会话 Cookie。
+      responses:
+        '200':
+          description: 套餐列表
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [items]
+                        properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/Plan' } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [account]
+      operationId: listWebPlansPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页套餐列表的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/quotes:
+    post:
+      tags: [orders]
+      operationId: quoteWebPlan
+      x-auth-level: web-session
+      security: []
+      summary: 网页套餐报价
+      description: 与 POST /v1/plans/{code}/quote 使用同一套报价。需要会话 Cookie。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_code]
+              properties:
+                plan_code: { type: string, maxLength: 32 }
+      responses:
+        '200':
+          description: 报价
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/Quote' } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [orders]
+      operationId: quoteWebPlanPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页报价的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/orders:
+    post:
+      tags: [orders]
+      operationId: createWebOrder
+      x-auth-level: web-session
+      security: []
+      summary: 网页创建 USDT 订单
+      description: >-
+        幂等键放在 JSON 的 idempotency_key，不增加 CORS 请求头。
+        只接受 USDT_TRC20。应付金额带 0.01 步进的尾数。需要会话 Cookie。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quote_id, pay_method, idempotency_key]
+              properties:
+                quote_id: { type: string, format: uuid }
+                pay_method: { type: string, enum: [USDT_TRC20] }
+                idempotency_key: { type: string, format: uuid }
+      responses:
+        '201':
+          description: 订单已创建
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/WebPayOrder' } }
+        '503': { description: 没有可用收款地址（50301），或 99 个付款尾数都在使用中（50305）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [orders]
+      operationId: createWebOrderPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页下单的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/orders/{order_no}:
+    get:
+      tags: [orders]
+      operationId: getWebOrder
+      x-auth-level: web-session
+      security: []
+      summary: 网页查询订单
+      description: 轮询订单状态。付款确认后 status 变为 COMPLETED。需要会话 Cookie。
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 订单
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/WebPayOrder' } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [orders]
+      operationId: getWebOrderPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页查询订单的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/orders/{order_no}/cancel:
+    post:
+      tags: [orders]
+      operationId: cancelWebOrder
+      x-auth-level: web-session
+      security: []
+      summary: 网页取消未支付订单
+      description: 已检测到转账的订单不能取消。需要会话 Cookie。
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 已取消
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/WebPayOrder' } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [orders]
+      operationId: cancelWebOrderPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页取消订单的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      parameters:
+        - name: order_no
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
   /v1/auth/password-reset/start:
     post:
       tags: [auth]
@@ -950,7 +1143,7 @@ paths:
         '402': { description: 余额不足（40201）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         '409': { description: 待支付订单过多（40906）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         '410': { description: 报价已过期或已使用（41001）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
-        '503': { description: 收款槽位不足（50301）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '503': { description: 没有可用收款地址（50301），或 99 个付款尾数都在使用中（50305）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         default: { $ref: '#/components/responses/Error' }
     get:
       tags: [orders]
@@ -1513,6 +1706,26 @@ components:
         password: { type: string, maxLength: 128 }
         challenge_id: { type: string, format: uuid }
         counter: { type: integer, minimum: 0, maximum: 16777215 }
+    WebPayOrder:
+      type: object
+      description: 网页 USDT 订单。qr_modules 是二维码的 0/1 行，由页面自己绘制，不加载外部脚本。
+      required: [order_no, status, pay_amount, pay_display, server_time]
+      properties:
+        order_no: { type: string }
+        status: { type: string }
+        pay_method: { type: string }
+        pay_amount: { type: string, description: 精确应付金额，6 位小数 }
+        pay_display: { type: string, description: 去掉多余尾零、至少两位小数的应付金额 }
+        base_amount: { type: string }
+        receive_address: { type: string }
+        network: { type: string }
+        token: { type: string }
+        token_contract: { type: string }
+        expires_at: { type: string, format: date-time }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
+        qr_modules:
+          type: array
+          items: { type: string }
     WebAccount:
       type: object
       required: [account, plan_name, active, device_count, device_limit, trial_eligible, server_time]

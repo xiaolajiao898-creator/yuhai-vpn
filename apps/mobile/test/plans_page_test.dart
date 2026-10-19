@@ -61,6 +61,43 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('90 天套餐在短屏幕上滚到可见后显示季卡', (tester) async {
+    tester.view.physicalSize = const Size(390, 500);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    await tester.pumpWidget(plansApp([
+      ..._newUserTrial(),
+      plansProvider.overrideWith((ref) async => const [
+            PlanItem(code: 'M', name: '月卡', type: 'TIME', tier: 1, listPrice: '6', durationDays: 30, deviceLimit: 3),
+            PlanItem(code: 'Q', name: 'L1 九十天', type: 'TIME', tier: 1, listPrice: '16', durationDays: 90, deviceLimit: 3),
+            PlanItem(code: 'Y', name: '年卡', type: 'TIME', tier: 1, listPrice: '50', durationDays: 365, deviceLimit: 3),
+          ]),
+    ]));
+    await tester.pumpAndSettle();
+    const quarter = '季卡 · 90 天 · 不限流量 · 3 台设备';
+    await tester.scrollUntilVisible(find.text(quarter), 200);
+    expect(find.text(quarter), findsOneWidget);
+    expect(find.text('季卡 · 季卡 · 90 天 · 不限流量 · 3 台设备'), findsNothing);
+    await tester.scrollUntilVisible(find.text('365 天 · 不限流量 · 3 台设备'), 200);
+    expect(find.text('365 天 · 不限流量 · 3 台设备'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('名称里已经有季卡时不再加一遍', (tester) async {
+    await tester.pumpWidget(plansApp([
+      ..._newUserTrial(),
+      plansProvider.overrideWith((ref) async => const [
+            PlanItem(code: 'Q2', name: '季卡', type: 'TIME', tier: 1, listPrice: '16', durationDays: 90, deviceLimit: 3),
+          ]),
+    ]));
+    await tester.pumpAndSettle();
+    expect(find.text('季卡'), findsOneWidget);
+    expect(find.text('90 天 · 不限流量 · 3 台设备'), findsOneWidget);
+    expect(find.text('季卡 · 90 天 · 不限流量 · 3 台设备'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('套餐页可以直接领取试用，并写上到期时间', (tester) async {
     final expiry = DateTime.utc(2026, 10, 20, 2, 30);
     await tester.pumpWidget(plansApp([
