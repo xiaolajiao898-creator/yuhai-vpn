@@ -14,10 +14,35 @@ adb wait-for-device
 adb shell 'while [[ -z $(getprop sys.boot_completed) ]]; do sleep 1; done'
 adb root || true
 adb wait-for-device
+adb logcat -G 16M || true
 
+LIVE=$OUT/live-logcat.txt
+: > "$LIVE"
 adb logcat -c || true
+adb logcat -v threadtime > "$LIVE" &
+LOGCAT_PID=$!
+
+pidof_pkg() {
+  adb shell pidof "$PKG" 2>/dev/null | tr -d '\r' || true
+}
+
 adb install -r "$APK"
-adb shell pm clear "$PKG"
+adb shell pm clear "$PKG" || true
+# 忙碌的模拟器上 pm clear 会先返回，随后的清数据还会 force-stop。
+# 那时再启动探测页，页面会被拆掉，安全存储的写入日志也不会出现。
+for i in $(seq 1 180); do
+  if grep -F "PACKAGE_DATA_CLEARED" "$LIVE" | grep -F "$PKG" >/dev/null; then
+    break
+  fi
+  sleep 1
+done
+adb shell am force-stop "$PKG" || true
+for i in $(seq 1 30); do
+  if [ -z "$(pidof_pkg)" ]; then
+    break
+  fi
+  sleep 1
+done
 adb shell appops set "$PKG" ACTIVATE_VPN allow
 
 start_probe() {
@@ -28,67 +53,98 @@ start_probe() {
   fi
 }
 
+log_mark() {
+  local n
+  n=$(wc -c < "$LIVE" | tr -d ' ')
+  if [ "${n:-0}" -lt 1 ]; then
+    echo 1
+  else
+    echo "$n"
+  fi
+}
+
 wait_log() {
   local needle=$1
+  local mark=$2
   local i
-  for i in $(seq 1 40); do
-    if adb logcat -d -s YuhaiProbe:I | tr -d '\r' | grep -F -q "$needle"; then
+  for i in $(seq 1 60); do
+    # 不用 grep -q：pipefail 下它会让 tail 收到 SIGPIPE，匹配成功也被当成失败。
+    if tail -c +"$mark" "$LIVE" | grep -F "$needle" >/dev/null; then
       return 0
     fi
     sleep 1
   done
   echo "没等到日志：$needle"
-  adb logcat -d -s YuhaiProbe:I AndroidRuntime:E | tail -n 80 || true
+  tail -n 80 "$LIVE" || true
   return 1
 }
 
-pidof_pkg() {
-  adb shell pidof "$PKG" 2>/dev/null | tr -d '\r' || true
+start_and_wait() {
+  local op=$1
+  local phase=${2:-}
+  local needle=$3
+  local attempt mark
+  for attempt in 1 2 3; do
+    mark=$(log_mark)
+    start_probe "$op" "$phase" || true
+    if wait_log "$needle" "$mark"; then
+      return 0
+    fi
+    echo "重试 $op 第 $attempt 次"
+    adb shell am force-stop "$PKG" || true
+    sleep 2
+  done
+  return 1
 }
 
 dump_diagnostics() {
-  adb logcat -d -v threadtime > "$OUT/logcat.txt" || true
+  if [ -n "${LOGCAT_PID:-}" ]; then
+    kill "$LOGCAT_PID" 2>/dev/null || true
+    wait "$LOGCAT_PID" 2>/dev/null || true
+  fi
+  if [ -s "$LIVE" ]; then
+    cp "$LIVE" "$OUT/logcat.txt" || true
+  else
+    adb logcat -d -v threadtime > "$OUT/logcat.txt" || true
+  fi
   adb shell dumpsys activity exit-info "$PKG" > "$OUT/exit-info.txt" || true
   adb shell ls /data/tombstones > "$OUT/tombstone-list.txt" 2>/dev/null || true
   adb pull /data/tombstones "$OUT/tombstones" >/dev/null 2>&1 || true
   mkdir -p "$OUT/tombstones"
-  find "$OUT/tombstones" -type d -empty -exec touch {}/.keep \;
+  if ! find "$OUT/tombstones" -type f ! -name '.keep' ! -name 'none.txt' | grep . >/dev/null; then
+    echo "no tombstones" > "$OUT/tombstones/none.txt"
+  fi
 }
 
 trap dump_diagnostics EXIT
 
 echo "==> 会话：写入后 force-stop，再读"
-start_probe session-write
-wait_log "SESSION_WRITE ok"
+start_and_wait session-write "" "SESSION_WRITE ok"
 sleep 2
 adb shell am force-stop "$PKG"
 sleep 1
-start_probe session-read force-stop
-wait_log "SESSION_READ present phase=force-stop"
+start_and_wait session-read force-stop "SESSION_READ present phase=force-stop"
 
 echo "==> 会话：写入后 kill -9，再读"
-start_probe session-write
-wait_log "SESSION_WRITE ok"
+start_and_wait session-write "" "SESSION_WRITE ok"
 sleep 2
 pid=$(pidof_pkg)
 if [ -n "$pid" ]; then
   adb shell kill -9 $pid || true
   sleep 1
 fi
-start_probe session-read kill
-wait_log "SESSION_READ present phase=kill"
+start_and_wait session-read kill "SESSION_READ present phase=kill"
 
 echo "==> 本地黑洞隧道"
 before=$(pidof_pkg)
-start_probe vpn
-wait_log "VPN_START ok"
+start_and_wait vpn "" "VPN_START ok"
 sleep 8
-if ! adb shell echo adb-ok | tr -d '\r' | grep -q adb-ok; then
+if ! adb shell echo adb-ok | tr -d '\r' | grep -F adb-ok >/dev/null; then
   echo "VPN 拉起后 adb 断开。进程是否崩溃要看已抓到的 logcat。"
   exit 2
 fi
 after=$(pidof_pkg)
-logged=$(adb logcat -d -s YuhaiProbe:I | tr -d '\r' | sed -n 's/.*VPN_START ok pid=\([0-9]*\).*/\1/p' | tail -n 1)
+logged=$(sed -n 's/.*VPN_START ok pid=\([0-9]*\).*/\1/p' "$LIVE" | tail -n 1)
 echo "pid before=$before logged=$logged after=$after"
 if [ -z "$after" ] || [ "$after" != "$logged" ]; then
   echo "VPN 拉起后进程不在了，或 pid 变了"

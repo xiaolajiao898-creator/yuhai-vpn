@@ -255,8 +255,9 @@ jobs:
           api-level: "33"
           target: google_apis
           arch: x86_64
-          ram-size: 2048M
-          cores: "2"
+          ram-size: 4096M
+          cores: "4"
+          disable-animations: true
           emulator-boot-timeout: 600
           script: bash apps/mobile/android/ci/emulator-vpn-probe.sh
       - uses: actions/upload-artifact@v4
