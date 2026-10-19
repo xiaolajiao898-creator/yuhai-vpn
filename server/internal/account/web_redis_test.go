@@ -32,11 +32,11 @@ func TestWebChallengeCaptchaAndHoneypot(t *testing.T) {
 		"address": testAddress(t), "password": "abc12345",
 		"challenge_id": powChallenge.ChallengeID, "counter": wrong,
 	})
-	wrongRes := webDo(r, http.MethodPost, "/v1/auth/web/register", powIP, webWWWOrigin, wrongBody, "")
-	if wrongRes.Code != http.StatusBadRequest || wrongRes.Header().Get("Access-Control-Allow-Origin") != webWWWOrigin {
+	wrongRes := webDo(r, http.MethodPost, "/v1/auth/web/register", powIP, webRegisterOrigin, wrongBody, "")
+	if wrongRes.Code != http.StatusBadRequest || wrongRes.Header().Get("Access-Control-Allow-Origin") != webRegisterOrigin {
 		t.Fatalf("bad pow: %d %s", wrongRes.Code, wrongRes.Body.String())
 	}
-	assertNoCORSCredentialLeak(t, wrongRes)
+	assertWebCORS(t, wrongRes)
 	if code, msg := errorMessage(t, wrongRes); code != int(httpx.ErrBadRequest) || msg != msgWebChallengeBad {
 		t.Fatalf("bad pow message: %d %s", code, msg)
 	}

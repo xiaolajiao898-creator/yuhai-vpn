@@ -72,34 +72,32 @@ func TestWebCORSAllowlist(t *testing.T) {
 	r.Use(httpx.RequestIDMiddleware())
 	(&Handler{Svc: &Service{Clock: clock.Real{}}, MW: &auth.Middleware{}}).Mount(r.Group("/v1"))
 
-	allowed := []string{webRegisterOrigin, webWWWOrigin}
-	for _, origin := range allowed {
-		for _, path := range []string{"/v1/auth/web/challenge", "/v1/auth/web/register"} {
-			w := webDo(r, http.MethodOptions, path, "203.0.113.10", origin, nil, "content-type")
-			if w.Code != http.StatusNoContent {
-				t.Fatalf("%s %s: %d %s", origin, path, w.Code, w.Body.String())
-			}
-			if got := w.Header().Get("Access-Control-Allow-Origin"); got != origin {
-				t.Fatalf("ACAO %q", got)
-			}
-			if w.Header().Get("Access-Control-Allow-Methods") != "POST, OPTIONS" {
-				t.Fatal(w.Header().Get("Access-Control-Allow-Methods"))
-			}
-			if w.Header().Get("Access-Control-Allow-Headers") != "Content-Type" {
-				t.Fatal(w.Header().Get("Access-Control-Allow-Headers"))
-			}
-			if w.Header().Get("Access-Control-Allow-Credentials") != "" {
-				t.Fatal("credentials must stay unset")
-			}
-			if w.Header().Get("Access-Control-Allow-Origin") == "*" {
-				t.Fatal("wildcard origin")
-			}
+	allowedPaths := []string{
+		"/v1/auth/web/challenge", "/v1/auth/web/register", "/v1/auth/web/login",
+		"/v1/auth/web/logout", "/v1/auth/web/account", "/v1/auth/web/trial", "/v1/auth/web/redeem",
+	}
+	for _, path := range allowedPaths {
+		w := webDo(r, http.MethodOptions, path, "203.0.113.10", webRegisterOrigin, nil, "content-type")
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", path, w.Code, w.Body.String())
+		}
+		assertWebCORS(t, w)
+		if w.Header().Get("Access-Control-Allow-Methods") != "GET, POST, OPTIONS" {
+			t.Fatal(w.Header().Get("Access-Control-Allow-Methods"))
+		}
+		if w.Header().Get("Access-Control-Allow-Headers") != "Content-Type" {
+			t.Fatal(w.Header().Get("Access-Control-Allow-Headers"))
 		}
 	}
+	getPreflight := webDoMethod(r, http.MethodOptions, "/v1/auth/web/account", "203.0.113.10", webRegisterOrigin, nil, "content-type", http.MethodGet)
+	if getPreflight.Code != http.StatusNoContent {
+		t.Fatalf("GET preflight: %d %s", getPreflight.Code, getPreflight.Body.String())
+	}
+	assertWebCORS(t, getPreflight)
 	rejected := []string{
 		"https://evil.example", "https://yhvpn.io.evil.com", "https://notyhvpn.io",
 		"http://yhvpn.io", "https://yhvpn.io:443", "https://yhvpn.io/", "https://YHVPN.io",
-		"null", "https://www.yhvpn.io.evil.com",
+		"null", "https://www.yhvpn.io.evil.com", webWWWOrigin,
 	}
 	for _, origin := range rejected {
 		w := webDo(r, http.MethodOptions, "/v1/auth/web/register", "203.0.113.10", origin, nil, "content-type")
@@ -135,7 +133,7 @@ func TestWebCORSAllowlist(t *testing.T) {
 }
 
 func TestDeployedRegisterPageIsSelfContained(t *testing.T) {
-	js, err := os.ReadFile("../../../deploy/site-patch/register/web-register.js")
+	js, err := os.ReadFile("../../../deploy/site-patch/register/register.js")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -143,8 +141,8 @@ func TestDeployedRegisterPageIsSelfContained(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(html, js) {
-		t.Fatal("register/index.html must embed web-register.js so one file can be copied to /register/")
+	if bytes.Contains(html, js) || !bytes.Contains(html, []byte(`src="/register/register.js"`)) {
+		t.Fatal("register/index.html must load register.js as an external script")
 	}
 	for _, needle := range []string{
 		"TronLink", "imToken", "交易所", "yh_hp", "https://api.yhvpn.io",
@@ -169,7 +167,7 @@ func TestDeployedRegisterPageIsSelfContained(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(js, copy) {
-		t.Fatal("apps/website copy of the solver drifted from deploy/site-patch/register/web-register.js")
+		t.Fatal("apps/website copy of the solver drifted from deploy/site-patch/register/register.js")
 	}
 }
 
@@ -255,9 +253,26 @@ func errorMessage(t *testing.T, w *httptest.ResponseRecorder) (int, string) {
 	return env.Error.Code, env.Error.Message
 }
 
-func assertNoCORSCredentialLeak(t *testing.T, w *httptest.ResponseRecorder) {
+func assertWebCORS(t *testing.T, w *httptest.ResponseRecorder) {
 	t.Helper()
-	if strings.Contains(w.Header().Get("Access-Control-Allow-Origin"), "*") || w.Header().Get("Access-Control-Allow-Credentials") != "" {
-		t.Fatalf("overbroad CORS: %v", w.Header())
+	acao := w.Header().Get("Access-Control-Allow-Origin")
+	if acao != webRegisterOrigin || strings.Contains(acao, "*") || w.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Fatalf("cors origin=%q cred=%q headers=%v", acao, w.Header().Get("Access-Control-Allow-Credentials"), w.Header())
 	}
+}
+
+func webDoMethod(h http.Handler, method, path, ip, origin string, body []byte, requestHeaders, requestMethod string) *httptest.ResponseRecorder {
+	w := webDo(h, method, path, ip, origin, body, requestHeaders)
+	if method == http.MethodOptions && requestMethod != "" && requestMethod != http.MethodPost {
+		req := httptest.NewRequest(method, path, nil)
+		req.RemoteAddr = ip + ":12345"
+		req.Header.Set("Origin", origin)
+		req.Header.Set("Access-Control-Request-Method", requestMethod)
+		if requestHeaders != "" {
+			req.Header.Set("Access-Control-Request-Headers", requestHeaders)
+		}
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+	}
+	return w
 }

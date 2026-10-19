@@ -1350,7 +1350,7 @@ export interface paths {
          *
          *     **key 走白名单**，只接受代码真正会读取的那几个参数：`order.cooldown_seconds`、
          *     `topup.min_micro`、`topup.max_micro`、`invite.reward_default_plan_code`、
-         *     `invite.reward_traffic_plan_code`。白名单之外一律 40001，**包括数据库里已经存在的键**——
+         *     `invite.reward_traffic_plan_code`、`trial.enabled`。白名单之外一律 40001，**包括数据库里已经存在的键**——
          *     能写一个没有读取方的键，等于给运维一个「改了但不生效」的按钮。
          *
          *     值按 key 逐个校验，两处是重点：

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta name="robots" content="noindex">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B4AA2">
+<title>我的账户 · 宇海</title>
+<meta name="description" content="查看宇海账户、当前套餐、到期时间和设备数。新账户可以领取 24 小时免费试用，也可以输入兑换码开通。">
+<meta property="og:title" content="我的账户 · 宇海">
+<meta property="og:description" content="用你的 USDT（TRC20）地址和密码登录宇海。">
+<meta property="og:type" content="website">
+<link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml"><link rel="icon" href="/favicon-32x32.png?v=2" type="image/png" sizes="32x32"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" sizes="180x180">
+<meta name="yuhai-api" content="https://api.yhvpn.io"><link rel="stylesheet" href="/assets/site.css">
+<script src="/assets/site.js" defer></script>
+<style>
+.reg-layout{display:grid;grid-template-columns:minmax(0,560px) minmax(0,1fr);gap:24px;align-items:start}
+@media (max-width:860px){.reg-layout{grid-template-columns:1fr}}
+.reg-card{background:#fff;border:1px solid var(--line);border-radius:var(--radius);padding:clamp(22px,3vw,32px);display:grid;gap:16px}
+.reg-card .field input{width:100%;height:48px;border:1px solid var(--line);border-radius:10px;padding:0 14px;font:16px/1.4 var(--sans);color:var(--ink);background:#fff}
+.reg-card .field input.mono{font-family:var(--mono);letter-spacing:.02em}
+.reg-card .hint,.pow{margin:0;color:var(--muted);font-size:13px}
+.reg-card .btn{width:100%}
+.reg-card .btn:disabled{opacity:.6;cursor:default}
+.form-error{margin:0;color:#9b2c2c;font-size:14px}
+.hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+.done-address{font-family:var(--mono);font-size:15px;word-break:break-all;color:var(--ink)}
+.login-dl{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:520px){.login-dl{grid-template-columns:1fr}}
+.login-dl .btn{height:56px;font-size:17px}
+.reg-card h2{margin:0;font-size:20px}
+.reg-card .sub{margin:-8px 0 0;color:var(--muted);font-size:14px}
+.or-line{display:flex;align-items:center;gap:12px;color:var(--muted);font-size:13px}
+.or-line::before,.or-line::after{content:"";flex:1;height:1px;background:var(--line)}
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="/" aria-label="宇海 首页"><svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#bbef68"/><g fill="none" stroke="#14201c" stroke-width="4" stroke-linecap="round"><path d="M13 22q9-8 19 0t19 0M13 32q9-8 19 0t19 0M13 42q9-8 19 0t19 0"/></g></svg><span class="brand-name">宇海</span><span class="brand-latin">Yuhai</span></a><nav class="nav-links" aria-label="主导航"><a class="hide-sm" href="/#features">产品优势</a><a class="hide-sm" href="/#account">账户与安全</a><a class="hide-sm" href="/#faq">常见问题</a><a class="btn btn-outline btn-sm" href="/login/" style="color:var(--ink);background:#fff">登录</a><a class="btn btn-outline btn-sm" href="/register/" style="color:var(--ink);background:#fff">注册</a><a class="btn btn-primary btn-sm" href="/download/">下载</a></nav></div></header>
+<main>
+<section class="page-head"><div class="wrap"><span class="kicker">用户中心</span><h1>我的账户</h1><p>查看套餐、到期时间和设备。新账户可以领取一次 24 小时免费试用，有兑换码也可以在这里开通。</p></div></section>
+<section class="section"><div class="wrap account-wrap">
+<p class="account-loading" id="account-loading">正在读取账户…</p>
+<div class="account-gate" id="account-gate" hidden><h2>请先登录</h2><p>登录后可以查看套餐、到期时间和设备数。</p><a class="btn btn-primary" href="/login/">去登录</a></div>
+<div class="account-wrap" id="account-panel" hidden>
+<div class="account-grid"><article class="account-stat"><span>账号（USDT 地址）</span><b class="mono" id="acc-address">—</b></article><article class="account-stat"><span>当前套餐</span><b id="acc-plan">—</b></article><article class="account-stat"><span>到期时间</span><b id="acc-expire">—</b></article><article class="account-stat"><span>设备数</span><b id="acc-devices">—</b></article></div>
+<div class="account-actions"><article class="box-card"><h3>24 小时免费试用</h3><p id="trial-copy">新账户可以领取一次。不限流量，最多 3 台设备，到期自动停止，不会自动扣费。</p><p class="form-error" id="trial-error" hidden></p><p class="form-ok" id="trial-ok" hidden></p><button class="btn btn-primary" id="trial-claim" type="button">领取 24 小时免费试用</button></article><article class="box-card"><h3>兑换码开通</h3><p>输入兑换码，按卡面天数开通。</p><form id="redeem-form" method="post" action="/account/" novalidate><div class="field"><label for="redeem-code">兑换码</label><input id="redeem-code" name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="64" placeholder="例如 ABCD-EFGH-JKLM-NPQR"></div><p class="form-error" id="redeem-error" hidden></p><p class="form-ok" id="redeem-ok" hidden></p><button class="btn btn-outline" id="redeem-submit" type="submit">开通</button></form></article></div>
+<div class="account-foot"><span>连接请使用<a href="/download/">安卓或 Windows 客户端</a>，用同样的地址和密码登录。</span><button class="btn btn-outline btn-sm" id="logout" type="button">退出登录</button></div>
+</div>
+</div></section>
+</main>
+<footer class="footer"><div class="wrap"><a class="brand" href="/" aria-label="宇海 首页"><svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="16" fill="#bbef68"/><g fill="none" stroke="#14201c" stroke-width="4" stroke-linecap="round"><path d="M13 22q9-8 19 0t19 0M13 32q9-8 19 0t19 0M13 42q9-8 19 0t19 0"/></g></svg><span class="brand-name">宇海</span></a><nav aria-label="页脚导航"><a href="/login/">登录</a><a href="/register/">注册</a><a href="/download/">下载</a><a href="/#account">账户与安全</a><a href="/#faq">常见问题</a></nav><span>© 2026 宇海 · 官方网站仅 yhvpn.io</span></div></footer>
+<script src="/assets/web-account.js" defer></script>
+</body>
+</html>

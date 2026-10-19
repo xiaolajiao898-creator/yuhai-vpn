@@ -1,0 +1,26 @@
+---
+import Base from '../../layouts/Base.astro';
+import LoginForm from '../../components/LoginForm.astro';
+---
+<Base title="登录 · 宇海VPN" description="用你的 USDT（TRC20）地址和密码登录宇海VPN。不需要手机号或邮箱。">
+  <meta slot="head" name="yuhai-api" content="https://api.yhvpn.io" />
+  <section class="page-head">
+    <div class="wrap">
+      <span class="kicker">登录</span>
+      <h1>登录宇海账户</h1>
+      <p>用注册时的 USDT（TRC20）地址和密码登录。登录后可以查看套餐和到期时间，领取 24 小时免费试用，或输入兑换码开通。</p>
+    </div>
+  </section>
+  <section class="section">
+    <div class="wrap auth-layout">
+      <LoginForm prefix="page" secondary="还没有账户？去注册" />
+      <aside class="box-card">
+        <h3>忘记密码？</h3>
+        <p>密码不能在网页上重设。在 App 登录页点「忘记密码」，从注册地址向 App 显示的官方地址转一笔约 1 TRX（金额带小数，请照抄）。链上确认后即可重设密码。</p>
+        <p>账号就是你的 USDT 地址，只有掌握这个地址的人才能完成验证，别人没法冒用你的账号。</p>
+        <p class="note">网页登录只保存在这个浏览器里，12 小时后自动退出。公用电脑用完请点「退出登录」。请只从 yhvpn.io 下载安装包。</p>
+      </aside>
+    </div>
+  </section>
+  <script is:inline src="/assets/web-login.js"></script>
+</Base>
