@@ -80,7 +80,7 @@ class _RewardsPageState extends ConsumerState<RewardsPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (info != null && !info.rewardsEnabled) ...[
-                          Text('奖励活动暂未开放，历史记录仍可查看。',
+                          Text('奖励还没开放，以前的记录还能看。',
                               style: Theme.of(context)
                                   .textTheme
                                   .bodyMedium

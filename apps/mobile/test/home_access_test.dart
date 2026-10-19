@@ -55,6 +55,8 @@ void main() {
     ));
     await tester.pumpAndSettle();
     expect(find.text('免费试用 24 小时'), findsWidgets);
+    expect(find.text('新用户可免费试用 24 小时，或选一个套餐继续使用。'), findsOneWidget);
+    expect(find.textContaining('线路故障'), findsNothing);
     expect(find.text('换线路'), findsNothing);
     expect(find.text('连接失败'), findsNothing);
     await tester.tap(find.byType(TideRingButton));

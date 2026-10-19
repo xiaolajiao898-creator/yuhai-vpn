@@ -16,7 +16,7 @@ import { release } from '../data/release';
     <div class="wrap dl-grid">
       <article class="dl-card">
         <h2>安卓版</h2>
-        <p>当前提供的是候选安装包。哈希还没写入本页，核对时以构建脚本公布的值为准。</p>
+        <p>现在下载的是候选安装包。校验值还没公布，正式发布后再用页面上的 SHA-256 核对。</p>
         <div>
           <a class="btn btn-primary" href={candidates.android.href} download>
             下载安卓版
@@ -35,7 +35,7 @@ import { release } from '../data/release';
 
       <article class="dl-card">
         <h2>Windows 版</h2>
-        <p>64 位候选程序。还没有代码签名证书，安装时 Windows 可能提示未知发布者。</p>
+        <p>64 位候选版。还没有签名，安装时 Windows 可能提示未知发布者。</p>
         <div>
           <a class="btn btn-primary" href={candidates.windows.href} download>
             下载 Windows 版
@@ -58,7 +58,7 @@ import { release } from '../data/release';
     <div class="wrap dl-grid">
       <article class="dl-card">
         <h2>上一版安卓 {release.version}</h2>
-        <p>这是更早的正式包，和上面的候选包不是同一个文件。下面的哈希只属于这一版。</p>
+        <p>这是更早的正式版，和上面的候选包不是同一个文件。下面的校验值只属于这一版。</p>
         <div class="specs">
           <span>版本 <b>{release.version}</b></span>
           <span>大小 <b>{release.sizeMb} MB</b></span>
@@ -93,7 +93,7 @@ import { release } from '../data/release';
         <li><b>下载安装包。</b>用上面的「下载安卓版」。</li>
         <li><b>允许安装。</b>系统提示不能安装未知应用时，允许当前浏览器安装。</li>
         <li><b>打开 App 注册。</b>也可以先在<a href="/register/">网站上注册</a>。账号是你自己钱包的 USDT（TRC20）地址。</li>
-        <li><b>领取试用。</b>新账户在首页点「免费试用 24 小时」。每个账户、每台设备一次，不自动续费。</li>
+        <li><b>领取试用。</b>新账户在首页或套餐页点「免费试用 24 小时」。每个账户、每台设备一次，到期即停。</li>
       </ol>
     </div>
   </section>

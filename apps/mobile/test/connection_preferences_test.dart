@@ -145,7 +145,7 @@ void main() {
     expect(auto.onChanged, isNotNull);
     expect(killSwitch.onTap, isNotNull);
     expect(split.onChanged, isNull);
-    expect(find.text('引擎尚未接入。打开也不会改变流量走向'), findsOneWidget);
+    expect(find.text('还没做好。\n打开也不会分流'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 
@@ -165,7 +165,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(storage.value.protocol, ProtocolPreference.wireguard);
     expect(find.text('WireGuard'), findsOneWidget);
-    expect(find.text('协议偏好已保存，真实引擎接入后生效'), findsOneWidget);
+    expect(find.text('已保存。真正连接时会按这个偏好。'), findsOneWidget);
     storage.failSave = true;
     await tester
         .ensureVisible(find.byKey(const ValueKey('reduce-connection-motion')));

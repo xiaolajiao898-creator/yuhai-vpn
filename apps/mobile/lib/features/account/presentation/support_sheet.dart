@@ -18,7 +18,7 @@ Future<void> showSupportSheet(BuildContext context) {
             const SizedBox(height: 8),
             Text(
               kSupportUrlIsPlaceholder
-                  ? '客服入口已留好。当前地址是占位，确认 Telegram 账号后再替换配置。'
+                  ? '客服链接还没换成正式的 Telegram。可以先复制保存。不要把密码或账户密钥发给任何人。'
                   : '在 Telegram 里联系我们。请不要把密码或账户密钥发给任何人。',
               style: text.bodyMedium?.copyWith(color: YhColors.sub),
             ),

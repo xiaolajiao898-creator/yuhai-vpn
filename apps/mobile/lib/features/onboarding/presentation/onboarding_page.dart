@@ -50,7 +50,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                   scene: BrandScene.connect,
                   kicker: '一键连接',
                   title: '新用户可免费试用 24 小时',
-                  body: '试用是 L1、不限流量、3 台设备，不自动续费。每个账户和每台设备只能领一次。',
+                  body: '不限流量，最多 3 台设备。到期即停。每个账户和每台设备只能领一次。',
                 ),
               ],
             ),

@@ -8,6 +8,7 @@ import 'package:yuhai_vpn/app/router.dart';
 import 'package:yuhai_vpn/app/theme/theme.dart';
 import 'package:yuhai_vpn/core/widgets/tide_ring_button.dart';
 import 'package:yuhai_vpn/features/connection/presentation/connection_controller.dart';
+import 'package:yuhai_vpn/features/account/data/trial_api.dart';
 import 'package:yuhai_vpn/features/home/data/me_api.dart';
 import 'package:yuhai_vpn/features/home/presentation/home_page.dart';
 import 'package:yuhai_vpn/features/nodes/data/node_shortcuts.dart';
@@ -58,6 +59,15 @@ void main() {
                 'backup_acknowledged': true,
                 'entitlement': {'blocked_reason': 'NO_PLAN'},
               }),
+          trialStatusProvider.overrideWith((ref) async => const TrialStatus(
+                enabled: true,
+                eligible: true,
+                status: 'available',
+                tier: 1,
+                deviceLimit: 3,
+                unlimited: true,
+                durationHours: 24,
+              )),
           nodesProvider.overrideWith((ref) async => const [
                 NodeItem(
                   id: '1',

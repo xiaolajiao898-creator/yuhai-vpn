@@ -49,7 +49,7 @@ class _ConnectionSettingsPageState
   String _protocolLine(ProtocolPreference protocol) => switch (protocol) {
         ProtocolPreference.auto => '优先使用当前设备能连上的线路',
         ProtocolPreference.vlessReality => 'Reality：把流量伪装成访问普通网站，适合限制较严的网络',
-        ProtocolPreference.wireguard => 'WireGuard：当前自建节点使用的加密隧道',
+        ProtocolPreference.wireguard => 'WireGuard：自建节点用的加密隧道',
         ProtocolPreference.trojan => 'Trojan：伪装成普通网页访问',
         ProtocolPreference.shadowsocks2022 => 'Shadowsocks 2022：轻量代理',
       };
@@ -64,11 +64,11 @@ class _ConnectionSettingsPageState
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('断网保护', style: Theme.of(context).textTheme.headlineMedium),
             const SizedBox(height: 8),
-            const Text('这个版本还不能自己阻断「VPN 断开后的其他流量」。在安卓上可以到系统设置里打开：'),
+            const Text('这个版本还不能在 VPN 断开后自动拦住其他流量。安卓可以在系统设置里打开：'),
             const SizedBox(height: 8),
             const Text('设置 → 网络和互联网 → VPN → 宇海VPN → 始终开启 VPN，并打开「阻断没有 VPN 的连接」。'),
             const SizedBox(height: 8),
-            const Text('Windows 客户端目前没有对应的系统开关。代码签名和这项保护都还需要后续引擎支持。'),
+            const Text('Windows 版暂时没有这个开关。'),
           ]),
         ),
       ),
@@ -90,7 +90,7 @@ class _ConnectionSettingsPageState
                 const Padding(
                     padding: EdgeInsets.fromLTRB(16, 8, 16, 8),
                     child: Text(
-                        '偏好保存在本机。当前自建节点按 WireGuard 连接；出口线路的协议由线路本身决定。')),
+                        '保存在这台设备上。自建节点用 WireGuard，出口线路用它自己的协议。')),
                 for (final protocol in ProtocolPreference.values)
                   ListTile(
                     key: ValueKey('protocol-${protocol.wireValue}'),
@@ -111,7 +111,7 @@ class _ConnectionSettingsPageState
     }
     final controller = ref.read(connectionPreferencesProvider.notifier);
     await _save(() => controller.setProtocol(selected),
-        message: '协议偏好已保存，真实引擎接入后生效');
+        message: '已保存。真正连接时会按这个偏好。');
   }
 
   @override
@@ -158,7 +158,7 @@ class _ConnectionSettingsPageState
                 contentPadding: const EdgeInsets.symmetric(
                     horizontal: YhSpace.panel, vertical: 4),
                 title: const Text('减少连接动画'),
-                subtitle: const Text('立即减少首页连接动效'),
+                subtitle: const Text('少一点首页连接时的动画'),
                 value: data.reduceMotion,
                 onChanged: _saving
                     ? null
@@ -172,7 +172,7 @@ class _ConnectionSettingsPageState
             ])),
             const SizedBox(height: 16),
             const Text(
-                'Hysteria2：基于 QUIC，适合丢包较高的网络。由线路决定，不能在这里单独指定。'),
+                'Hysteria2 适合网络容易丢包的时候，由线路决定，这里不能单独选。'),
             const SizedBox(height: 16),
             SettingsPanel(
                 child: Column(children: [
@@ -181,7 +181,7 @@ class _ConnectionSettingsPageState
                 contentPadding: const EdgeInsets.symmetric(
                     horizontal: YhSpace.panel, vertical: 4),
                 title: const Text('自动连接'),
-                subtitle: const Text('打开 App 时，如果已有可用套餐，自动开始连接'),
+                subtitle: const Text('下次打开 App，如果还能用，就自动连上'),
                 value: data.autoConnect,
                 onChanged: _saving
                     ? null
@@ -198,7 +198,7 @@ class _ConnectionSettingsPageState
                 title: const Text('断网保护'),
                 subtitle: const Text(kKillSwitchEnforced
                     ? '隧道意外断开时阻断其他流量'
-                    : '当前引擎还不能强制阻断。可以查看系统里的设置方法'),
+                    : '这个版本还不能强制断网。点「说明」看系统里怎么开'),
                 trailing: const Text('说明'),
                 onTap: () => _killSwitchHelp(context),
               ),
@@ -206,7 +206,7 @@ class _ConnectionSettingsPageState
               SwitchListTile(
                 key: const ValueKey('split-tunnel-unavailable'),
                 title: const Text('按应用分流'),
-                subtitle: const Text('引擎尚未接入。打开也不会改变流量走向'),
+                subtitle: const Text('还没做好。\n打开也不会分流'),
                 value: false,
                 onChanged: kPerAppSplitTunnelAvailable ? (_) {} : null,
               ),
@@ -214,7 +214,7 @@ class _ConnectionSettingsPageState
               SwitchListTile(
                 key: const ValueKey('bypass-mainland-unavailable'),
                 title: const Text('绕过中国大陆'),
-                subtitle: const Text('引擎尚未接入。打开也不会让大陆流量直连'),
+                subtitle: const Text('还没做好。\n打开也不会直连大陆'),
                 value: false,
                 onChanged: kBypassMainlandAvailable ? (_) {} : null,
               ),

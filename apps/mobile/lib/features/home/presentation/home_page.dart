@@ -96,7 +96,7 @@ class _HomePageState extends ConsumerState<HomePage> {
       final grant = await ref.read(trialApiProvider).claim();
       ref.invalidate(meProvider);
       if (!mounted) return;
-      final when = grant.active ? '试用已开通，到 ${ _local(grant.expireAt)}' : '试用已经用过了';
+      final when = grant.active ? '试用已开通，到 ${_local(grant.expireAt)}' : '试用已经领过了';
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(when)));
     } on ApiException catch (e) {
       if (mounted) {
@@ -114,7 +114,7 @@ class _HomePageState extends ConsumerState<HomePage> {
   String _local(DateTime value) {
     final local = value.toLocal();
     String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+    return '${local.month}月${local.day}日 ${two(local.hour)}:${two(local.minute)}';
   }
 
   Future<void> _showAccessSheet(String reason) {
@@ -131,10 +131,10 @@ class _HomePageState extends ConsumerState<HomePage> {
           _ => '还没开通',
         };
         final body = switch (reason) {
-          'EXPIRED' => '这次不是线路故障。续费或兑换后就可以连接。',
-          'QUOTA_EXHAUSTED' => '这次不是线路故障。补充流量后就可以连接。',
-          'SUSPENDED' => '账户已停用。请联系客服，重试换线路没有用。',
-          _ => '新用户可以免费试用 24 小时。试用是 L1、不限流量、3 台设备，不自动续费。',
+          'EXPIRED' => '套餐已经到期。续费或兑换之后就能连接。',
+          'QUOTA_EXHAUSTED' => '流量用完了。补充之后就能连接。',
+          'SUSPENDED' => '账户已停用。请联系客服，换线路解决不了。',
+          _ => '新用户可免费试用 24 小时，或选一个套餐继续使用。',
         };
         return SafeArea(
           child: Padding(
@@ -317,7 +317,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 padding: const EdgeInsets.only(top: 16),
                 child: _AccessBanner(
                   title: '还没开通',
-                  body: '免费试用 24 小时，或选一个套餐。这不是线路故障。',
+                  body: '新用户可免费试用 24 小时，或选一个套餐继续使用。',
                   action: '免费试用 24 小时',
                   busy: _claiming,
                   onAction: _claimTrial,
@@ -623,7 +623,7 @@ class _AccountCard extends StatelessWidget {
             );
           },
           loading: () => Text('正在同步…', style: text.labelSmall),
-          error: (_, __) => Text('无法同步账户信息',
+          error: (_, __) => Text('账户信息暂时没同步上',
               style: text.labelSmall?.copyWith(color: YhColors.danger)),
         ),
       ]),

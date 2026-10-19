@@ -69,6 +69,10 @@ class TrialGrant {
 
 final trialApiProvider = Provider<TrialApi>((ref) => TrialApi(ref));
 
+/// 套餐页用来决定要不要展示试用卡。已经领过或已有套餐时为不可领。
+final trialStatusProvider = FutureProvider.autoDispose<TrialStatus>(
+    (ref) => ref.watch(trialApiProvider).status());
+
 class TrialApi {
   TrialApi(this.ref);
   final Ref ref;
