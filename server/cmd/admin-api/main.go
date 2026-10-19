@@ -124,6 +124,9 @@ func buildAdminRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error
 		Read:   &admin.FinanceReadService{Auth: adminSvc},
 		Write:  &admin.FinanceAddressService{Security: approvalSvc},
 		Import: &admin.FinanceImportService{Security: approvalSvc, FundPubKey: cfg.FundAddrPubKey}}).Register(adminGroup)
+	(&admin.RedeemHandler{Auth: adminHandler,
+		Read:  &admin.RedeemReadService{Auth: adminSvc},
+		Write: &admin.RedeemWriteService{Security: approvalSvc, Cipher: enc}}).Register(adminGroup)
 
 	if !cfg.IsProduction() && cfg.DevToolsEnabled {
 		depositSvc := &deposit.Service{Pool: pool, Clock: clock.Real{}, Production: false}

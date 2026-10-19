@@ -99,6 +99,12 @@ class SettingsPage extends ConsumerWidget {
                       onTap: () => context.push(Routes.orders)),
                   const Divider(height: 1),
                   SettingsRow(
+                      icon: Icons.confirmation_number_outlined,
+                      title: '兑换码',
+                      subtitle: '周卡、月卡、年卡',
+                      onTap: () => context.push(Routes.redeem)),
+                  const Divider(height: 1),
+                  SettingsRow(
                       icon: Icons.card_giftcard_outlined,
                       title: '邀请好友',
                       subtitle: '查看邀请码与奖励记录',

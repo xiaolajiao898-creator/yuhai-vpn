@@ -26,6 +26,7 @@ import (
 	"github.com/yuhai-vpn/server/internal/node"
 	"github.com/yuhai-vpn/server/internal/order"
 	"github.com/yuhai-vpn/server/internal/plan"
+	"github.com/yuhai-vpn/server/internal/redeem"
 	"github.com/yuhai-vpn/server/internal/redisx"
 	"github.com/yuhai-vpn/server/internal/traffic"
 	"github.com/yuhai-vpn/server/internal/tron"
@@ -124,5 +125,6 @@ func buildRouter(d routerDeps) *gin.Engine {
 	appInviteHandler(d.Pool, d.Clock, d.MW, d.Config.InviteRewardsEnabled, d.InviteBaseURL).Mount(v1)
 	(&traffic.Handler{Svc: &traffic.Service{Pool: d.Pool, Clock: d.Clock}, MW: d.MW}).Mount(v1)
 	(&connect.Handler{Svc: &connect.Service{Pool: d.Pool, Clock: d.Clock, Cipher: d.Cipher}, MW: d.MW}).Mount(v1)
+	(&redeem.Handler{Svc: &redeem.Service{Pool: d.Pool, Clock: d.Clock}, MW: d.MW}).Mount(v1)
 	return r
 }

@@ -7,6 +7,7 @@ import '../features/invite/presentation/invite_page.dart';
 import '../features/invite/presentation/rewards_page.dart';
 import '../features/account/presentation/ledger_page.dart';
 import '../features/account/presentation/account_page.dart';
+import '../features/account/presentation/redeem_page.dart';
 import '../features/account/presentation/devices_page.dart';
 import '../features/settings/presentation/settings_page.dart';
 import '../features/settings/presentation/connection_settings_page.dart';
@@ -47,6 +48,7 @@ abstract final class Routes {
   static const rewards = '/invite/rewards'; // P13
   static const settings = '/settings'; // P14
   static const account = '/settings/account'; // P15
+  static const redeem = '/settings/redeem';
   static const devices = '/settings/devices'; // P16
   static const connection = '/settings/connection'; // P17
   static const balance = '/settings/balance'; // P18
@@ -133,6 +135,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: Routes.traffic, builder: (_, __) => const TrafficPage()),
       GoRoute(path: Routes.about, builder: (_, __) => const AboutPage()),
       GoRoute(path: Routes.account, builder: (_, __) => const AccountPage()),
+      GoRoute(path: Routes.redeem, builder: (_, __) => const RedeemPage()),
       GoRoute(path: Routes.devices, builder: (_, __) => const DevicesPage()),
       GoRoute(path: Routes.orders, builder: (_, __) => const OrdersPage()),
       GoRoute(

@@ -18,6 +18,7 @@ const mark = `<svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><re
     <link rel="icon" href="/favicon.ico" sizes="any" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/assets/site.css" />
+    <slot name="head" />
     <script is:inline>document.documentElement.classList.add('js')</script>
     <script src="/assets/site.js" defer></script>
   </head>
@@ -30,6 +31,7 @@ const mark = `<svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><re
           <a class="hide-sm" href="/#support">支持范围</a>
           <a class="hide-sm" href="/#account">账户</a>
           <a class="hide-sm" href="/#faq">常见问题</a>
+          <a class="btn btn-outline btn-sm" href="/register/">注册</a>
           <a class="btn btn-primary btn-sm" href="/download/">下载</a>
         </nav>
       </div>
@@ -41,6 +43,7 @@ const mark = `<svg class="brand-mark" viewBox="0 0 64 64" aria-hidden="true"><re
       <div class="wrap">
         <a class="brand" href="/" aria-label="宇海 首页"><Fragment set:html={mark} /><span class="brand-name">宇海</span></a>
         <nav aria-label="页脚导航">
+          <a href="/register/">注册</a>
           <a href="/download/">下载与校验</a>
           <a href="/#support">支持范围</a>
           <a href="/#faq">常见问题</a>

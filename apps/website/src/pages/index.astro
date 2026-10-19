@@ -19,8 +19,9 @@ const hand = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
         <h1><span class="nowrap">你的连接，</span><span class="nowrap accent">加密传输。</span><br /><span class="nowrap">你的信息，</span><span class="nowrap">你说了算。</span></h1>
         <p class="lead">宇海用 WireGuard 加密你的网络连接。注册不需要手机号或邮箱；我们只收集提供服务必需的信息，并在下方写清楚收集什么、为什么、保留多久。</p>
         <div class="actions">
-          <a class="btn btn-primary" href="/download/"><Fragment set:html={dl} />下载安卓版</a>
-          <a class="btn btn-outline" href="#privacy">我们收集什么</a>
+          <a class="btn btn-primary" href="/register/">注册账户</a>
+          <a class="btn btn-outline" href="/download/"><Fragment set:html={dl} />下载安卓版</a>
+          <a class="btn btn-quiet" href="#privacy">我们收集什么</a>
         </div>
         <p class="hero-note">安卓正式版 {release.version} · 官方签名安装包 · 线路以 App 内实时列表为准</p>
       </div>
@@ -195,7 +196,7 @@ const hand = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
       </div>
       <div class="split">
         <ol class="steps reveal">
-          <li><div><h3>填写你的 USDT 地址</h3><p>在 App 里输入你自己钱包的 TRON（TRC20）地址，作为登录账号。</p></div></li>
+          <li><div><h3>填写你的 USDT 地址</h3><p>在<a href="/register/">官网注册页</a>或 App 里输入你自己钱包的 TRON（TRC20）地址，作为登录账号。</p></div></li>
           <li><div><h3>设置密码</h3><p>自己设置登录密码，请使用不容易被猜到的组合。</p></div></li>
           <li><div><h3>选择套餐，连接</h3><p>用 USDT 付款，到账后轻触连接。</p></div></li>
         </ol>
@@ -249,7 +250,10 @@ const hand = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
         <h2>加密你的连接，从现在开始。</h2>
         <p>安卓正式版 {release.version} · {release.sizeMb} MB · 官方签名</p>
       </div>
-      <a class="btn btn-white" href="/download/"><Fragment set:html={dl} />下载安卓版</a>
+      <div class="actions" style="margin-top:0">
+        <a class="btn btn-white" href="/register/">注册账户</a>
+        <a class="btn btn-white" href="/download/"><Fragment set:html={dl} />下载安卓版</a>
+      </div>
     </div>
   </section>
 </Base>

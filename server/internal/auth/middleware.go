@@ -185,6 +185,14 @@ func (m *Middleware) VerifySelfSigned(c *gin.Context, pubkeySPKI string, body []
 
 // RateLimit 限流中间件；keyFn 返回空串表示不限流。failClosed 决定 Redis 不可用时的行为。
 func (m *Middleware) RateLimit(name string, limit int, window time.Duration, failClosed bool, keyFn func(*gin.Context) string) gin.HandlerFunc {
+	return m.RateLimitMessage(name, limit, window, failClosed, "请求过于频繁", keyFn)
+}
+
+// RateLimitMessage 与 RateLimit 相同，但命中限额时使用调用方指定的中文提示。
+func (m *Middleware) RateLimitMessage(name string, limit int, window time.Duration, failClosed bool, message string, keyFn func(*gin.Context) string) gin.HandlerFunc {
+	if message == "" {
+		message = "请求过于频繁"
+	}
 	return func(c *gin.Context) {
 		k := keyFn(c)
 		if k == "" {
@@ -202,7 +210,7 @@ func (m *Middleware) RateLimit(name string, limit int, window time.Duration, fai
 		}
 		if !ok {
 			c.Header("Retry-After", strconv.Itoa(int(retry.Seconds())+1))
-			httpx.Fail(c, httpx.NewError(httpx.ErrRateLimited, "请求过于频繁"))
+			httpx.Fail(c, httpx.NewError(httpx.ErrRateLimited, message))
 			return
 		}
 		c.Next()
