@@ -61,6 +61,7 @@ start_probe session-write
 wait_log "SESSION_WRITE ok"
 sleep 2
 adb shell am force-stop "$PKG"
+sleep 1
 start_probe session-read force-stop
 wait_log "SESSION_READ present phase=force-stop"
 
