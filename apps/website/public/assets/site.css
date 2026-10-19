@@ -3,29 +3,30 @@
    尊重「减少动态效果」设置。 */
 :root {
   color-scheme: light;
-  --yh-bg: #f4f7fa;
+  --yh-bg: #f4f6f1;
   --yh-paper: #ffffff;
-  --yh-soft: #eef3f8;
-  --yh-line: #dce5ed;
-  --yh-ink: #112c43;
-  --yh-sub: #5d7285;
-  --yh-accent: #157fa6;
-  --yh-button: #143951;
-  --yh-button-ink: #ffffff;
-  --yh-good: #13795b;
-  --yh-warn: #a55c12;
-  --yh-danger: #ad4050;
+  --yh-soft: #e7eee4;
+  --yh-line: #d5dfd4;
+  --yh-ink: #14201c;
+  --yh-sub: #3e4c46;
+  --yh-accent: #14201c;
+  --yh-lime: #bbef68;
+  --yh-button: #bbef68;
+  --yh-button-ink: #14201c;
+  --yh-good: #1f7a45;
+  --yh-warn: #8a5a12;
+  --yh-danger: #9d3040;
   /* App 深色一侧，用于产品画面示意 */
-  --app-bg: #08121f;
-  --app-paper: #111f2e;
-  --app-soft: #172a3d;
-  --app-line: #2a4054;
-  --app-ink: #edf6fc;
-  --app-sub: #a1b4c5;
-  --app-accent: #79d0e3;
-  --app-good: #75d8b7;
-  --app-warn: #f2b46e;
-  --app-danger: #f2a3ae;
+  --app-bg: #0c1218;
+  --app-paper: #141c24;
+  --app-soft: #1c2832;
+  --app-line: #2c3c48;
+  --app-ink: #f3f6f1;
+  --app-sub: #a8b4ae;
+  --app-accent: #bbef68;
+  --app-good: #bbef68;
+  --app-warn: #f0c36a;
+  --app-danger: #f3a3ad;
 
   --sans: -apple-system, BlinkMacSystemFont, "PingFang SC", "HarmonyOS Sans SC", "MiSans", "Noto Sans SC", "Microsoft YaHei", "Segoe UI", sans-serif;
   --mono: ui-monospace, "SF Mono", Menlo, "Roboto Mono", Consolas, monospace;
@@ -70,7 +71,7 @@ h1, h2, h3, p { margin: 0; }
 .btn[aria-disabled="true"] { opacity: .5; cursor: not-allowed; transform: none; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .btn { transition: none; } .btn:hover { transform: none; } }
 
-.kicker { display: inline-block; font-size: 12px; font-weight: 600; letter-spacing: .18em; color: var(--yh-accent); }
+.kicker { display: inline-block; font-size: 12px; font-weight: 700; letter-spacing: .16em; color: #1f6b32; }
 .tag-demo { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--yh-sub); background: var(--yh-soft); border-radius: 8px; padding: 3px 9px; }
 
 /* ---------- 首屏 ---------- */
@@ -83,11 +84,11 @@ h1, h2, h3, p { margin: 0; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
 .hero-note { margin-top: 16px; font-size: 13px; color: var(--yh-sub); }
 .stage { position: relative; display: flex; justify-content: center; }
-.stage::before { content: ""; position: absolute; width: 110%; aspect-ratio: 1; top: 2%; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--yh-accent) 16%, transparent) 0%, transparent 65%); pointer-events: none; }
+.stage::before { content: ""; position: absolute; width: 110%; aspect-ratio: 1; top: 2%; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--yh-lime) 55%, transparent) 0%, transparent 65%); pointer-events: none; }
 @media (max-width: 860px) { .hero .wrap { grid-template-columns: 1fr; } .stage { margin-top: 12px; } }
 
 /* ---------- 产品画面示意（与 App 同一套深色组件） ---------- */
-.phone { position: relative; width: 290px; max-width: 86vw; min-height: 540px; border-radius: 44px; background: var(--app-bg); border: 8px solid #1b3348; box-shadow: 0 40px 60px -40px rgba(17, 44, 67, .55); padding: 18px 18px 16px; color: var(--app-ink); display: flex; flex-direction: column; font-size: 13px; line-height: 1.5; z-index: 1; }
+.phone { position: relative; width: 290px; max-width: 86vw; min-height: 540px; border-radius: 44px; background: var(--app-bg); border: 8px solid #14201c; box-shadow: 0 40px 60px -40px rgba(20, 32, 28, .45); padding: 18px 18px 16px; color: var(--app-ink); display: flex; flex-direction: column; font-size: 13px; line-height: 1.5; z-index: 1; }
 .phone-top { display: flex; justify-content: space-between; align-items: center; color: var(--app-sub); font-size: 11px; }
 .phone-notch { width: 70px; height: 5px; border-radius: 5px; background: var(--app-line); }
 .phone-title { font-weight: 600; font-size: 16px; margin: 14px 0 6px; }
@@ -212,6 +213,7 @@ details.more { border-top: 1px solid var(--yh-line); padding-top: 14px; }
 details.more summary { cursor: pointer; color: var(--yh-sub); font-size: 14px; }
 .howto { margin: 0; padding-left: 20px; display: grid; gap: 12px; color: var(--yh-sub); }
 .howto b { color: var(--yh-ink); }
+.hint { margin: 0; color: var(--yh-sub); font-size: 13px; }
 .notice-card { margin: 0; padding: 16px 18px; border-radius: var(--r-sm); background: var(--yh-paper); border: 1px solid var(--yh-line); color: var(--yh-sub); font-size: 14px; }
 .notice-card b { color: var(--yh-ink); }
 
@@ -232,10 +234,10 @@ details.more summary { cursor: pointer; color: var(--yh-sub); font-size: 14px; }
 .invite-steps { margin: 18px 0 0; padding-left: 20px; color: var(--yh-sub); display: grid; gap: 6px; }
 
 /* ---------- 收尾 / 页脚 ---------- */
-.cta-band { background: var(--yh-button); color: #fff; padding-block: clamp(48px, 7vw, 80px); }
+.cta-band { background: var(--yh-button); color: var(--yh-button-ink); padding-block: clamp(48px, 7vw, 80px); }
 .cta-band .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 20px; }
-.cta-band h2 { color: #fff; font-size: clamp(26px, 3.4vw, 38px); letter-spacing: -.02em; font-weight: 600; }
-.cta-band p { color: rgba(255, 255, 255, .72); margin-top: 6px; }
+.cta-band h2 { color: var(--yh-button-ink); font-size: clamp(26px, 3.4vw, 38px); letter-spacing: -.02em; font-weight: 600; }
+.cta-band p { color: var(--yh-button-ink); margin-top: 6px; }
 .btn-white { background: #fff; color: var(--yh-button); }
 .footer { border-top: 1px solid var(--yh-line); padding-block: 28px; color: var(--yh-sub); font-size: 13px; }
 .footer .wrap { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; }
@@ -281,3 +283,47 @@ details.more summary { cursor: pointer; color: var(--yh-sub); font-size: 14px; }
   .act-body .phone { justify-self: center; }
 }
 @media (prefers-reduced-data: reduce) { .lifestyle img { display: none; } }
+
+.badges { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 28px; }
+.badge { background: var(--yh-paper); border: 1px solid var(--yh-line); border-radius: 16px; padding: 14px 16px; }
+.badge b { display: block; font-size: 15px; }
+.badge span { display: block; color: var(--yh-sub); font-size: 13px; margin-top: 4px; }
+.plans { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.plan { background: var(--yh-paper); border: 1px solid var(--yh-line); border-radius: 20px; padding: 20px; min-height: 180px; display: flex; flex-direction: column; }
+.plan.rec { border-color: var(--yh-lime); box-shadow: inset 0 0 0 1px var(--yh-lime); }
+.plan .price { margin-top: auto; font-size: 22px; font-weight: 600; }
+.plan h2, .plan h3 { font-size: 18px; font-weight: 600; }
+.plan p { color: var(--yh-sub); font-size: 14px; margin-top: 8px; }
+.legal { max-width: 760px; }
+.legal h2 { font-size: 22px; margin: 28px 0 8px; }
+.legal p, .legal li { color: var(--yh-sub); }
+.legal ul { margin: 8px 0 0; padding-left: 1.2em; }
+table.data { width: 100%; border-collapse: collapse; font-size: 14px; }
+table.data th, table.data td { text-align: left; vertical-align: top; padding: 12px 10px; border-bottom: 1px solid var(--yh-line); }
+table.data th { color: var(--yh-sub); font-weight: 600; }
+.faq details { border-bottom: 1px solid var(--yh-line); padding: 14px 0; }
+.faq summary { cursor: pointer; font-weight: 600; }
+.faq p { color: var(--yh-sub); margin-top: 8px; }
+.help-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.help-card { background: var(--yh-paper); border: 1px solid var(--yh-line); border-radius: 18px; padding: 20px; }
+.help-card ol { margin: 8px 0 0; padding-left: 1.2em; color: var(--yh-sub); }
+@media (max-width: 900px) {
+  .badges, .plans, .help-grid { grid-template-columns: 1fr; }
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --yh-bg: #0c1218;
+    --yh-paper: #141c24;
+    --yh-soft: #1c2832;
+    --yh-line: #2c3c48;
+    --yh-ink: #f3f6f1;
+    --yh-sub: #a8b4ae;
+    --yh-accent: #bbef68;
+    --yh-button: #bbef68;
+    --yh-button-ink: #14201c;
+    --yh-good: #bbef68;
+  }
+  .kicker { color: var(--yh-lime); }
+  .nav { background: color-mix(in srgb, var(--yh-bg) 88%, transparent); }
+}

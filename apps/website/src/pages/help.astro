@@ -1,0 +1,50 @@
+---
+import Base from '../layouts/Base.astro';
+---
+<Base title="帮助 · 宇海VPN" description="怎么准备 USDT、怎么付款、怎么找回账户，以及免费试用和付费套餐的差别。">
+  <section class="page-head">
+    <div class="wrap">
+      <span class="kicker">帮助</span>
+      <h1>付款、找回、套餐差别</h1>
+      <p>账号是你自己的 USDT（TRC20）地址。不要用交易所的充值地址。</p>
+    </div>
+  </section>
+  <section class="section">
+    <div class="wrap help-grid">
+      <article class="help-card">
+        <h2>准备 USDT</h2>
+        <ol>
+          <li>在 TronLink 或 imToken 里准备一个你能自己转出的 TRC20 地址。</li>
+          <li>向这个地址转入 USDT（TRC20）。转错网络的资金无法找回。</li>
+          <li>注册时填写的就是这个地址。它也是登录账号。</li>
+        </ol>
+      </article>
+      <article class="help-card">
+        <h2>付款</h2>
+        <ol>
+          <li>在 App 里选择已经上架的套餐，金额以页面显示的 USDT 为准。</li>
+          <li>向页面上的收款地址转入同样的金额。可以一键复制金额和地址。</li>
+          <li>等链上确认。状态会从等待到确认中，再到已开通。</li>
+          <li>不自动续费。到期前不会再扣款。</li>
+        </ol>
+      </article>
+      <article class="help-card">
+        <h2>找回账户</h2>
+        <ol>
+          <li>在 App 里点忘记密码，页面会给出官方收款地址和一笔很小的 TRX 金额。</li>
+          <li>从注册时的那个地址转出这笔 TRX。金额照抄，不要取整。</li>
+          <li>链上确认后重设密码。网页上不能重设密码。</li>
+        </ol>
+      </article>
+      <article class="help-card">
+        <h2>试用和付费的差别</h2>
+        <ol>
+          <li>免费试用 24 小时：L1，不限流量，3 台设备。每个账户和每台设备一次。</li>
+          <li>付费时长卡按 App 里的周卡、月卡、季卡或年卡开通。价格只在 App 里。</li>
+          <li>兑换码在 App 里使用，不能在这个网站上兑换。</li>
+          <li>试用、兑换和购买都不会自动续费。</li>
+        </ol>
+      </article>
+    </div>
+  </section>
+</Base>

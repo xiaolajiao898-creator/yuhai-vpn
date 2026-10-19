@@ -33,6 +33,7 @@ const (
 	ErrQuotaExhausted    Code = 40303
 	ErrRiskBlocked       Code = 40304
 	ErrAccountDisabled   Code = 40305
+	ErrTrialDisabled     Code = 40311 // 免费试用已关闭
 	ErrForbidden         Code = 40310 // 后台/节点
 	ErrNotFound          Code = 40401
 	ErrInviteNotFound    Code = 40402

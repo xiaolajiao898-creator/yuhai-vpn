@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/providers.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
+import '../../account/presentation/support_sheet.dart';
 import '../../account/data/account_api.dart';
 import '../../home/data/me_api.dart';
 import 'settings_widgets.dart';
@@ -129,11 +130,13 @@ class SettingsPage extends ConsumerWidget {
                       title: '关于宇海',
                       subtitle: appVersion,
                       onTap: () => context.push(Routes.about)),
+                  const Divider(height: 1),
+                  SettingsRow(
+                      icon: Icons.support_agent_outlined,
+                      title: '联系客服',
+                      subtitle: 'Telegram',
+                      onTap: () => showSupportSheet(context)),
                 ])),
-                const SizedBox(height: 24),
-                Text('演示阶段 · VPN 连接仍为模拟模式',
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.labelSmall),
               ],
             ),
           );

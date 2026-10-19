@@ -14,7 +14,17 @@ ThemeData buildDeepSeaTheme() {
     outline: YhColors.line,
     outlineVariant: YhColors.line,
   );
-  const body = TextStyle(color: YhColors.moonlight, height: YhFont.lineHeight);
+  const body = TextStyle(
+    color: YhColors.moonlight,
+    height: YhFont.lineHeight,
+    fontFamilyFallback: [
+      'Noto Sans CJK SC',
+      'Noto Sans SC',
+      'PingFang SC',
+      'Microsoft YaHei',
+      'sans-serif',
+    ],
+  );
   final text = TextTheme(
     displayLarge: body.copyWith(fontSize: 40, fontWeight: FontWeight.w600),
     headlineMedium: body.copyWith(fontSize: 28, fontWeight: FontWeight.w600),

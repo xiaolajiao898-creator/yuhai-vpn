@@ -68,6 +68,8 @@ var configKeys = map[string]configKey{
 		desc: "时长类邀请奖励使用的套餐编号"},
 	"invite.reward_traffic_plan_code": {id: 5, kind: "plan_code", rewardOf: "TRAFFIC",
 		desc: "流量类邀请奖励使用的套餐编号"},
+	// internal/trial: Enabled()。false 时不再发放新的 24 小时试用。
+	"trial.enabled": {id: 6, kind: "bool", desc: "是否向新账户发放 24 小时免费试用"},
 }
 
 type ConfigUpdateInput struct {
@@ -220,6 +222,16 @@ func canonicalConfigValue(spec configKey, in json.RawMessage) (json.RawMessage, 
 			return nil, 0, "", httpx.Internal
 		}
 		return canonical, 0, code, nil
+	case "bool":
+		var on bool
+		dec := json.NewDecoder(bytes.NewReader(in))
+		if dec.Decode(&on) != nil || dec.More() {
+			return bad(spec.desc + "必须是布尔值")
+		}
+		if on {
+			return json.RawMessage("true"), 1, "true", nil
+		}
+		return json.RawMessage("false"), 0, "false", nil
 	}
 	return nil, 0, "", httpx.Internal
 }
@@ -273,6 +285,8 @@ func validateConfigValue(ctx context.Context, tx pgx.Tx, key string, spec config
 			return httpx.NewError(httpx.ErrBadRequest,
 				"该套餐编号不存在、已下架或类型不符，写进去奖励会静默不发")
 		}
+		return nil
+	case "bool":
 		return nil
 	}
 	return httpx.Internal

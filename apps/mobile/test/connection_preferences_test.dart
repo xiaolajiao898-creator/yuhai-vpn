@@ -135,15 +135,17 @@ void main() {
     storage.failLoad = false;
     await tester.tap(find.text('重新读取'));
     await tester.pumpAndSettle();
-    final auto = tester.widget<ListTile>(
-        find.byKey(const ValueKey('automatic-connect-unavailable')));
+    final auto = tester.widget<SwitchListTile>(
+        find.byKey(const ValueKey('automatic-connect')));
     final killSwitch = tester.widget<ListTile>(
-        find.byKey(const ValueKey('kill-switch-unavailable')));
-    expect(auto.enabled, isFalse);
-    expect(auto.onTap, isNull);
-    expect(killSwitch.enabled, isFalse);
-    expect(killSwitch.onTap, isNull);
-    expect(find.text('模拟连接不会建立真实 VPN 隧道。协议偏好可先保存，接入真实引擎后生效。'), findsOneWidget);
+        find.byKey(const ValueKey('kill-switch-guidance')));
+    final split = tester.widget<SwitchListTile>(
+        find.byKey(const ValueKey('split-tunnel-unavailable')));
+    expect(auto.value, isFalse);
+    expect(auto.onChanged, isNotNull);
+    expect(killSwitch.onTap, isNotNull);
+    expect(split.onChanged, isNull);
+    expect(find.text('引擎尚未接入。打开也不会改变流量走向'), findsOneWidget);
     expect(tester.takeException(), isNull);
   });
 

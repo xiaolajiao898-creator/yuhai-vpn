@@ -1,6 +1,24 @@
 // 宇海官网脚本：首屏连接动效示意、三幕图库、进入视区淡入、复制校验值、邀请码。无第三方依赖。
 (function () {
   'use strict';
+  // 首页主按钮按系统跳到对应安装包；其他系统仍进下载页，不猜一个不存在的客户端。
+  var ua = navigator.userAgent || '';
+  var android = /Android/i.test(ua);
+  var windows = /Windows NT/i.test(ua);
+  var direct = android
+    ? '/download/yuhai-vpn-candidate-0928.apk'
+    : windows
+      ? '/download/YuhaiVPN-Windows-x64-candidate.exe'
+      : '';
+  if (direct) {
+    var primary = document.getElementById('primary-download');
+    var navDl = document.getElementById('nav-download');
+    if (primary) {
+      primary.href = direct;
+      primary.textContent = android ? '下载安卓版' : '下载 Windows 版';
+    }
+    if (navDl) navDl.href = direct;
+  }
   var mq = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   var reduce = !!(mq && mq.matches);
 

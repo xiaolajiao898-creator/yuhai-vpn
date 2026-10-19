@@ -1,0 +1,41 @@
+---
+import Base from '../layouts/Base.astro';
+import { privacyData } from '../data/privacy';
+---
+<Base title="隐私 · 宇海VPN" description="宇海VPN 收集哪些账户和设备信息，以及它们用来做什么。">
+  <section class="page-head">
+    <div class="wrap">
+      <span class="kicker">隐私</span>
+      <h1>我们保存什么</h1>
+      <p>这是根据现有产品整理的提纲。正式对外文本以上线前审过的版本为准。</p>
+    </div>
+  </section>
+  <section class="section">
+    <div class="wrap legal">
+      <div style="overflow-x: auto;">
+        <table class="data">
+          <thead>
+            <tr><th>信息</th><th>用途</th><th>保留</th></tr>
+          </thead>
+          <tbody>
+            {privacyData.map((row) => (
+              <tr>
+                <td>{row.item}</td>
+                <td>{row.purpose}</td>
+                <td>{row.retention}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <h2>免费试用</h2>
+      <p>领取 24 小时试用时，服务器记下账户、当前设备，以及 App 保存在本机的安装标识。用来保证每个账户和每台设备只领一次。试用记录不保存 IP 地址。</p>
+      <h2>我们不拿来当账号的东西</h2>
+      <ul>
+        <li>不要求手机号。</li>
+        <li>不要求邮箱。</li>
+        <li>流量统计是按设备和线路汇总的字节数，不含你访问了哪些网站。</li>
+      </ul>
+    </div>
+  </section>
+</Base>

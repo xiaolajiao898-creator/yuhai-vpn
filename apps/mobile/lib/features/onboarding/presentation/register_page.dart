@@ -7,6 +7,7 @@ import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../core/network/api_client.dart';
 import 'auth_layout.dart';
+import 'brand_scenes.dart';
 import 'credential_rules.dart';
 import 'onboarding_controller.dart';
 
@@ -89,7 +90,13 @@ class _RegisterPageState extends ConsumerState<RegisterPage> {
             children: [
               Text('创建账户', style: text.headlineMedium),
               const SizedBox(height: YhSpace.unit),
-              Text('账号就是你的 USDT 地址，密码自己设置。', style: text.bodyMedium?.copyWith(color: YhColors.haze)),
+              Text('账号就是你的 USDT 地址，密码自己设置。注册后可领 24 小时免费试用。',
+                  style: text.bodyMedium?.copyWith(color: YhColors.haze)),
+              const SizedBox(height: YhSpace.page),
+              const BrandSceneArt(scene: BrandScene.wallet, compact: true),
+              const SizedBox(height: 8),
+              Text('打开 TronLink 或 imToken，在资产页找到 USDT（TRC20），点复制，再回到这里粘贴。不要用交易所的充值地址。',
+                  style: text.labelSmall),
               const SizedBox(height: YhSpace.page),
               TextField(
                 controller: _address,

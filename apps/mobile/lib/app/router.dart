@@ -27,6 +27,7 @@ import '../features/payment/data/orders_api.dart';
 import '../features/payment/presentation/orders_page.dart';
 import '../features/payment/presentation/pay_page.dart';
 import '../features/payment/presentation/pay_result_page.dart';
+import 'theme/tokens.dart';
 
 /// 路由表与方案 9.4 页面编号一一对应；页面文件在各 feature/presentation 下逐周补齐。
 abstract final class Routes {
@@ -101,7 +102,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       );
     },
     routes: [
-      GoRoute(path: Routes.splash, builder: (_, __) => const _Splash()),
+      GoRoute(path: Routes.splash, builder: (_, __) => const YuhaiSplash()),
       GoRoute(
           path: Routes.sessionUnavailable,
           builder: (_, __) => const SessionUnavailablePage()),
@@ -157,12 +158,52 @@ final routerProvider = Provider<GoRouter>((ref) {
 });
 
 /// P01 启动页：读取本地会话期间显示品牌字标，目标 1.5 秒内离开。
-class _Splash extends StatelessWidget {
-  const _Splash();
+class YuhaiSplash extends StatelessWidget {
+  const YuhaiSplash({super.key});
   @override
-  Widget build(BuildContext context) => Scaffold(
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Scaffold(
       body: Center(
-          child: Text('宇海', style: Theme.of(context).textTheme.displayLarge)));
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Container(
+            width: 72,
+            height: 72,
+            decoration: BoxDecoration(
+              color: YhColors.accent,
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: const CustomPaint(painter: _WaveMark()),
+          ),
+          const SizedBox(height: 16),
+          Text('宇海VPN', style: text.headlineMedium),
+        ]),
+      ),
+    );
+  }
+}
+
+class _WaveMark extends CustomPainter {
+  const _WaveMark();
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = YhColors.buttonInk
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < 3; i++) {
+      final y = size.height * (0.34 + i * 0.16);
+      final path = Path()
+        ..moveTo(size.width * 0.2, y)
+        ..quadraticBezierTo(size.width * 0.35, y - 8, size.width * 0.5, y)
+        ..quadraticBezierTo(size.width * 0.65, y + 8, size.width * 0.8, y);
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _Notifier extends ChangeNotifier {

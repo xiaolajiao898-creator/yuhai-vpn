@@ -309,7 +309,17 @@ func (r *Repo) entitlement(ctx context.Context, userID int64) (entitlementRow, e
 	var e entitlementRow
 	err := r.Pool.QueryRow(ctx, `
 		SELECT s.tier,
-		       COALESCE(NULLIF(p.name, ''), CASE WHEN s.tier > 0 AND s.plan_id IS NULL THEN '兑换卡' ELSE '' END),
+		       COALESCE(NULLIF(p.name, ''), CASE
+		         WHEN s.tier > 0 AND s.plan_id IS NULL AND EXISTS (
+		           SELECT 1 FROM subscription_ledger l
+		            WHERE l.user_id = s.user_id AND l.idempotency_key = 'trial:user:' || s.user_id::text
+		              AND NOT EXISTS (
+		                SELECT 1 FROM subscription_ledger newer
+		                 WHERE newer.user_id = s.user_id AND newer.id > l.id
+		              )
+		         ) THEN '免费试用'
+		         WHEN s.tier > 0 AND s.plan_id IS NULL THEN '兑换卡'
+		         ELSE '' END),
 		       s.expire_at, s.device_limit, s.period_quota_bytes, s.period_used_bytes, s.period_reset_at
 		  FROM subscriptions s LEFT JOIN plans p ON p.id = s.plan_id WHERE s.user_id = $1`, userID).
 		Scan(&e.Tier, &e.PlanName, &e.ExpireAt, &e.DeviceLimit, &e.PeriodQuotaBytes, &e.PeriodUsedBytes, &e.PeriodResetAt)

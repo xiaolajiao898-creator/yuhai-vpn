@@ -85,7 +85,7 @@ class _TidePainter extends CustomPainter {
     final color = switch (status) {
       VpnStatus.connected => YhColors.glow,
       VpnStatus.error => YhColors.coral,
-      VpnStatus.connecting || VpnStatus.reconnecting => YhColors.moonlight,
+      VpnStatus.connecting || VpnStatus.reconnecting => YhColors.accent,
       _ => YhColors.reef,
     };
     final base = Paint()

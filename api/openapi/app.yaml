@@ -500,6 +500,84 @@ paths:
                           extended: { type: boolean }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/trial:
+    get:
+      tags: [account]
+      operationId: getTrial
+      x-auth-level: S1
+      summary: 查看 24 小时免费试用是否还能领
+      description: |
+        不发放权益。`status` 为 `available`、`active`、`expired`、`ineligible` 或 `disabled`。
+        试用为 L1、连续 24 小时、不限流量、3 台设备，不自动续费。每个账户、每台设备只能领一次。
+      responses:
+        '200':
+          description: 当前试用状态
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [enabled, eligible, status, tier, device_limit, unlimited_traffic, duration_hours]
+                        properties:
+                          enabled: { type: boolean }
+                          eligible: { type: boolean }
+                          status: { type: string, enum: [available, active, expired, ineligible, disabled] }
+                          reason: { type: string, enum: [ALREADY, DEVICE_USED, NOT_NEW, DISABLED] }
+                          expire_at: { type: [string, 'null'], format: date-time }
+                          tier: { type: integer }
+                          device_limit: { type: integer }
+                          unlimited_traffic: { type: boolean }
+                          duration_hours: { type: integer }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [account]
+      operationId: claimTrial
+      x-auth-level: S2
+      summary: 领取 24 小时免费试用
+      description: |
+        幂等。同一账户再次调用返回第一次的到期时间，不会延长。
+        已有购买、兑换、邀请或管理员开通记录的账户不能领。
+        同一设备行、同一注册指纹、或客户端持久化的 install_id 已被其他账户使用时拒绝。
+        `system_configs.trial.enabled = false` 或环境变量 `YUHAI_TRIAL_ENABLED=0` 时返回 40311。
+        每个账户每小时最多 5 次，每个 IP 每小时最多 20 次。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [install_id]
+              properties:
+                install_id:
+                  type: string
+                  format: uuid
+                  description: 装在本机、注册第二个账户时也不轮换的安装标识
+      responses:
+        '200':
+          description: 已开通或之前已经领过。status=already 时到期时间是第一次的。
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [status, expire_at, tier, device_limit, unlimited_traffic, duration_hours, active]
+                        properties:
+                          status: { type: string, enum: [granted, already] }
+                          expire_at: { type: string, format: date-time }
+                          tier: { type: integer }
+                          device_limit: { type: integer }
+                          unlimited_traffic: { type: boolean }
+                          duration_hours: { type: integer }
+                          active: { type: boolean }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/account/backup-ack:
     post:
       tags: [account]

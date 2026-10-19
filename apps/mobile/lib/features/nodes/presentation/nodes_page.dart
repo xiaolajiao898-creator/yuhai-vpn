@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
+import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../platform/vpn/egress_profile.dart';
 import '../../connection/presentation/connection_controller.dart';
@@ -193,6 +195,7 @@ class _NodesPageState extends ConsumerState<NodesPage>
           selected: selected == n.id,
           favorite: shortcuts.favorites.contains(n.id),
           onTap: () => _choose(n.id),
+          onUpgrade: n.lockedReason == 'TIER' ? () => context.push(Routes.plans) : null,
           onFavorite: () {
             // 先取好提示入口，异步失败回来时不再使用可能已失效的 context。
             final messenger = ScaffoldMessenger.of(context);
@@ -405,11 +408,13 @@ class _LineTile extends StatelessWidget {
       required this.selected,
       required this.favorite,
       required this.onTap,
-      required this.onFavorite});
+      required this.onFavorite,
+      this.onUpgrade});
   final NodeItem node;
   final Map<String, int?> latency;
   final bool selected, favorite;
   final VoidCallback onTap, onFavorite;
+  final VoidCallback? onUpgrade;
 
   @override
   Widget build(BuildContext context) {
@@ -428,8 +433,8 @@ class _LineTile extends StatelessWidget {
         : n.unavailableLabel;
     return _Frame(
       selected: selected,
-      enabled: n.available,
-      onTap: n.available ? onTap : null,
+      enabled: n.available || onUpgrade != null,
+      onTap: n.available ? onTap : onUpgrade,
       child: ListTile(
         leading: Text(countryFlag(n.countryCode),
             style: const TextStyle(fontSize: 22)),
@@ -450,7 +455,9 @@ class _LineTile extends StatelessWidget {
                 onPressed: onFavorite,
                 icon: Icon(favorite ? Icons.star : Icons.star_border,
                     color: favorite ? YhColors.accent : YhColors.sub))
-            : const Icon(Icons.lock_outline, color: YhColors.sub, size: 18),
+            : onUpgrade != null
+                ? TextButton(onPressed: onUpgrade, child: const Text('升级'))
+                : const Icon(Icons.lock_outline, color: YhColors.sub, size: 18),
       ),
     );
   }

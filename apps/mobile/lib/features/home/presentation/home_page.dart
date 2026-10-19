@@ -7,7 +7,10 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router.dart';
 
 import '../../../app/theme/tokens.dart';
+import '../../../core/network/api_client.dart';
 import '../../../core/widgets/tide_ring_button.dart';
+import '../../account/data/trial_api.dart';
+import '../../account/presentation/support_sheet.dart';
 import '../../../platform/vpn/egress_profile.dart';
 import '../../../platform/vpn/vpn_engine.dart';
 import '../../connection/presentation/connection_controller.dart';
@@ -33,11 +36,147 @@ class HomePage extends ConsumerStatefulWidget {
 
 class _HomePageState extends ConsumerState<HomePage> {
   Timer? _tick;
+  var _autoTried = false;
+  var _claiming = false;
 
   @override
   void dispose() {
     _tick?.cancel();
     super.dispose();
+  }
+
+  String? _blockedReason() {
+    final ent = ref.read(meProvider).valueOrNull?['entitlement'];
+    if (ent is Map && ent['blocked_reason'] is String) {
+      return ent['blocked_reason'] as String;
+    }
+    return null;
+  }
+
+  bool _isAccessBlock(String? code) =>
+      code == 'NO_PLAN' || code == 'EXPIRED' || code == 'QUOTA_EXHAUSTED' || code == 'SUSPENDED';
+
+  Future<void> _onPower() async {
+    final reason = _blockedReason();
+    if (reason == 'NO_PLAN' || reason == 'EXPIRED') {
+      await _showAccessSheet(reason!);
+      return;
+    }
+    if (reason == 'SUSPENDED' || reason == 'QUOTA_EXHAUSTED') {
+      await _showAccessSheet(reason!);
+      return;
+    }
+    await ref.read(connectionControllerProvider.notifier).toggle();
+    if (!mounted) return;
+    final failure = ref.read(connectionFailureProvider);
+    if (failure != null && _isAccessBlock(failure.code)) {
+      await _showAccessSheet(failure.code);
+    }
+  }
+
+  void _maybeAutoConnect() {
+    if (_autoTried) return;
+    final prefs = ref.read(connectionPreferencesProvider).valueOrNull;
+    if (prefs == null || !prefs.autoConnect) return;
+    if (_blockedReason() != null) {
+      _autoTried = true;
+      return;
+    }
+    if (ref.read(connectionControllerProvider) != VpnStatus.disconnected) return;
+    _autoTried = true;
+    Future<void>.microtask(() {
+      if (mounted) ref.read(connectionControllerProvider.notifier).toggle();
+    });
+  }
+
+  Future<void> _claimTrial() async {
+    if (_claiming) return;
+    setState(() => _claiming = true);
+    try {
+      final grant = await ref.read(trialApiProvider).claim();
+      ref.invalidate(meProvider);
+      if (!mounted) return;
+      final when = grant.active ? '试用已开通，到 ${ _local(grant.expireAt)}' : '试用已经用过了';
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(when)));
+    } on ApiException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('没能开通试用，请重试')));
+      }
+    } finally {
+      if (mounted) setState(() => _claiming = false);
+    }
+  }
+
+  String _local(DateTime value) {
+    final local = value.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}';
+  }
+
+  Future<void> _showAccessSheet(String reason) {
+    final trial = reason == 'NO_PLAN';
+    return showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        final text = Theme.of(sheetContext).textTheme;
+        final title = switch (reason) {
+          'EXPIRED' => '套餐已到期',
+          'QUOTA_EXHAUSTED' => '流量已用完',
+          'SUSPENDED' => '账户暂不可用',
+          _ => '还没开通',
+        };
+        final body = switch (reason) {
+          'EXPIRED' => '这次不是线路故障。续费或兑换后就可以连接。',
+          'QUOTA_EXHAUSTED' => '这次不是线路故障。补充流量后就可以连接。',
+          'SUSPENDED' => '账户已停用。请联系客服，重试换线路没有用。',
+          _ => '新用户可以免费试用 24 小时。试用是 L1、不限流量、3 台设备，不自动续费。',
+        };
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
+            child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+              Text(title, style: text.headlineMedium),
+              const SizedBox(height: 8),
+              Text(body, style: text.bodyMedium?.copyWith(color: YhColors.sub)),
+              const SizedBox(height: 16),
+              if (trial)
+                FilledButton(
+                  onPressed: _claiming
+                      ? null
+                      : () async {
+                          Navigator.pop(sheetContext);
+                          await _claimTrial();
+                        },
+                  child: Text(_claiming ? '正在开通…' : '免费试用 24 小时'),
+                ),
+              if (trial) const SizedBox(height: 8),
+              if (reason != 'SUSPENDED')
+                OutlinedButton(
+                  onPressed: () {
+                    Navigator.pop(sheetContext);
+                    context.push(Routes.plans);
+                  },
+                  child: Text(reason == 'QUOTA_EXHAUSTED' ? '买流量包' : '查看套餐'),
+                ),
+              if (reason == 'NO_PLAN' || reason == 'EXPIRED')
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(sheetContext);
+                    context.push(Routes.redeem);
+                  },
+                  child: const Text('兑换码'),
+                ),
+              TextButton(onPressed: () => showSupportSheet(sheetContext), child: const Text('联系客服')),
+            ]),
+          ),
+        );
+      },
+    );
   }
 
   void _syncTicker(bool connected) {
@@ -63,12 +202,21 @@ class _HomePageState extends ConsumerState<HomePage> {
     final stats = status == VpnStatus.connected
         ? ref.watch(vpnStatsProvider).valueOrNull
         : null;
-    _syncTicker(status == VpnStatus.connected && stats != null);
     final chosen =
         nodeState.asData?.value.where((n) => n.id == selectedNode).firstOrNull;
     final text = Theme.of(context).textTheme;
     final reduceMotion = ref.watch(reduceConnectionMotionProvider);
-    final (label, color) = switch (status) {
+    final blocked = me.valueOrNull?['entitlement'] is Map
+        ? (me.valueOrNull!['entitlement'] as Map)['blocked_reason'] as String?
+        : null;
+    final accessBlock = _isAccessBlock(blocked) ||
+        (status == VpnStatus.error && _isAccessBlock(failure?.code));
+    final visual = accessBlock && status == VpnStatus.error
+        ? VpnStatus.disconnected
+        : status;
+    _syncTicker(visual == VpnStatus.connected && stats != null);
+    _maybeAutoConnect();
+    final (label, color) = switch (visual) {
       VpnStatus.connected => (demo ? '模拟已连接' : '已连接', YhColors.good),
       VpnStatus.connecting => ('正在连接', YhColors.accent),
       VpnStatus.reconnecting => ('正在重连', YhColors.warn),
@@ -76,8 +224,15 @@ class _HomePageState extends ConsumerState<HomePage> {
       VpnStatus.error => ('连接失败', YhColors.danger),
       VpnStatus.disconnected => ('未连接', YhColors.sub),
     };
+    final wash = switch (visual) {
+      VpnStatus.connected => const Color(0xFF16301C),
+      VpnStatus.connecting || VpnStatus.reconnecting => const Color(0xFF1A2414),
+      VpnStatus.error => YhColors.bg,
+      _ => YhColors.bg,
+    };
     return Scaffold(
-      appBar: AppBar(title: const Text('宇海'), actions: [
+      backgroundColor: wash,
+      appBar: AppBar(title: const Text('宇海VPN'), backgroundColor: Colors.transparent, actions: [
         TextButton(
             onPressed: () => context.push(Routes.balance),
             child: const Text('账单')),
@@ -140,27 +295,42 @@ class _HomePageState extends ConsumerState<HomePage> {
                       MediaQuery.of(context).disableAnimations || reduceMotion),
               child: Center(
                 child: TideRingButton(
-                  status: status,
-                  onTap: () =>
-                      ref.read(connectionControllerProvider.notifier).toggle(),
+                  status: visual,
+                  onTap: _onPower,
                 ),
               ),
             ),
             const SizedBox(height: 16),
-            if (stats != null)
+            if (stats != null) ...[
               Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                 _Rate(icon: Icons.arrow_downward, value: stats.downSpeed),
                 const SizedBox(width: 24),
                 _Rate(icon: Icons.arrow_upward, value: stats.upSpeed),
               ]),
-            if (failure != null && status == VpnStatus.error)
+              const SizedBox(height: 4),
+              Text('本次流量 ${_bytes(stats.downBytes + stats.upBytes)}',
+                  textAlign: TextAlign.center,
+                  style: text.labelSmall?.copyWith(fontFamily: YhFont.numeric)),
+            ],
+            if (blocked == 'NO_PLAN')
+              Padding(
+                padding: const EdgeInsets.only(top: 16),
+                child: _AccessBanner(
+                  title: '还没开通',
+                  body: '免费试用 24 小时，或选一个套餐。这不是线路故障。',
+                  action: '免费试用 24 小时',
+                  busy: _claiming,
+                  onAction: _claimTrial,
+                  onPlans: () => context.push(Routes.plans),
+                ),
+              ),
+            if (failure != null && status == VpnStatus.error && !accessBlock)
               _FailureCard(
                 failure: failure,
                 onRetry: () =>
                     ref.read(connectionControllerProvider.notifier).toggle(),
-                onSwitch: () => failure.code == 'NO_PLAN'
-                    ? context.push(Routes.plans)
-                    : context.push(Routes.nodes),
+                onSwitch: () => context.push(Routes.nodes),
+                onSupport: () => showSupportSheet(context),
               ),
             if (notice != null &&
                 (status == VpnStatus.connected ||
@@ -205,6 +375,18 @@ class _HomePageState extends ConsumerState<HomePage> {
     return '连接时按本机延迟检测选择可用线路';
   }
 
+  static String _bytes(int n) {
+    const units = ['B', 'KB', 'MB', 'GB'];
+    var value = n.toDouble();
+    var unit = 0;
+    while (value >= 1024 && unit < units.length - 1) {
+      value /= 1024;
+      unit++;
+    }
+    final digits = unit == 0 || value >= 10 ? 0 : 1;
+    return '${value.toStringAsFixed(digits)} ${units[unit]}';
+  }
+
   static String _duration(Duration d) {
     if (d.isNegative) d = Duration.zero;
     String two(int v) => v.toString().padLeft(2, '0');
@@ -240,11 +422,50 @@ class _Rate extends StatelessWidget {
       ]);
 }
 
+class _AccessBanner extends StatelessWidget {
+  const _AccessBanner({
+    required this.title,
+    required this.body,
+    required this.action,
+    required this.busy,
+    required this.onAction,
+    required this.onPlans,
+  });
+  final String title, body, action;
+  final bool busy;
+  final VoidCallback onAction, onPlans;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: YhColors.paper,
+        borderRadius: BorderRadius.circular(YhRadius.surface),
+        border: Border.all(color: YhColors.accent.withValues(alpha: .5)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Text(title, style: text.titleLarge),
+        const SizedBox(height: 4),
+        Text(body, style: text.bodyMedium?.copyWith(color: YhColors.sub)),
+        const SizedBox(height: 12),
+        FilledButton(onPressed: busy ? null : onAction, child: Text(busy ? '正在开通…' : action)),
+        TextButton(onPressed: onPlans, child: const Text('查看套餐')),
+      ]),
+    );
+  }
+}
+
 class _FailureCard extends StatelessWidget {
   const _FailureCard(
-      {required this.failure, required this.onRetry, required this.onSwitch});
+      {required this.failure,
+      required this.onRetry,
+      required this.onSwitch,
+      required this.onSupport});
   final VpnFailure failure;
-  final VoidCallback onRetry, onSwitch;
+  final VoidCallback onRetry, onSwitch, onSupport;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -269,9 +490,9 @@ class _FailureCard extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
                 child: OutlinedButton(
-                    onPressed: onSwitch,
-                    child: Text(failure.code == 'NO_PLAN' ? '去开通' : '换一条线路'))),
+                    onPressed: onSwitch, child: const Text('换线路'))),
           ]),
+          TextButton(onPressed: onSupport, child: const Text('联系客服')),
         ]),
       );
 }

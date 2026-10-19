@@ -29,6 +29,7 @@ import (
 	"github.com/yuhai-vpn/server/internal/redeem"
 	"github.com/yuhai-vpn/server/internal/redisx"
 	"github.com/yuhai-vpn/server/internal/traffic"
+	"github.com/yuhai-vpn/server/internal/trial"
 	"github.com/yuhai-vpn/server/internal/tron"
 
 	"github.com/yuhai-vpn/server/internal/safelog"
@@ -126,5 +127,6 @@ func buildRouter(d routerDeps) *gin.Engine {
 	(&traffic.Handler{Svc: &traffic.Service{Pool: d.Pool, Clock: d.Clock}, MW: d.MW}).Mount(v1)
 	(&connect.Handler{Svc: &connect.Service{Pool: d.Pool, Clock: d.Clock, Cipher: d.Cipher}, MW: d.MW}).Mount(v1)
 	(&redeem.Handler{Svc: &redeem.Service{Pool: d.Pool, Clock: d.Clock}, MW: d.MW}).Mount(v1)
+	(&trial.Handler{Svc: &trial.Service{Pool: d.Pool, Clock: d.Clock}, MW: d.MW}).Mount(v1)
 	return r
 }
