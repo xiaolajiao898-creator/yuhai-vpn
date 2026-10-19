@@ -71,6 +71,8 @@ jobs:
       - run: npm ci
       - run: npm audit --audit-level=moderate
       - run: npm run build
+      - name: 内联脚本和跨域接口检查
+        run: npm run check:csp
   contracts:
     runs-on: ubuntu-latest
     steps:

@@ -129,10 +129,13 @@
     return q;
   }
 
+  var API_ORIGIN = 'https://api.yhvpn.io';
+
   function apiBase(doc) {
     var meta = doc.querySelector('meta[name="yuhai-api"]');
-    var v = meta && meta.content ? meta.content.replace(/\/$/, '') : 'https://api.yhvpn.io';
-    return v;
+    var declared = meta && meta.content ? String(meta.content).trim().replace(/\/$/, '') : API_ORIGIN;
+    if (declared !== API_ORIGIN) return '';
+    return API_ORIGIN;
   }
 
   function showError(el, text) {
@@ -196,9 +199,13 @@
         againEl.focus();
         return;
       }
+      var base = apiBase(doc);
+      if (base !== API_ORIGIN) {
+        showError(errorEl, '注册接口不可用，请刷新页面后再试');
+        return;
+      }
       submitEl.disabled = true;
       if (powEl) powEl.textContent = '正在获取人机验证…';
-      var base = apiBase(doc);
       fetch(base + '/v1/auth/web/challenge', {
         method: 'POST',
         mode: 'cors',

@@ -46,7 +46,7 @@ yhvpn.io {
 	encode zstd gzip
 	header {
 		X-Frame-Options "DENY"
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://api.yhvpn.io; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 	}
 	root * /opt/yuhai-vpn/site
 	@apk path *.apk
