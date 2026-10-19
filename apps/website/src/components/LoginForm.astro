@@ -1,0 +1,22 @@
+---
+const { prefix = 'login', secondary = '新用户注册' } = Astro.props;
+---
+<form class="login-card" data-login-form method="post" action="/login/" novalidate>
+  <header>
+    <h2>登录</h2>
+    <span class="secure-pill"><i></i>加密连接</span>
+  </header>
+  <p class="lede">一个 USDT 地址加一个密码，就是你的宇海账户。不需要手机号或邮箱。</p>
+  <div class="field">
+    <label for={`${prefix}-address`}>USDT 地址（TRC20）</label>
+    <input id={`${prefix}-address`} name="address" type="text" inputmode="text" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" placeholder="T 开头，共 34 位" required />
+  </div>
+  <div class="field">
+    <label for={`${prefix}-password`}>密码</label>
+    <input id={`${prefix}-password`} name="password" type="password" autocomplete="current-password" maxlength="128" placeholder="注册时自己设置" required />
+  </div>
+  <p class="form-error" data-login-error hidden></p>
+  <p class="pow" data-login-pow>提交时自动完成人机验证，大约一两秒，不使用第三方验证码。</p>
+  <button class="btn btn-primary" type="submit" data-login-submit>登录</button>
+  <a class="btn btn-outline" href="/register/">{secondary}</a>
+</form>

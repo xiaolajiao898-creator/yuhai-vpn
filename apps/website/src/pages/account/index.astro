@@ -1,0 +1,67 @@
+---
+import Base from '../../layouts/Base.astro';
+---
+<Base title="我的账户 · 宇海VPN" description="查看宇海VPN 账户、当前套餐、到期时间和设备数。可以领取 24 小时免费试用或输入兑换码。">
+  <meta slot="head" name="yuhai-api" content="https://api.yhvpn.io" />
+  <section class="page-head">
+    <div class="wrap">
+      <span class="kicker">用户中心</span>
+      <h1>我的账户</h1>
+      <p>查看套餐和设备。新账户可以领取 24 小时免费试用，有兑换码也可以在这里开通。</p>
+    </div>
+  </section>
+  <section class="section">
+    <div class="wrap account-wrap">
+      <p class="account-loading" id="account-loading">正在读取账户…</p>
+      <div class="account-gate" id="account-gate" hidden>
+        <h2>请先登录</h2>
+        <p>登录后可以查看套餐、到期时间和设备数。</p>
+        <a class="btn btn-primary" href="/login/">去登录</a>
+      </div>
+      <div id="account-panel" hidden>
+        <div class="account-grid">
+          <article class="account-stat">
+            <span>账号</span>
+            <b class="mono" id="acc-address">—</b>
+          </article>
+          <article class="account-stat">
+            <span>当前套餐</span>
+            <b id="acc-plan">—</b>
+          </article>
+          <article class="account-stat">
+            <span>到期时间</span>
+            <b id="acc-expire">—</b>
+          </article>
+          <article class="account-stat">
+            <span>设备数</span>
+            <b id="acc-devices">—</b>
+          </article>
+        </div>
+        <div class="account-actions">
+          <article class="box-card">
+            <h3>24 小时免费试用</h3>
+            <p id="trial-copy">新账户可以领取一次。不限流量，最多 3 台设备，到期即停，不会自动变成付费。</p>
+            <p class="form-error" id="trial-error" hidden></p>
+            <p class="form-ok" id="trial-ok" hidden></p>
+            <button class="btn btn-primary" id="trial-claim" type="button">领取 24 小时免费试用</button>
+          </article>
+          <article class="box-card">
+            <h3>兑换码开通</h3>
+            <p>输入兑换码后按卡面天数开通。价格即将公布，这里不显示金额。</p>
+            <form id="redeem-form" method="post" action="/account/" novalidate>
+              <div class="field">
+                <label for="redeem-code">兑换码</label>
+                <input class="mono" id="redeem-code" name="code" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="64" placeholder="例如 ABCD-EFGH-JKLM-NPQR" />
+              </div>
+              <p class="form-error" id="redeem-error" hidden></p>
+              <p class="form-ok" id="redeem-ok" hidden></p>
+              <button class="btn btn-outline" id="redeem-submit" type="submit">开通</button>
+            </form>
+          </article>
+        </div>
+        <button class="btn btn-outline" id="logout" type="button">退出登录</button>
+      </div>
+    </div>
+  </section>
+  <script is:inline src="/assets/web-account.js"></script>
+</Base>

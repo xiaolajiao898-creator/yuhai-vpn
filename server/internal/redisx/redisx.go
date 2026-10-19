@@ -95,6 +95,40 @@ func (c *Client) Del(ctx context.Context, key string) error {
 	return c.rdb.Del(ctx, key).Err()
 }
 
+// WindowCount 返回滑动窗口里已经记下的次数，不新增。
+func (c *Client) WindowCount(ctx context.Context, key string, window time.Duration) (int64, error) {
+	if c == nil || c.rdb == nil || key == "" || window <= 0 {
+		return 0, errors.New("redis unavailable")
+	}
+	now := time.Now()
+	k := "rl:" + key
+	pipe := c.rdb.TxPipeline()
+	pipe.ZRemRangeByScore(ctx, k, "0", strconv.FormatInt(now.Add(-window).UnixMicro(), 10))
+	count := pipe.ZCard(ctx, k)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, err
+	}
+	return count.Val(), nil
+}
+
+// AddWindow 往滑动窗口记一次，并返回记完后的次数。
+func (c *Client) AddWindow(ctx context.Context, key string, window time.Duration) (int64, error) {
+	if c == nil || c.rdb == nil || key == "" || window <= 0 {
+		return 0, errors.New("redis unavailable")
+	}
+	now := time.Now()
+	k := "rl:" + key
+	pipe := c.rdb.TxPipeline()
+	pipe.ZRemRangeByScore(ctx, k, "0", strconv.FormatInt(now.Add(-window).UnixMicro(), 10))
+	pipe.ZAdd(ctx, k, redis.Z{Score: float64(now.UnixMicro()), Member: uuid.NewString()})
+	count := pipe.ZCard(ctx, k)
+	pipe.Expire(ctx, k, window)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return 0, err
+	}
+	return count.Val(), nil
+}
+
 func (c *Client) TakeTicket(ctx context.Context, kind, id string) (string, error) {
 	v, err := c.rdb.GetDel(ctx, "ticket:"+kind+":"+id).Result()
 	if errors.Is(err, redis.Nil) {

@@ -1,8 +1,9 @@
 ---
 import Base from '../layouts/Base.astro';
-const power = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>`;
+import LoginForm from '../components/LoginForm.astro';
 ---
 <Base title="宇海VPN · 用地址注册，24 小时免费试用" description="用你的 USDT（TRC20）地址注册宇海VPN。新用户免费试用 24 小时，不自动续费，不需要手机号或邮箱。">
+  <meta slot="head" name="yuhai-api" content="https://api.yhvpn.io" />
   <section class="hero">
     <div class="wrap">
       <div>
@@ -18,23 +19,7 @@ const power = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
           <div class="badge"><b>不自动续费</b><span>预付 USDT，到期即停</span></div>
         </div>
       </div>
-      <div class="stage">
-        <div class="phone" data-demo-phone data-state="idle" aria-label="宇海VPN 连接页示意" role="img">
-          <div class="phone-top"><span>9:41</span><span class="phone-notch"></span><span>宇海VPN</span></div>
-          <div class="app-status"><i></i><span data-demo-label>未连接</span></div>
-          <div class="app-timer" data-demo-timer></div>
-          <div class="ring"><b set:html={power}></b><small data-demo-hint>轻触连接</small></div>
-          <div class="rates" data-demo-rates></div>
-          <div class="line-card">
-            <span class="flag">⚡</span>
-            <div><b>自动选择</b><span>连接时使用可用线路</span></div>
-          </div>
-          <div class="phone-nav"><span class="on">连接</span><span>套餐</span><span>邀请</span><span>我的</span></div>
-        </div>
-        <div class="demo-controls">
-          <button type="button" data-demo-toggle aria-pressed="true">暂停动效</button>
-        </div>
-      </div>
+      <LoginForm prefix="home" secondary="新用户注册" />
     </div>
   </section>
 
@@ -72,7 +57,9 @@ const power = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke
         <a class="btn btn-outline" href="/pricing/">查看价格说明</a>
         <a class="btn btn-outline" href="/help/">怎么付款和找回</a>
         <a class="btn btn-outline" href="/register/">注册账户</a>
+        <a class="btn btn-outline" href="/login/">登录</a>
       </div>
     </div>
   </section>
+  <script is:inline src="/assets/web-login.js"></script>
 </Base>

@@ -91,12 +91,7 @@ type webRegisterBody struct {
 func webChallengeKey(id string) string { return "webreg:v1:" + id }
 
 func webOriginAllowed(origin string) bool {
-	switch origin {
-	case webRegisterOrigin, webWWWOrigin:
-		return true
-	default:
-		return false
-	}
+	return origin == webRegisterOrigin
 }
 
 func webPoWDigest(id, nonce string, counter int64) [32]byte {
@@ -357,7 +352,9 @@ func webPreflightAllowed(c *gin.Context) bool {
 	if !webOriginAllowed(origin) {
 		return false
 	}
-	if strings.ToUpper(strings.TrimSpace(c.GetHeader("Access-Control-Request-Method"))) != http.MethodPost {
+	switch strings.ToUpper(strings.TrimSpace(c.GetHeader("Access-Control-Request-Method"))) {
+	case http.MethodGet, http.MethodPost:
+	default:
 		return false
 	}
 	raw := c.GetHeader("Access-Control-Request-Headers")
@@ -385,10 +382,7 @@ func webCORS() gin.HandlerFunc {
 				c.AbortWithStatus(http.StatusForbidden)
 				return
 			}
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Access-Control-Allow-Methods", "POST, OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Content-Type")
-			c.Header("Access-Control-Max-Age", "600")
+			writeWebCORS(c, origin)
 			c.AbortWithStatus(http.StatusNoContent)
 			return
 		}
@@ -397,13 +391,18 @@ func webCORS() gin.HandlerFunc {
 			return
 		}
 		if webOriginAllowed(origin) {
-			c.Header("Access-Control-Allow-Origin", origin)
-			c.Header("Access-Control-Allow-Methods", "POST, OPTIONS")
-			c.Header("Access-Control-Allow-Headers", "Content-Type")
-			c.Header("Access-Control-Max-Age", "600")
+			writeWebCORS(c, origin)
 		}
 		c.Next()
 	}
+}
+
+func writeWebCORS(c *gin.Context, origin string) {
+	c.Header("Access-Control-Allow-Origin", origin)
+	c.Header("Access-Control-Allow-Credentials", "true")
+	c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	c.Header("Access-Control-Allow-Headers", "Content-Type")
+	c.Header("Access-Control-Max-Age", "600")
 }
 
 func (h *Handler) mountWeb(v1 *gin.RouterGroup) {
@@ -411,8 +410,9 @@ func (h *Handler) mountWeb(v1 *gin.RouterGroup) {
 	prefix := func(c *gin.Context) string { return ipPrefix(auth.ClientIP(c)) }
 	web := v1.Group("/auth/web", webCORS())
 	// OPTIONS 由 webCORS 直接结束；这里挂上路由，预检才不会落到 404。
-	web.OPTIONS("/challenge", func(*gin.Context) {})
-	web.OPTIONS("/register", func(*gin.Context) {})
+	for _, path := range []string{"/challenge", "/register", "/login", "/logout", "/account", "/trial", "/redeem"} {
+		web.OPTIONS(path, func(*gin.Context) {})
+	}
 	web.POST("/challenge",
 		h.MW.RateLimit("web_challenge_ip", 30, time.Hour, true, ip),
 		h.MW.RateLimit("web_challenge_prefix", 120, time.Hour, true, prefix),
@@ -421,6 +421,18 @@ func (h *Handler) mountWeb(v1 *gin.RouterGroup) {
 		h.MW.RateLimit("register_ip", 5, time.Hour, true, ip),
 		h.MW.RateLimit("register_prefix", 30, time.Hour, true, prefix),
 		h.webRegister)
+	web.POST("/login", h.webLogin)
+	web.POST("/logout", h.webLogout)
+	web.GET("/account", h.requireWebSession, h.webAccount)
+	// 试用和兑换的额度与 App 接口相同，避免网页成为绕过限流的旁路。
+	web.POST("/trial", h.requireWebSession,
+		h.MW.RateLimitMessage("trial_user", 5, time.Hour, true, "尝试太频繁", webUserKey),
+		h.MW.RateLimitMessage("trial_ip", 20, time.Hour, true, "尝试太频繁", ip),
+		h.webClaimTrial)
+	web.POST("/redeem", h.requireWebSession,
+		h.MW.RateLimitMessage("redeem_user", 10, time.Hour, true, "尝试太频繁", webUserKey),
+		h.MW.RateLimitMessage("redeem_ip", 30, time.Hour, true, "尝试太频繁", ip),
+		h.webRedeem)
 }
 
 func (h *Handler) webChallenge(c *gin.Context) {

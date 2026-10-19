@@ -224,7 +224,8 @@ paths:
       security: []
       summary: 网页注册的工作量证明题目
       description: >-
-        只允许来源 https://yhvpn.io 与 https://www.yhvpn.io 的浏览器跨域读取；其他来源的预检与带 Origin 的请求会被拒绝。
+        只允许来源 https://yhvpn.io 的浏览器跨域读取，并返回 Access-Control-Allow-Credentials: true。
+        不接受 www，也不使用通配来源。其他来源的预检与带 Origin 的请求会被拒绝。
         不带 Origin 的请求（非浏览器）仍须解题，并受 IP / 网段限流。
         algorithm 固定为 sha256-lzbits-v1。preimage = challenge_id + ":" + nonce + ":" + 十进制 counter
         （0 写成 "0"，无空格、无前导零）。digest = SHA-256(UTF-8(preimage))，前 difficulty 个比特必须为 0。
@@ -247,7 +248,7 @@ paths:
       x-auth-level: S0
       security: []
       summary: 网页注册题目的 CORS 预检
-      description: 仅允许 https://yhvpn.io 与 https://www.yhvpn.io，方法 POST，请求头 Content-Type。不返回通配来源。
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
       responses:
         '204': { description: 允许的来源 }
         '403': { description: 来源或请求头不在允许名单 }
@@ -267,7 +268,7 @@ paths:
         同一题目、相同请求体在 10 分钟内返回第一次的结果；请求体不同返回 40901。
         邀请码可选，无效时仍然注册成功且 invite_bound=false，来源记为 MANUAL。
         注册限流与 App 注册共用：每 IP 每小时 5 次，每网段每小时 30 次。
-        跨域规则同 /v1/auth/web/challenge。
+        跨域只允许 https://yhvpn.io，并携带 Cookie 凭证。
       requestBody:
         required: true
         content:
@@ -294,7 +295,174 @@ paths:
       x-auth-level: S0
       security: []
       summary: 网页注册的 CORS 预检
-      description: 仅允许 https://yhvpn.io 与 https://www.yhvpn.io，方法 POST，请求头 Content-Type。不返回通配来源。
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/login:
+    post:
+      tags: [auth]
+      operationId: loginFromWeb
+      x-auth-level: S0
+      security: []
+      summary: 网页登录，不绑定设备
+      description: >-
+        必须先通过 /v1/auth/web/challenge 的 sha256-lzbits-v1 工作量证明。
+        地址不存在、密码错误、账户停用都返回同一个 40113「地址或密码错误」，响应里不说明账户是否存在。
+        失败按地址和 IP 分别计数，任一达到上限返回 42901，提示也相同。
+        成功时设置 HttpOnly、Secure、SameSite=Strict 的会话 Cookie，响应体不含令牌。会话约 12 小时。
+        跨域只允许 https://yhvpn.io，并携带 Cookie 凭证。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WebLoginRequest' }
+      responses:
+        '200':
+          description: 已登录。Set-Cookie 为会话，Cache-Control 为 no-store
+          headers:
+            Set-Cookie: { schema: { type: string } }
+            Cache-Control: { schema: { type: string, const: no-store } }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [logged_in]
+                        properties: { logged_in: { type: boolean, const: true } }
+        '401': { description: 地址或密码错误（40113）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '403': { description: 来源不在允许名单（40310）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '429': { $ref: '#/components/responses/Error' }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [auth]
+      operationId: loginFromWebPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页登录的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/logout:
+    post:
+      tags: [auth]
+      operationId: logoutFromWeb
+      x-auth-level: web-session
+      security: []
+      summary: 退出网页登录，会话立即作废
+      description: 删除服务端会话并清除 Cookie。没有会话时也清除 Cookie 并返回成功。
+      responses:
+        '200':
+          description: 已退出
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [logged_out]
+                        properties: { logged_out: { type: boolean, const: true } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [auth]
+      operationId: logoutFromWebPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页退出的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/account:
+    get:
+      tags: [account]
+      operationId: getWebAccount
+      x-auth-level: web-session
+      security: []
+      summary: 网页账户摘要
+      description: 返回登录账号（USDT 地址）、当前套餐、到期时间、设备数和是否还能领试用。需要会话 Cookie。
+      responses:
+        '200':
+          description: 账户摘要
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/WebAccount' } }
+        '401': { description: 未登录（40101）, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [account]
+      operationId: getWebAccountPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页账户摘要的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/trial:
+    post:
+      tags: [account]
+      operationId: claimWebTrial
+      x-auth-level: web-session
+      security: []
+      summary: 在网页领取 24 小时免费试用
+      description: >-
+        复用试用权益的同一套规则：每个账户一次，不延长已有到期时间，已有其他权益不能领。
+        网页会话不绑定设备，因此不占用设备名额。额度与 POST /v1/trial 相同。
+      responses:
+        '200': { description: 已开通或之前已经领过, content: { application/json: { schema: { $ref: '#/components/schemas/Envelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [account]
+      operationId: claimWebTrialPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页试用的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
+      responses:
+        '204': { description: 允许的来源 }
+        '403': { description: 来源或请求头不在允许名单 }
+
+  /v1/auth/web/redeem:
+    post:
+      tags: [account]
+      operationId: redeemFromWeb
+      x-auth-level: web-session
+      security: []
+      summary: 在网页用兑换码开通
+      description: 复用 POST /v1/redeem-codes 的兑换逻辑和每小时限额。需要会话 Cookie。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+      responses:
+        '200': { description: 已开通, content: { application/json: { schema: { $ref: '#/components/schemas/Envelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    options:
+      tags: [account]
+      operationId: redeemFromWebPreflight
+      x-auth-level: S0
+      security: []
+      summary: 网页兑换的 CORS 预检
+      description: 仅允许 https://yhvpn.io，方法 GET 与 POST，请求头 Content-Type，并允许携带 Cookie。不返回通配来源。
       responses:
         '204': { description: 允许的来源 }
         '403': { description: 来源或请求头不在允许名单 }
@@ -1337,6 +1505,26 @@ components:
         invite_code: { type: string, description: 可选。有效邀请码才会绑定，无效时注册仍然成功 }
         challenge_id: { type: string, format: uuid }
         counter: { type: integer, minimum: 0, maximum: 16777215 }
+    WebLoginRequest:
+      type: object
+      required: [address, password, challenge_id, counter]
+      properties:
+        address: { type: string, description: TRON 地址，服务端去掉首尾空白 }
+        password: { type: string, maxLength: 128 }
+        challenge_id: { type: string, format: uuid }
+        counter: { type: integer, minimum: 0, maximum: 16777215 }
+    WebAccount:
+      type: object
+      required: [account, plan_name, active, device_count, device_limit, trial_eligible, server_time]
+      properties:
+        account: { type: string, description: 登录账号，即 USDT（TRC20）地址 }
+        plan_name: { type: string, description: 当前套餐名称；没有套餐时为「未开通」 }
+        expire_at: { type: [string, 'null'], format: date-time }
+        active: { type: boolean }
+        device_count: { type: integer, description: 当前在用的设备数 }
+        device_limit: { type: integer }
+        trial_eligible: { type: boolean }
+        server_time: { $ref: '#/components/schemas/Timestamp' }
     WebRegisterResult:
       type: object
       required: [account_no, login_address, invite_code, invite_bound, server_time]

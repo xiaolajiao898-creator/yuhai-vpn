@@ -145,7 +145,7 @@ func TestWebRegisterCreatesLoginableAccount(t *testing.T) {
 	}
 
 	inviteeIP := testIPv4(t)
-	invitee := registerOverHTTP(t, engine, inviteeIP, webWWWOrigin, testAddress(t), "abc12345", res.InviteCode)
+	invitee := registerOverHTTP(t, engine, inviteeIP, webRegisterOrigin, testAddress(t), "abc12345", res.InviteCode)
 	if !invitee.InviteBound {
 		t.Fatalf("invite not bound: %+v", invitee)
 	}
@@ -180,7 +180,7 @@ func registerOverHTTP(t *testing.T, h http.Handler, ip, origin, address, passwor
 	if w.Code != http.StatusCreated || w.Header().Get("Access-Control-Allow-Origin") != origin || w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("register http: %d acao=%q cache=%q %s", w.Code, w.Header().Get("Access-Control-Allow-Origin"), w.Header().Get("Cache-Control"), w.Body.String())
 	}
-	assertNoCORSCredentialLeak(t, w)
+	assertWebCORS(t, w)
 	if bytesContainToken(w.Body.Bytes()) {
 		t.Fatalf("web register returned a token or account secret: %s", w.Body.String())
 	}
