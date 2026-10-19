@@ -72,6 +72,44 @@ func (r *Repo) ackBackup(ctx context.Context, userID int64, now time.Time) error
 
 // ---- devices ----
 
+type deviceIdentity struct {
+	ID     int64
+	UserID int64
+	Status string
+}
+
+func (r *Repo) findDeviceByUID(ctx context.Context, q pgxQuerier, uid string) (deviceIdentity, error) {
+	var d deviceIdentity
+	err := q.QueryRow(ctx, `SELECT id, user_id, status FROM devices WHERE device_uid = $1`, uid).Scan(&d.ID, &d.UserID, &d.Status)
+	return d, err
+}
+
+// resumeDeviceRecord 把同一 device_uid 重新登录到原设备行：更新公钥与机型，必要时从 REVOKED 恢复，并作废该设备上的旧刷新令牌。
+func (r *Repo) resumeDeviceRecord(ctx context.Context, tx pgx.Tx, id int64, d DeviceInfo, displayName string, now time.Time) error {
+	// Same fence as device revocation: a refresh already inside its transaction
+	// must finish before we revoke, or its new descendant would survive.
+	if err := r.lockDeviceSessions(ctx, tx, id); err != nil {
+		return err
+	}
+	tag, err := tx.Exec(ctx, `
+		UPDATE devices
+		   SET pubkey = $2, platform = $3, model = NULLIF($4, ''), os_version = NULLIF($5, ''),
+		       app_version = NULLIF($6, ''), fingerprint_hash = NULLIF($7, ''), display_name = $8,
+		       status = 'ACTIVE', revoked_at = NULL, last_seen_at = $9
+		 WHERE id = $1`, id, d.DevicePubKey, d.Platform, d.Model, d.OSVersion, d.AppVersion, d.FingerprintHash, displayName, now)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("device row missing during resume")
+	}
+	if _, err := tx.Exec(ctx, `UPDATE device_credentials SET status = 'ACTIVE' WHERE device_id = $1 AND status = 'REVOKED'`, id); err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `UPDATE auth_sessions SET revoked_at = $2 WHERE device_id = $1 AND revoked_at IS NULL`, id, now)
+	return err
+}
+
 func (r *Repo) insertDevice(ctx context.Context, tx pgx.Tx, userID int64, d DeviceInfo, displayName string) (int64, error) {
 	var id int64
 	err := tx.QueryRow(ctx, `

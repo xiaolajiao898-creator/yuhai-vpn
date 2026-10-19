@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
 import '../../home/data/me_api.dart';
+import '../../home/presentation/account_summary.dart';
 import '../data/orders_api.dart';
 
 /// P10 支付结果：开通成功、新的到期时间、"开始连接"。荧色只在这里与已连接态使用。
@@ -36,8 +37,8 @@ class PayResultPage extends ConsumerWidget {
                 me.when(
                   data: (m) {
                     final ent = m['entitlement'] as Map<String, dynamic>? ?? const {};
-                    final exp = (ent['expire_at'] as String?)?.substring(0, 10);
-                    return Text(exp != null ? '${ent['plan_name'] ?? ''} · 到期 $exp' : '${order?.planName ?? ''} 已生效', style: text.bodyMedium?.copyWith(color: YhColors.haze));
+                    final exp = formatExpiryLocal(ent['expire_at'] as String?);
+                    return Text(exp != '—' ? '${planLabel(ent)} · 到期 $exp' : '${order?.planName ?? ''} 已生效', style: text.bodyMedium?.copyWith(color: YhColors.haze));
                   },
                   loading: () => Text('正在同步…', style: text.labelSmall),
                   error: (_, __) => const SizedBox.shrink(),

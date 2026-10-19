@@ -72,8 +72,9 @@ internal object XrayTunnel {
             check(core.isRunning)
             controller = core
             tun = fd
-        } catch (e: Exception) {
-            try { fd.close() } catch (_: Exception) {}
+        } catch (e: Throwable) {
+            NativeFailures.rethrowIfFatal(e)
+            try { fd.close() } catch (closeError: Throwable) { NativeFailures.rethrowIfFatal(closeError) }
             stopService(context)
             throw e
         }
@@ -83,7 +84,7 @@ internal object XrayTunnel {
     fun probe(): Long? {
         val core = controller ?: return null
         for (url in listOf("https://www.gstatic.com/generate_204", "https://cp.cloudflare.com/generate_204")) {
-            val ms = try { core.measureDelay(url) } catch (_: Exception) { -1L }
+            val ms = try { core.measureDelay(url) } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); -1L }
             if (ms >= 0) return ms
         }
         return null
@@ -94,9 +95,9 @@ internal object XrayTunnel {
     private fun stopCore() {
         val core = controller
         controller = null
-        try { core?.stopLoop() } catch (_: Exception) {}
+        try { core?.stopLoop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
         // 内核不持有 fd 的所有权（Android TUN 的 Close 为空操作），必须在停内核之后由我们关闭。
-        try { tun?.close() } catch (_: Exception) {}
+        try { tun?.close() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
         tun = null
     }
 

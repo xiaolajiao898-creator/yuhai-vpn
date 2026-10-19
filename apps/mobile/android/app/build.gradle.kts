@@ -48,9 +48,20 @@ android {
     packaging {
         jniLibs {
             useLegacyPackaging = true
-            // Xray 内核每个架构约 35MB。候选版只带 64 位 ARM（近年安卓真机）：Flutter 插件会自行补全
-            // abiFilters，所以这里按路径排除其余架构，而不是依赖 abiFilters。
-            if (multiprotoCandidate) excludes += listOf("lib/armeabi-v7a/**", "lib/x86_64/**", "lib/x86/**")
+            // Xray / WireGuard 每个架构大约几十 MB。用打包排除而不是 abiFilters：
+            // Flutter 插件会自己补 abiFilters。
+            // YH_ABI=arm64-v8a | x86_64 | x86 | armeabi-v7a | all。
+            // 未设置时，多协议候选版仍只带 arm64-v8a（真机）。模拟器测试包设 YH_ABI=x86_64。
+            val requestedAbi = System.getenv("YH_ABI")?.trim().orEmpty()
+            val allAbis = listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            val keep = when {
+                requestedAbi == "all" -> allAbis.toSet()
+                requestedAbi.isNotEmpty() -> setOf(requestedAbi)
+                multiprotoCandidate -> setOf("arm64-v8a")
+                else -> allAbis.toSet()
+            }
+            check(keep.all { it in allAbis }) { "YH_ABI 无效：$requestedAbi" }
+            excludes += allAbis.filter { it !in keep }.map { "lib/$it/**" }
         }
     }
 

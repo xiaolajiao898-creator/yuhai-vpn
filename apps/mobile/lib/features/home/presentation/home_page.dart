@@ -12,6 +12,8 @@ import '../../../platform/vpn/egress_profile.dart';
 import '../../../platform/vpn/vpn_engine.dart';
 import '../../connection/presentation/connection_controller.dart';
 import '../data/me_api.dart';
+import 'account_summary.dart';
+import '../../nodes/data/auto_select.dart';
 import '../../nodes/data/countries.dart';
 import '../../nodes/presentation/nodes_page.dart';
 import '../../nodes/data/nodes_api.dart';
@@ -153,10 +155,12 @@ class _HomePageState extends ConsumerState<HomePage> {
               ]),
             if (failure != null && status == VpnStatus.error)
               _FailureCard(
-                message: failure.message,
+                failure: failure,
                 onRetry: () =>
                     ref.read(connectionControllerProvider.notifier).toggle(),
-                onSwitch: () => context.push(Routes.nodes),
+                onSwitch: () => failure.code == 'NO_PLAN'
+                    ? context.push(Routes.plans)
+                    : context.push(Routes.nodes),
               ),
             if (notice != null &&
                 (status == VpnStatus.connected ||
@@ -172,6 +176,7 @@ class _HomePageState extends ConsumerState<HomePage> {
                 selectedId: selectedNode,
                 chosen: chosen,
                 loading: nodeState.isLoading,
+                autoHint: _autoHint(nodeState.asData?.value),
                 onTap: () => context.push(Routes.nodes)),
             const SizedBox(height: 12),
             _AccountCard(me: me),
@@ -188,6 +193,16 @@ class _HomePageState extends ConsumerState<HomePage> {
         ),
       ),
     );
+  }
+
+  static String _autoHint(List<NodeItem>? nodes) {
+    if (nodes == null) return '连接时按本机延迟检测选择可用线路';
+    final probed = nodes.any((n) =>
+        n.available && !n.isEgress && n.probeHost != null && n.probePort != null);
+    final egress = nodes.any(
+        (n) => canAutoSelect(n, egressSupported: egressPlatformSupported) && n.isEgress);
+    if (!probed && egress) return '连接时自动使用可用线路';
+    return '连接时按本机延迟检测选择可用线路';
   }
 
   static String _duration(Duration d) {
@@ -227,8 +242,8 @@ class _Rate extends StatelessWidget {
 
 class _FailureCard extends StatelessWidget {
   const _FailureCard(
-      {required this.message, required this.onRetry, required this.onSwitch});
-  final String message;
+      {required this.failure, required this.onRetry, required this.onSwitch});
+  final VpnFailure failure;
   final VoidCallback onRetry, onSwitch;
 
   @override
@@ -241,7 +256,7 @@ class _FailureCard extends StatelessWidget {
           border: Border.all(color: YhColors.danger.withValues(alpha: .4)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Text(message,
+          Text(failure.message,
               style: Theme.of(context)
                   .textTheme
                   .bodyMedium
@@ -254,7 +269,8 @@ class _FailureCard extends StatelessWidget {
             const SizedBox(width: 12),
             Expanded(
                 child: OutlinedButton(
-                    onPressed: onSwitch, child: const Text('换一条线路'))),
+                    onPressed: onSwitch,
+                    child: Text(failure.code == 'NO_PLAN' ? '去开通' : '换一条线路'))),
           ]),
         ]),
       );
@@ -265,10 +281,12 @@ class _LineCard extends StatelessWidget {
       {required this.selectedId,
       required this.chosen,
       required this.loading,
+      required this.autoHint,
       required this.onTap});
   final String? selectedId;
   final NodeItem? chosen;
   final bool loading;
+  final String autoHint;
   final VoidCallback onTap;
 
   @override
@@ -276,7 +294,7 @@ class _LineCard extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     final n = chosen;
     final (flag, title, subtitle) = selectedId == null
-        ? ('', '自动选择', '连接时按本机延迟检测选择可用线路')
+        ? ('', '自动选择', autoHint)
         : loading
             ? ('', '已选线路', '正在更新线路状态')
             : n == null
@@ -361,14 +379,7 @@ class _AccountCard extends StatelessWidget {
           data: (m) {
             final ent = m['entitlement'] as Map<String, dynamic>? ?? const {};
             final reason = ent['blocked_reason'];
-            final hint = switch (reason) {
-              'NO_PLAN' => '还没有套餐 · 去选择',
-              'EXPIRED' => '套餐已到期 · 去续费',
-              'QUOTA_EXHAUSTED' => '流量已用完 · 买流量包',
-              'SUSPENDED' => '账户已停用 · 联系客服',
-              _ =>
-                '${ent['plan_name'] ?? ''} · 到期 ${(ent['expire_at'] as String?)?.substring(0, 10) ?? '—'}',
-            };
+            final hint = accountSummaryLine(ent);
             return InkWell(
               onTap: reason == null ? null : () => context.push(Routes.plans),
               child: Text('账户 ${m['account_no']} · $hint',

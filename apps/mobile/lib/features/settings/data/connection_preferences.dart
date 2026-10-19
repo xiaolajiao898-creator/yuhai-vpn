@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../../../core/storage/app_secure_storage.dart';
+
 enum ProtocolPreference {
   auto('AUTO', '自动选择'),
   vlessReality('VLESS_REALITY', 'VLESS · Reality'),
@@ -82,7 +84,7 @@ abstract interface class ConnectionPreferencesStorage {
 class SecureConnectionPreferencesStorage
     implements ConnectionPreferencesStorage {
   SecureConnectionPreferencesStorage([FlutterSecureStorage? storage])
-      : _storage = storage ?? const FlutterSecureStorage();
+      : _storage = storage ?? appSecureStorage;
   final FlutterSecureStorage _storage;
   static const storageKey = 'connection_preferences_v1';
 
