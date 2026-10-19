@@ -7,6 +7,8 @@ import java.security.MessageDigest
 
 // 多协议候选版：独立包名与名称，和正式版并存安装、互不覆盖。仅由构建脚本设置。
 val multiprotoCandidate = System.getenv("YH_CANDIDATE") == "multiproto"
+// 模拟器测试包：release 模式但用公开的调试证书签名，不读取正式钥匙。正式构建不要设置。
+val debugSignedRelease = System.getenv("YH_RELEASE_DEBUG_SIGN") == "1"
 // Xray 内核（AndroidLibXrayLite v26.9.9，LGPL-3.0，预编译 AAR）；构建前核对 SHA-256。
 val xrayAar = "libs/libv2ray.aar"
 val xrayAarSha256 = "9ecf4c921568d8f4cb8550d3bafe08ff6f1d1984f45a6ad183dcdf52ee9302de"
@@ -82,7 +84,16 @@ android {
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("production")
+            signingConfig = if (debugSignedRelease) {
+                signingConfigs.getByName("debug").apply {
+                    storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+                    storePassword = "android"
+                    keyAlias = "androiddebugkey"
+                    keyPassword = "android"
+                }
+            } else {
+                signingConfigs.getByName("production")
+            }
             isDebuggable = false
         }
     }
@@ -132,6 +143,13 @@ val verifyReleaseSecurity by tasks.registering {
             (uri.path.isNullOrEmpty() || uri.path == "/") &&
             (uri.port == -1 || uri.port in 1..65535)) {
             "Release API must be an HTTPS domain without credentials, query, or fragment"
+        }
+        if (debugSignedRelease) {
+            val signing = android.signingConfigs.getByName("debug")
+            check(signing.storeFile?.isFile == true && signing.keyAlias == "androiddebugkey") {
+                "Debug-signed release requires the Android debug keystore"
+            }
+            return@doLast
         }
         val signing = android.signingConfigs.getByName("production")
         check(signing.storeFile?.isFile == true &&

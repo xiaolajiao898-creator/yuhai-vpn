@@ -173,3 +173,61 @@ jobs:
         with:
           name: yuhai-candidate-x86_64-debug
           path: apps/mobile/build/app/outputs/flutter-apk/app-debug.apk
+      - name: 构建更小的 x86_64 release（调试证书）
+        working-directory: apps/mobile
+        env:
+          YH_CANDIDATE: multiproto
+          YH_ABI: x86_64
+          YH_RELEASE_DEBUG_SIGN: "1"
+        run: |
+          set -euo pipefail
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            mkdir -p "$HOME/.android"
+            keytool -genkeypair -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+          flutter build apk --release --split-per-abi --target-platform android-x64 \
+            --dart-define=YH_API_BASE=https://api.yhvpn.io
+      - name: 核对 release 包名、调试签名和体积
+        run: |
+          set -euo pipefail
+          apk=apps/mobile/build/app/outputs/flutter-apk/app-x86_64-release.apk
+          if [ ! -f "$apk" ]; then
+            echo "没有生成 $apk"
+            ls -la apps/mobile/build/app/outputs/flutter-apk || true
+            exit 1
+          fi
+          unzip -l "$apk" > /tmp/apk-rel.txt
+          grep -q 'lib/x86_64/libgojni.so' /tmp/apk-rel.txt
+          grep -q 'lib/x86_64/libwg-go.so' /tmp/apk-rel.txt
+          if grep -E 'lib/(arm64-v8a|armeabi-v7a|x86)/' /tmp/apk-rel.txt; then
+            echo "安装包带了不该有的架构"
+            exit 1
+          fi
+          if grep -E 'assets/(geoip|geosite)' /tmp/apk-rel.txt; then
+            echo "内核数据文件没有被剔除"
+            exit 1
+          fi
+          python3 -c 'import sys,zipfile; apk=sys.argv[1]; z=zipfile.ZipFile(apk); natives=[i for i in z.infolist() if i.filename.startswith("lib/") and i.filename.endswith(".so")]; stored=[i.filename for i in natives if i.file_size>=1000000 and i.compress_type==zipfile.ZIP_STORED]; assert natives and not stored, stored; print("native libs", len(natives))' "$apk"
+          sdk="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          bt="$(ls -d "$sdk"/build-tools/*/ | sort -V | tail -1)"
+          if [ ! -x "${bt}aapt" ] || [ ! -x "${bt}apksigner" ]; then
+            echo "build-tools 缺少 aapt 或 apksigner：$bt"
+            exit 1
+          fi
+          "${bt}aapt" dump badging "$apk" > /tmp/badging.txt
+          grep -q "name='com.yuhai.yuhai_vpn.candidate'" /tmp/badging.txt
+          if grep -q 'application-debuggable' /tmp/badging.txt; then
+            echo "release 包不应是 debuggable"
+            exit 1
+          fi
+          "${bt}apksigner" verify --print-certs "$apk" > /tmp/certs.txt
+          grep -q 'CN=Android Debug' /tmp/certs.txt
+          bytes="$(stat -c%s "$apk")"
+          echo "yuhai-candidate-x86_64-release-debugsigned bytes=$bytes"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yuhai-candidate-x86_64-release-debugsigned
+          path: apps/mobile/build/app/outputs/flutter-apk/app-x86_64-release.apk
