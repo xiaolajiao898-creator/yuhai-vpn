@@ -65,7 +65,7 @@ class _ConnectionSettingsPageState
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('断网保护', style: Theme.of(context).textTheme.headlineMedium),
             const SizedBox(height: 8),
-            Text(kKillSwitchEnforced
+            const Text(kKillSwitchEnforced
                 ? '系统的「始终开启 VPN」已由应用打开。'
                 : '应用自己不会改系统的「始终开启 VPN」。重连时会尽量把流量留在 VPN 接口里；进程被系统杀掉之后，只有下面这两项能继续拦住。'),
             const SizedBox(height: 8),

@@ -478,6 +478,7 @@ type EgressEndpoint struct {
 	SubscriptionID pgtype.Int8
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	CapacityUsers  int32
 }
 
 type EgressSubscription struct {
@@ -785,6 +786,28 @@ type SharedPayAddress struct {
 	AutoDetected bool
 	CreatedAt    time.Time
 	ID           pgtype.Int8
+}
+
+type SiteDailyMetric struct {
+	Day    pgtype.Date
+	Metric string
+	Count  int64
+}
+
+type SiteDownloadDedupe struct {
+	Day     pgtype.Date
+	Channel string
+	IpHash  []byte
+}
+
+type SiteVisitor struct {
+	IpHash   []byte
+	FirstDay pgtype.Date
+}
+
+type SiteVisitorDay struct {
+	Day    pgtype.Date
+	IpHash []byte
 }
 
 type Subscription struct {

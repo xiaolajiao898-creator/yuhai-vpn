@@ -149,8 +149,8 @@ class WindowsTrafficGuard {
     final id = calloc<Uint64>();
     try {
       filter.cast<Uint64>()[2] = name.address;
-      _writeGuid(filter.elementAt(64), layerKey);
-      _writeGuid(filter.elementAt(80), _sublayer);
+      _writeGuid(filter + 64, layerKey);
+      _writeGuid(filter + 80, _sublayer);
       filter[96] = 1; // FWP_UINT8
       filter[104] = weight;
       if (condition != null) {
