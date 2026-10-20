@@ -52,7 +52,8 @@ class RecoveringEngine implements VpnEngine {
   @override
   Future<void> connect(ConnectProfile profile) async {
     profiles.add(profile);
-    if (failAll || (failSameLine && profile.nodeId != 'b' && profiles.length > 1)) {
+    if (failAll ||
+        (failSameLine && profile.nodeId != 'b' && profiles.length > 1)) {
       _failures.add(const VpnFailure('NETWORK_UNAVAILABLE', '网络暂不可用，请检查网络后重试'));
       _status.add(VpnStatus.error);
       return;
@@ -86,7 +87,8 @@ class RecoveringEngine implements VpnEngine {
   Future<int> networkEpoch() async => epoch;
 
   void revoked() {
-    _failures.add(const VpnFailure('VPN_REVOKED', 'VPN 已被系统或其他 VPN 应用接管，请重新连接'));
+    _failures
+        .add(const VpnFailure('VPN_REVOKED', 'VPN 已被系统或其他 VPN 应用接管，请重新连接'));
     _status.add(VpnStatus.error);
   }
 
@@ -110,7 +112,8 @@ NodeItem _line(String id) => NodeItem(
       probePort: 443,
     );
 
-ProviderContainer _container(RecoveringEngine engine, ConnectionPreferences prefs) {
+ProviderContainer _container(
+    RecoveringEngine engine, ConnectionPreferences prefs) {
   final container = ProviderContainer(overrides: [
     vpnDemoModeProvider.overrideWithValue(true),
     vpnEngineProvider.overrideWithValue(engine),
@@ -121,7 +124,8 @@ ProviderContainer _container(RecoveringEngine engine, ConnectionPreferences pref
   return container;
 }
 
-void _finish(dynamic async, ProviderContainer container, RecoveringEngine engine) {
+void _finish(
+    dynamic async, ProviderContainer container, RecoveringEngine engine) {
   container.dispose();
   engine.dispose();
   async.elapse(const Duration(milliseconds: 20));
@@ -148,7 +152,8 @@ void main() {
       container.read(connectionControllerProvider.notifier).release();
       async.elapse(const Duration(milliseconds: 20));
       expect(engine.releases, greaterThan(0));
-      expect(container.read(connectionControllerProvider), VpnStatus.disconnected);
+      expect(
+          container.read(connectionControllerProvider), VpnStatus.disconnected);
       expect(container.read(trafficHeldProvider), isFalse);
       _finish(async, container, engine);
     });
@@ -159,12 +164,15 @@ void main() {
       final engine = RecoveringEngine()..failSameLine = true;
       final container = _container(engine, const ConnectionPreferences());
       container.read(connectionControllerProvider.notifier).toggle();
+      async.elapse(const Duration(milliseconds: 50));
+      engine.tunnelLatency = null;
       async.elapse(const Duration(seconds: 70));
       expect(engine.profiles.last.nodeId, 'b');
       expect(container.read(selectedNodeProvider), 'b');
       expect(container.read(connectionControllerProvider), VpnStatus.connected);
       expect(container.read(connectionNoticeProvider), contains('已切换线路'));
-      expect(container.read(connectionFailureProvider)?.code, isNot('SELECTION_CHANGED'));
+      expect(container.read(connectionFailureProvider)?.code,
+          isNot('SELECTION_CHANGED'));
       _finish(async, container, engine);
     });
   });
@@ -187,8 +195,8 @@ void main() {
   test('关闭自动重连时只拦住流量，不自己重连', () {
     fakeAsync((async) {
       final engine = RecoveringEngine();
-      final container = _container(
-          engine, const ConnectionPreferences(autoRecover: false));
+      final container =
+          _container(engine, const ConnectionPreferences(autoRecover: false));
       container.read(connectionPreferencesProvider.future);
       async.elapse(const Duration(milliseconds: 50));
       container.read(connectionControllerProvider.notifier).toggle();
@@ -197,7 +205,8 @@ void main() {
       engine.tunnelLatency = null;
       async.elapse(const Duration(seconds: 43));
       expect(engine.profiles, hasLength(1));
-      expect(container.read(connectionControllerProvider), VpnStatus.reconnecting);
+      expect(
+          container.read(connectionControllerProvider), VpnStatus.reconnecting);
       expect(container.read(connectionNoticeProvider), contains('已保护'));
       expect(engine.holds, greaterThan(0));
       _finish(async, container, engine);

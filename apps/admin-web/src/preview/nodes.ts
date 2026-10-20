@@ -1,5 +1,5 @@
 import type {AdminSession} from '../api/client.ts';
-import {heartbeatAt,nodeQueryProblem,readNodeDetail,readNodePage,type ManagedNode,type NodeSource,type NodeStatus,type NodeDetail} from '../api/nodes.ts';
+import {heartbeatAt,nodeQueryProblem,readManagedNode,readNodeDetail,readNodePage,type ManagedNode,type NodeSource,type NodeStatus,type NodeDetail} from '../api/nodes.ts';
 
 export function makePreviewNodes(session:AdminSession,now=()=>Date.now()):NodeSource {
   const created=now();

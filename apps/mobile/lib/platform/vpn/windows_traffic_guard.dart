@@ -5,7 +5,8 @@ import 'package:ffi/ffi.dart';
 
 /// 一条允许通过的进程，以及拦住其他所有 IPv4/IPv6 出站连接的计划。
 class TrafficGuardPlan {
-  const TrafficGuardPlan({required this.permitPaths, required this.blockAllOthers});
+  const TrafficGuardPlan(
+      {required this.permitPaths, required this.blockAllOthers});
   final List<String> permitPaths;
   final bool blockAllOthers;
 
@@ -40,8 +41,10 @@ class WindowsTrafficGuard {
         // FWPM_SESSION_FLAG_DYNAMIC：进程退出、句柄关闭后规则消失。
         session[32] = 1;
         final open = fwpu.lookupFunction<
-            Int32 Function(Pointer<Utf16>, Uint32, Pointer<Void>, Pointer<Uint8>, Pointer<IntPtr>),
-            int Function(Pointer<Utf16>, int, Pointer<Void>, Pointer<Uint8>, Pointer<IntPtr>)>('FwpmEngineOpen0');
+            Int32 Function(Pointer<Utf16>, Uint32, Pointer<Void>,
+                Pointer<Uint8>, Pointer<IntPtr>),
+            int Function(Pointer<Utf16>, int, Pointer<Void>, Pointer<Uint8>,
+                Pointer<IntPtr>)>('FwpmEngineOpen0');
         final opened = open(nullptr, 10, nullptr, session, engine);
         if (opened != 0 || engine.value == 0) return false;
         _engine = engine.value;
@@ -67,24 +70,33 @@ class WindowsTrafficGuard {
     try {
       final fwpu = _opened;
       if (fwpu != null) {
-        final close = fwpu.lookupFunction<Int32 Function(IntPtr), int Function(int)>('FwpmEngineClose0');
+        final close =
+            fwpu.lookupFunction<Int32 Function(IntPtr), int Function(int)>(
+                'FwpmEngineClose0');
         close(engine);
       }
     } catch (_) {}
   }
 
   bool _install(DynamicLibrary fwpu, int engine, List<String> paths) {
-    final begin = fwpu.lookupFunction<Int32 Function(IntPtr, Uint32), int Function(int, int)>('FwpmTransactionBegin0');
-    final commit = fwpu.lookupFunction<Int32 Function(IntPtr), int Function(int)>('FwpmTransactionCommit0');
-    final abort = fwpu.lookupFunction<Int32 Function(IntPtr), int Function(int)>('FwpmTransactionAbort0');
+    final begin = fwpu.lookupFunction<Int32 Function(IntPtr, Uint32),
+        int Function(int, int)>('FwpmTransactionBegin0');
+    final commit =
+        fwpu.lookupFunction<Int32 Function(IntPtr), int Function(int)>(
+            'FwpmTransactionCommit0');
+    final abort =
+        fwpu.lookupFunction<Int32 Function(IntPtr), int Function(int)>(
+            'FwpmTransactionAbort0');
     if (begin(engine, 0) != 0) return false;
     var ok = _addSublayer(fwpu, engine);
     if (ok) {
-      ok = _addBlock(fwpu, engine, _connectV4) && _addBlock(fwpu, engine, _connectV6);
+      ok = _addBlock(fwpu, engine, _connectV4) &&
+          _addBlock(fwpu, engine, _connectV6);
     }
     for (final path in paths) {
       if (!ok) break;
-      ok = _addPermit(fwpu, engine, path, _connectV4) && _addPermit(fwpu, engine, path, _connectV6);
+      ok = _addPermit(fwpu, engine, path, _connectV4) &&
+          _addPermit(fwpu, engine, path, _connectV6);
     }
     if (!ok) {
       abort(engine);
@@ -94,7 +106,9 @@ class WindowsTrafficGuard {
   }
 
   bool _addSublayer(DynamicLibrary fwpu, int engine) {
-    final add = fwpu.lookupFunction<Int32 Function(IntPtr, Pointer<Uint8>, Pointer<Void>), int Function(int, Pointer<Uint8>, Pointer<Void>)>('FwpmSubLayerAdd0');
+    final add = fwpu.lookupFunction<
+        Int32 Function(IntPtr, Pointer<Uint8>, Pointer<Void>),
+        int Function(int, Pointer<Uint8>, Pointer<Void>)>('FwpmSubLayerAdd0');
     final layer = calloc<Uint8>(72);
     final name = '宇海断网保护'.toNativeUtf16();
     try {
@@ -110,12 +124,18 @@ class WindowsTrafficGuard {
   }
 
   bool _addBlock(DynamicLibrary fwpu, int engine, List<int> layerKey) {
-    return _addFilter(fwpu, engine, layerKey, weight: TrafficGuardPlan.blockWeight, action: _actionBlock);
+    return _addFilter(fwpu, engine, layerKey,
+        weight: TrafficGuardPlan.blockWeight, action: _actionBlock);
   }
 
-  bool _addPermit(DynamicLibrary fwpu, int engine, String path, List<int> layerKey) {
-    final getId = fwpu.lookupFunction<Int32 Function(Pointer<Utf16>, Pointer<Pointer<Uint8>>), int Function(Pointer<Utf16>, Pointer<Pointer<Uint8>>)>('FwpmGetAppIdFromFileName0');
-    final freeMem = fwpu.lookupFunction<Void Function(Pointer<Pointer<Void>>), void Function(Pointer<Pointer<Void>>)>('FwpmFreeMemory0');
+  bool _addPermit(
+      DynamicLibrary fwpu, int engine, String path, List<int> layerKey) {
+    final getId = fwpu.lookupFunction<
+        Int32 Function(Pointer<Utf16>, Pointer<Pointer<Uint8>>),
+        int Function(Pointer<Utf16>,
+            Pointer<Pointer<Uint8>>)>('FwpmGetAppIdFromFileName0');
+    final freeMem = fwpu.lookupFunction<Void Function(Pointer<Pointer<Void>>),
+        void Function(Pointer<Pointer<Void>>)>('FwpmFreeMemory0');
     final file = path.toNativeUtf16();
     final blobOut = calloc<Pointer<Uint8>>();
     try {
@@ -143,7 +163,10 @@ class WindowsTrafficGuard {
 
   bool _addFilter(DynamicLibrary fwpu, int engine, List<int> layerKey,
       {required int weight, required int action, Pointer<Uint8>? condition}) {
-    final add = fwpu.lookupFunction<Int32 Function(IntPtr, Pointer<Uint8>, Pointer<Void>, Pointer<Uint64>), int Function(int, Pointer<Uint8>, Pointer<Void>, Pointer<Uint64>)>('FwpmFilterAdd0');
+    final add = fwpu.lookupFunction<
+        Int32 Function(IntPtr, Pointer<Uint8>, Pointer<Void>, Pointer<Uint64>),
+        int Function(int, Pointer<Uint8>, Pointer<Void>,
+            Pointer<Uint64>)>('FwpmFilterAdd0');
     final filter = calloc<Uint8>(192);
     final name = '宇海'.toNativeUtf16();
     final id = calloc<Uint64>();
@@ -174,9 +197,77 @@ void _writeGuid(Pointer<Uint8> target, List<int> bytes) {
 }
 
 // 固定子层，便于以后按同一把钥匙清理。布局是小端 GUID。
-const _sublayer = <int>[0x20, 0x1a, 0x3c, 0x8f, 0x7e, 0x6b, 0x5a, 0x4d, 0x9c, 0x1e, 0x2a, 0x7b, 0x6e, 0x5d, 0x4c, 0x31];
-const _connectV4 = <int>[0xd1, 0x57, 0x8d, 0xc3, 0xa7, 0x05, 0x33, 0x4c, 0x90, 0x4f, 0x7f, 0xbc, 0xee, 0xe6, 0x0e, 0x82];
-const _connectV6 = <int>[0x3b, 0x39, 0x72, 0x4a, 0x9f, 0x31, 0xbc, 0x44, 0x84, 0xc3, 0xba, 0x54, 0xdc, 0xb3, 0xb6, 0xb4];
-const _appId = <int>[0x87, 0x1e, 0x8e, 0xd7, 0x44, 0x86, 0xa5, 0x4e, 0x94, 0x37, 0xd8, 0x09, 0xec, 0xef, 0xc9, 0x71];
+const _sublayer = <int>[
+  0x20,
+  0x1a,
+  0x3c,
+  0x8f,
+  0x7e,
+  0x6b,
+  0x5a,
+  0x4d,
+  0x9c,
+  0x1e,
+  0x2a,
+  0x7b,
+  0x6e,
+  0x5d,
+  0x4c,
+  0x31
+];
+const _connectV4 = <int>[
+  0xd1,
+  0x57,
+  0x8d,
+  0xc3,
+  0xa7,
+  0x05,
+  0x33,
+  0x4c,
+  0x90,
+  0x4f,
+  0x7f,
+  0xbc,
+  0xee,
+  0xe6,
+  0x0e,
+  0x82
+];
+const _connectV6 = <int>[
+  0x3b,
+  0x39,
+  0x72,
+  0x4a,
+  0x9f,
+  0x31,
+  0xbc,
+  0x44,
+  0x84,
+  0xc3,
+  0xba,
+  0x54,
+  0xdc,
+  0xb3,
+  0xb6,
+  0xb4
+];
+const _appId = <int>[
+  0x87,
+  0x1e,
+  0x8e,
+  0xd7,
+  0x44,
+  0x86,
+  0xa5,
+  0x4e,
+  0x94,
+  0x37,
+  0xd8,
+  0x09,
+  0xec,
+  0xef,
+  0xc9,
+  0x71
+];
 const _actionBlock = 0x1001;
 const _actionPermit = 0x1002;

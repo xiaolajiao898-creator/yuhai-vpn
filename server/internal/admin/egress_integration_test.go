@@ -49,6 +49,13 @@ func newEgressFixture(t *testing.T) *egressFixture {
 	if _, err := a.owner.Exec(a.ctx, up); err != nil {
 		t.Fatal(err)
 	}
+	// 00041 建表时还没有人数上限。集成测试不跑完整 goose，这里补上 00046 的那一列。
+	if _, err := a.owner.Exec(a.ctx, `
+		ALTER TABLE egress_endpoints
+		  ADD COLUMN capacity_users INT NOT NULL DEFAULT 0
+		  CHECK (capacity_users BETWEEN 0 AND 1000000)`); err != nil {
+		t.Fatal(err)
+	}
 	// 迁移只给 super_admin 角色授权；fixture 的角色不是它，因此不得增加授权。
 	if authCount(t, a.svc.Auth, `SELECT count(*) FROM admin_role_permissions`) != before {
 		t.Fatal("迁移给非 super_admin 角色授了权")

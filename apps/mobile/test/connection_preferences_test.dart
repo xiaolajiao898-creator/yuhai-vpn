@@ -145,8 +145,8 @@ void main() {
     await tester.pumpAndSettle();
     final auto = tester.widget<SwitchListTile>(
         find.byKey(const ValueKey('automatic-connect')));
-    final killSwitch = tester.widget<ListTile>(
-        find.byKey(const ValueKey('kill-switch-guidance')));
+    final killSwitch = tester
+        .widget<ListTile>(find.byKey(const ValueKey('kill-switch-guidance')));
     final split = tester.widget<SwitchListTile>(
         find.byKey(const ValueKey('split-tunnel-unavailable')));
     expect(auto.value, isFalse);

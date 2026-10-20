@@ -153,7 +153,8 @@ class ConnectionController extends Notifier<VpnStatus> {
 
   /// 出口连接：确认所选出口仍可用 → 系统授权 → 再次确认 → 现取连接材料 → 交给原生引擎。
   /// 每一步之后都核对「代次未变、选择未变、账户未变」，任何变化都放弃这次尝试。
-  Future<void> _connectEgress(WireGuardVpnEngine engine, String id, Session session,
+  Future<void> _connectEgress(
+      WireGuardVpnEngine engine, String id, Session session,
       {required bool Function() current,
       required bool Function() validAttempt}) async {
     bool usable(List<NodeItem> list) =>
@@ -234,9 +235,8 @@ class ConnectionController extends Notifier<VpnStatus> {
       return;
     }
     ref.read(trafficHeldProvider.notifier).state = held;
-    ref.read(connectionNoticeProvider.notifier).state = held
-        ? '已保护。流量已拦住，点「断开」才会恢复本地网络。'
-        : '断网保护没有打开';
+    ref.read(connectionNoticeProvider.notifier).state =
+        held ? '已保护。流量已拦住，点「断开」才会恢复本地网络。' : '断网保护没有打开';
   }
 
   Future<void> _checkTunnel() async {
@@ -244,7 +244,9 @@ class ConnectionController extends Notifier<VpnStatus> {
     if (state != VpnStatus.connected) return;
     final engine = ref.read(vpnEngineProvider);
     final latency = await engine.probeTunnel();
-    if (!_armed || _disposed || _userStop || state != VpnStatus.connected) return;
+    if (!_armed || _disposed || _userStop || state != VpnStatus.connected) {
+      return;
+    }
     if (tunnelSampleBad(latency)) {
       _badStreak++;
       if (_badStreak >= tunnelBadStreak) {
@@ -280,7 +282,12 @@ class ConnectionController extends Notifier<VpnStatus> {
     final generation = _generation;
     try {
       final prefs = _preferences();
-      final lines = ref.read(nodesProvider).valueOrNull ?? const <NodeItem>[];
+      // 节点列表没人监听时会被释放。重连时重新读取，才能在同一国家里换线。
+      List<NodeItem> lines = const [];
+      try {
+        lines = await ref.read(nodesProvider.future);
+      } catch (_) {}
+      if (_disposed || _userStop || generation != _generation) return;
       final currentId = ref.read(selectedNodeProvider);
       final current = lines.where((node) => node.id == currentId).firstOrNull;
       _failuresOnLine = networkChanged ? 1 : _failuresOnLine + 1;
@@ -308,7 +315,9 @@ class ConnectionController extends Notifier<VpnStatus> {
         ref.read(trafficHeldProvider.notifier).state = false;
         await engine.releaseTraffic();
         await engine.disconnect();
-        if (!_disposed && generation == _generation) state = VpnStatus.disconnected;
+        if (!_disposed && generation == _generation) {
+          state = VpnStatus.disconnected;
+        }
         return;
       }
       _acceptEngineEvents = false;
@@ -479,7 +488,9 @@ class ConnectionController extends Notifier<VpnStatus> {
             egressPlatformSupported &&
             engine is WireGuardVpnEngine) {
           final egressNode = preferredEgress(nodes);
-          if (egressNode == null || !validAttempt()) throw await _noLineOrPlan();
+          if (egressNode == null || !validAttempt()) {
+            throw await _noLineOrPlan();
+          }
           await _connectEgress(engine, egressNode.id, session!,
               current: current, validAttempt: validAttempt);
           return;
@@ -549,8 +560,7 @@ class ConnectionController extends Notifier<VpnStatus> {
             _ => VpnFailure(
                 'REQUEST_FAILED', e.message.isEmpty ? '连接失败，请重试' : e.message),
           },
-        FormatException e => VpnFailure(
-            'NODE_UNAVAILABLE',
+        FormatException e => VpnFailure('NODE_UNAVAILABLE',
             e.message.isEmpty ? '线路暂不可用，请刷新后重新选择' : e.message),
         _ => const VpnFailure('CONNECT_FAILED', '连接失败，请重试'),
       };

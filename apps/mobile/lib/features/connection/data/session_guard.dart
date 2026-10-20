@@ -29,14 +29,15 @@ const _backoffSeconds = [2, 4, 8, 16, 30];
 
 Duration backoffDelay(int failureIndex) {
   final index = failureIndex < 0 ? 0 : failureIndex;
-  final seconds =
-      index >= _backoffSeconds.length ? 30 : _backoffSeconds[index];
+  final seconds = index >= _backoffSeconds.length ? 30 : _backoffSeconds[index];
   return Duration(seconds: seconds);
 }
 
 /// 经隧道的一次探测。null 或超过 800ms 视为不健康。
 bool tunnelSampleBad(int? latencyMs) =>
-    latencyMs == null || latencyMs < 0 || latencyMs >= tunnelBadLatency.inMilliseconds;
+    latencyMs == null ||
+    latencyMs < 0 ||
+    latencyMs >= tunnelBadLatency.inMilliseconds;
 
 /// 国家代码优先。两边都没有国家代码时才比较地区，并且不会跨国家切换。
 String? lineArea(String countryCode, String region) {
@@ -95,13 +96,16 @@ RecoveryDecision decideRecovery({
       notice: '',
     );
   }
-  final delay = networkChanged ? backoffDelay(0) : backoffDelay(failuresOnLine - 1);
+  final delay =
+      networkChanged ? backoffDelay(0) : backoffDelay(failuresOnLine - 1);
   if (current == null) {
     return RecoveryDecision(
       action: RecoveryAction.retrySame,
       delay: delay,
       protected: leakProtect,
-      notice: leakProtect ? '重连中 · 已保护' : '重连中',
+      notice: networkChanged
+          ? (leakProtect ? '网络已切换，重连中 · 已保护' : '网络已切换，重连中')
+          : (leakProtect ? '重连中 · 已保护' : '重连中'),
     );
   }
   final stay = RecoveryDecision(
@@ -143,7 +147,8 @@ RecoveryDecision decideRecovery({
 }
 
 /// 引擎没有真正拦住流量时，不能对用户说「已保护」。
-String protectionNotice(String notice, {required bool wanted, required bool held}) {
+String protectionNotice(String notice,
+    {required bool wanted, required bool held}) {
   if (!wanted || held) return notice;
   if (notice.contains('已保护')) return notice.replaceAll('已保护', '断网保护没有打开');
   if (notice.isEmpty) return '断网保护没有打开';
