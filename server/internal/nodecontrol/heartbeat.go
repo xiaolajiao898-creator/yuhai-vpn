@@ -94,9 +94,6 @@ func (s *Service) Accept(ctx context.Context, state *tls.ConnectionState, h Hear
 	if status == "DISABLED" || !cert.accepts(id.fingerprint, now) {
 		return out, forbidden()
 	}
-	if capacity <= 0 {
-		return out, httpx.NewError(httpx.ErrNodeUnavailable, "节点容量配置无效")
-	}
 	var previous int64
 	var hash string
 	var received, sent time.Time
@@ -121,13 +118,8 @@ func (s *Service) Accept(ctx context.Context, state *tls.ConnectionState, h Hear
 	}
 	// No configured bandwidth capacity yet: load is max(CPU, connection ratio),
 	// never an invented bandwidth utilization or a verified kernel readiness.
-	load := (h.OnlineCount*100 + capacity - 1) / capacity
-	if load > 100 {
-		load = 100
-	}
-	if int64(h.CPU) > load {
-		load = int64(h.CPU)
-	}
+	// capacity <= 0 means "no connection cap", so the ratio is not computed.
+	load := loadScore(h.OnlineCount, capacity, h.CPU)
 	protocols := h.ReadyProtocols
 	if protocols == nil {
 		protocols = []string{}
@@ -150,4 +142,20 @@ func (s *Service) Accept(ctx context.Context, state *tls.ConnectionState, h Hear
 		return out, err
 	}
 	return Receipt{Accepted: true, Duplicate: false, Sequence: h.Sequence, ReceivedAt: now, ServerTime: now, Actions: []string{}}, nil
+}
+
+// loadScore is max(CPU, ceil(online/capacity)). A non-positive capacity does
+// not contribute a connection ratio and must not divide by zero.
+func loadScore(online, capacity int64, cpu int) int64 {
+	var ratio int64
+	if capacity > 0 && online > 0 {
+		ratio = (online*100 + capacity - 1) / capacity
+		if ratio > 100 {
+			ratio = 100
+		}
+	}
+	if int64(cpu) > ratio {
+		return int64(cpu)
+	}
+	return ratio
 }

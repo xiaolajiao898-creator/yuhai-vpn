@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -116,7 +117,41 @@ jobs:
 
       - name: Build Flutter Windows release
         working-directory: apps/mobile
-        run: flutter build windows --release
+        env:
+          YH_API_BASE: https://api.yhvpn.io
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $defines = @(python tool/release_defines.py)
+          if ($LASTEXITCODE -ne 0 -or $defines.Count -eq 0) { throw '发行配置不完整' }
+          if ($defines -notcontains '--dart-define=YH_API_BASE=https://api.yhvpn.io') {
+            throw "缺少 API 地址：$defines"
+          }
+          flutter build windows --release @defines
+
+      - name: 确认 Windows 包里的 API 地址，并实际打一次注册请求
+        env:
+          YH_SMOKE_REGISTER: "1"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $release = Resolve-Path 'apps/mobile/build/windows/x64/runner/Release'
+          $snapshot = Join-Path $release 'data\app.so'
+          python apps/mobile/tool/assert_baked_api.py $snapshot
+          if ($LASTEXITCODE -ne 0) { throw '安装内容里没有正式 API 地址' }
+          $log = Join-Path $env:RUNNER_TEMP 'yuhai-register-smoke.log'
+          if (Test-Path $log) { Remove-Item $log }
+          $env:YH_CLIENT_LOG = $log
+          $exe = Join-Path $release 'yuhai_vpn.exe'
+          $proc = Start-Process -FilePath $exe -WorkingDirectory $release -PassThru -NoNewWindow
+          if (-not $proc.WaitForExit(120000)) {
+            Stop-Process -Id $proc.Id -Force
+            throw '注册冒烟超时'
+          }
+          if (Test-Path $log) { Get-Content $log }
+          if ($proc.ExitCode -ne 0) { throw "注册冒烟失败，退出码 $($proc.ExitCode)" }
+          $text = Get-Content $log -Raw
+          if ($text -notmatch 'smoke base=https://api.yhvpn.io' -or $text -notmatch 'ApiException') {
+            throw '没有看到发往正式 API 的注册响应'
+          }
 
       - name: Require bundled engine files
         run: |

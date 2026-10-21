@@ -81,7 +81,7 @@ func TestDashboardOnlyReturnsSectionsTheCallerCanSeeIntegration(t *testing.T) {
 		t.Fatal("users 段缺失", out)
 	}
 	// 关键：看不到的段必须是 nil（整块不出现），而不是一个装着 0 的结构体。
-	if out.Nodes != nil || out.Traffic != nil || out.Finance != nil || out.Invite != nil {
+	if out.Nodes != nil || out.Traffic != nil || out.Finance != nil || out.Invite != nil || out.Site != nil {
 		t.Fatal("无权限的段落被填成了 0", out)
 	}
 	if out.Users.ByStatus["ACTIVE"] != "1" || out.Users.ByStatus["SUSPENDED"] != "1" {

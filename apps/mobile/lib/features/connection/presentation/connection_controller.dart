@@ -18,6 +18,7 @@ import '../../nodes/data/node_probe.dart';
 import '../../onboarding/presentation/onboarding_controller.dart';
 import '../../settings/data/connection_preferences.dart';
 import '../data/connection_api.dart';
+import '../data/session_guard.dart';
 
 final vpnDemoModeProvider = Provider<bool>((_) => false);
 
@@ -48,13 +49,26 @@ final vpnEngineProvider = Provider<VpnEngine>((ref) {
 });
 final connectionFailureProvider = StateProvider<VpnFailure?>((_) => null);
 
-/// 本次连接的如实提示（例如所选出口不支持 UDP）。每次发起连接时清空。
+/// 本次连接的如实提示（例如所选出口不支持 UDP，或「重连中 / 已切换线路 / 已保护」）。
 final connectionNoticeProvider = StateProvider<String?>((_) => null);
+
+/// 本地网络是否真的被拦住。只有引擎回执成功才为 true，界面才能说「已保护」。
+final trafficHeldProvider = StateProvider<bool>((_) => false);
 
 class ConnectionController extends Notifier<VpnStatus> {
   var _generation = 0;
   var _disposed = false;
   var _acceptEngineEvents = false;
+  var _armed = false;
+  var _userStop = false;
+  var _suppressSelect = false;
+  var _recovering = false;
+  var _recoverQueued = false;
+  var _badStreak = 0;
+  var _failuresOnLine = 0;
+  int? _epochSeen;
+  Timer? _healthTimer;
+  Timer? _networkTimer;
 
   @override
   VpnStatus build() {
@@ -64,14 +78,34 @@ class ConnectionController extends Notifier<VpnStatus> {
     _generation++;
     var active = true;
     final sub = engine.status.listen((status) {
-      if (active && !_disposed && _acceptEngineEvents) state = status;
+      if (!(active && !_disposed && _acceptEngineEvents)) return;
+      state = status;
+      if (status == VpnStatus.connected && engine.canRecover && !_userStop) {
+        _failuresOnLine = 0;
+        _badStreak = 0;
+        _arm(engine);
+      }
     });
     final failures = engine.failures.listen((failure) {
-      if (active && !_disposed && _acceptEngineEvents) {
-        ref.read(connectionFailureProvider.notifier).state = failure;
+      if (!(active && !_disposed && _acceptEngineEvents)) return;
+      ref.read(connectionFailureProvider.notifier).state = failure;
+      if (failure.code == 'VPN_REVOKED' ||
+          failure.code == 'NO_PLAN' ||
+          failure.code == 'AUTH_REQUIRED' ||
+          failure.code == 'ACCOUNT_DISABLED' ||
+          failure.code == 'PERMISSION_DENIED') {
+        if (failure.code == 'VPN_REVOKED') _userStop = true;
+        _disarm();
+        return;
+      }
+      if (_armed && !_userStop) {
+        unawaited(_recover(networkChanged: false));
+      } else if (!_userStop) {
+        unawaited(_holdIfProtecting());
       }
     });
     ref.listen(selectedNodeProvider, (previous, next) {
+      if (_suppressSelect) return;
       if (previous != next &&
           (state == VpnStatus.connecting || state == VpnStatus.reconnecting)) {
         _generation++;
@@ -89,6 +123,8 @@ class ConnectionController extends Notifier<VpnStatus> {
       active = false;
       _disposed = true;
       _generation++;
+      _userStop = true;
+      _disarm();
       _acceptEngineEvents = false;
       sub.cancel();
       failures.cancel();
@@ -117,7 +153,8 @@ class ConnectionController extends Notifier<VpnStatus> {
 
   /// 出口连接：确认所选出口仍可用 → 系统授权 → 再次确认 → 现取连接材料 → 交给原生引擎。
   /// 每一步之后都核对「代次未变、选择未变、账户未变」，任何变化都放弃这次尝试。
-  Future<void> _connectEgress(WireGuardVpnEngine engine, String id, Session session,
+  Future<void> _connectEgress(
+      WireGuardVpnEngine engine, String id, Session session,
       {required bool Function() current,
       required bool Function() validAttempt}) async {
     bool usable(List<NodeItem> list) =>
@@ -160,33 +197,215 @@ class ConnectionController extends Notifier<VpnStatus> {
         .catchError((Object _) {}));
   }
 
-  Future<void> toggle() async {
+  void _disarm() {
+    _armed = false;
+    _badStreak = 0;
+    _failuresOnLine = 0;
+    _epochSeen = null;
+    _healthTimer?.cancel();
+    _networkTimer?.cancel();
+    _healthTimer = null;
+    _networkTimer = null;
+  }
+
+  void _arm(VpnEngine engine) {
+    if (_armed || _disposed || !engine.canRecover || _userStop) return;
+    _armed = true;
+    _healthTimer?.cancel();
+    _networkTimer?.cancel();
+    _healthTimer = Timer.periodic(tunnelProbeInterval, (_) {
+      unawaited(_checkTunnel());
+    });
+    _networkTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      unawaited(_checkNetwork());
+    });
+  }
+
+  ConnectionPreferences _preferences() =>
+      ref.read(connectionPreferencesProvider).valueOrNull ??
+      const ConnectionPreferences();
+
+  Future<void> _holdIfProtecting() async {
+    final engine = ref.read(vpnEngineProvider);
+    if (!engine.canRecover || _userStop || _disposed) return;
+    if (!_preferences().leakProtect) return;
+    final held = await engine.holdTraffic();
+    if (_disposed || _userStop) {
+      if (held) await engine.releaseTraffic();
+      return;
+    }
+    ref.read(trafficHeldProvider.notifier).state = held;
+    ref.read(connectionNoticeProvider.notifier).state =
+        held ? '已保护。流量已拦住，点「断开」才会恢复本地网络。' : '断网保护没有打开';
+  }
+
+  Future<void> _checkTunnel() async {
+    if (!_armed || _disposed || _userStop || _recovering) return;
+    if (state != VpnStatus.connected) return;
+    final engine = ref.read(vpnEngineProvider);
+    final latency = await engine.probeTunnel();
+    if (!_armed || _disposed || _userStop || state != VpnStatus.connected) {
+      return;
+    }
+    if (tunnelSampleBad(latency)) {
+      _badStreak++;
+      if (_badStreak >= tunnelBadStreak) {
+        _badStreak = 0;
+        await _recover(networkChanged: false);
+      }
+    } else {
+      _badStreak = 0;
+    }
+  }
+
+  Future<void> _checkNetwork() async {
+    if (!_armed || _disposed || _userStop || _recovering) return;
+    if (state != VpnStatus.connected && state != VpnStatus.reconnecting) return;
+    final epoch = await ref.read(vpnEngineProvider).networkEpoch();
+    if (!_armed || _disposed || _userStop) return;
+    final seen = _epochSeen;
+    _epochSeen = epoch;
+    if (seen != null && epoch != seen) {
+      await _recover(networkChanged: true);
+    }
+  }
+
+  Future<void> _recover({required bool networkChanged}) async {
+    if (_disposed || _userStop || !_armed) return;
+    if (_recovering) {
+      _recoverQueued = true;
+      return;
+    }
+    final engine = ref.read(vpnEngineProvider);
+    if (!engine.canRecover) return;
+    _recovering = true;
+    final generation = _generation;
+    try {
+      final prefs = _preferences();
+      // 节点列表没人监听时会被释放。重连时重新读取，才能在同一国家里换线。
+      List<NodeItem> lines = const [];
+      try {
+        lines = await ref.read(nodesProvider.future);
+      } catch (_) {}
+      if (_disposed || _userStop || generation != _generation) return;
+      final currentId = ref.read(selectedNodeProvider);
+      final current = lines.where((node) => node.id == currentId).firstOrNull;
+      _failuresOnLine = networkChanged ? 1 : _failuresOnLine + 1;
+      final decision = decideRecovery(
+        leakProtect: prefs.leakProtect,
+        autoRecover: prefs.autoRecover,
+        networkChanged: networkChanged,
+        failuresOnLine: _failuresOnLine,
+        current: current,
+        lines: lines,
+      );
+      var held = false;
+      if (decision.protected) held = await engine.holdTraffic();
+      if (_disposed || _userStop || generation != _generation) {
+        if (held && _userStop) await engine.releaseTraffic();
+        return;
+      }
+      ref.read(trafficHeldProvider.notifier).state = held;
+      ref.read(connectionNoticeProvider.notifier).state = protectionNotice(
+          decision.notice,
+          wanted: decision.protected,
+          held: held);
+      if (decision.action == RecoveryAction.release) {
+        _disarm();
+        ref.read(trafficHeldProvider.notifier).state = false;
+        await engine.releaseTraffic();
+        await engine.disconnect();
+        if (!_disposed && generation == _generation) {
+          state = VpnStatus.disconnected;
+        }
+        return;
+      }
+      _acceptEngineEvents = false;
+      state = VpnStatus.reconnecting;
+      if (decision.action == RecoveryAction.hold) return;
+      if (decision.delay > Duration.zero) {
+        await Future<void>.delayed(decision.delay);
+      }
+      if (_disposed || _userStop || generation != _generation) return;
+      if (decision.action == RecoveryAction.switchLine &&
+          decision.lineId != null &&
+          decision.lineId != currentId) {
+        _suppressSelect = true;
+        ref.read(selectedNodeProvider.notifier).state = decision.lineId;
+        _suppressSelect = false;
+        _failuresOnLine = 0;
+      }
+      await _drive(userInitiated: false);
+    } finally {
+      _recovering = false;
+      final code = ref.read(connectionFailureProvider)?.code;
+      const fatal = {
+        'VPN_REVOKED',
+        'NO_PLAN',
+        'AUTH_REQUIRED',
+        'ACCOUNT_DISABLED',
+        'PERMISSION_DENIED'
+      };
+      if (fatal.contains(code)) _disarm();
+      if (_recoverQueued && _armed && !_userStop && !_disposed) {
+        _recoverQueued = false;
+        unawaited(_recover(networkChanged: false));
+      } else {
+        _recoverQueued = false;
+      }
+    }
+  }
+
+  /// 用户点「断开」：放开本地网络。重连不会走这里。
+  Future<void> release() => _userRelease();
+
+  Future<void> _userRelease() async {
     final engine = ref.read(vpnEngineProvider);
     if (state == VpnStatus.disconnecting) return;
     final generation = ++_generation;
     bool current() => !_disposed && generation == _generation;
-    if (state == VpnStatus.connected ||
-        state == VpnStatus.connecting ||
-        state == VpnStatus.reconnecting) {
-      _acceptEngineEvents = false;
-      state = VpnStatus.disconnecting;
-      try {
-        await engine.disconnect();
-      } catch (_) {
-        if (current()) {
-          state = VpnStatus.error;
-          ref.read(connectionFailureProvider.notifier).state =
-              const VpnFailure('DISCONNECT_FAILED', '断开未获确认，请重试');
-        }
-        return;
-      }
+    _userStop = true;
+    _disarm();
+    _acceptEngineEvents = false;
+    state = VpnStatus.disconnecting;
+    ref.read(trafficHeldProvider.notifier).state = false;
+    try {
+      await engine.releaseTraffic();
+      await engine.disconnect();
+    } catch (_) {
       if (current()) {
-        state = VpnStatus.disconnected;
+        state = VpnStatus.error;
+        ref.read(connectionFailureProvider.notifier).state =
+            const VpnFailure('DISCONNECT_FAILED', '断开未获确认，请重试');
       }
       return;
     }
-    ref.read(connectionFailureProvider.notifier).state = null;
-    ref.read(connectionNoticeProvider.notifier).state = null;
+    if (current()) {
+      state = VpnStatus.disconnected;
+      ref.read(connectionNoticeProvider.notifier).state = null;
+    }
+  }
+
+  Future<void> toggle() => _drive(userInitiated: true);
+
+  Future<void> _drive({required bool userInitiated}) async {
+    final engine = ref.read(vpnEngineProvider);
+    if (state == VpnStatus.disconnecting) return;
+    if (userInitiated &&
+        (state == VpnStatus.connected ||
+            state == VpnStatus.connecting ||
+            state == VpnStatus.reconnecting)) {
+      await _userRelease();
+      return;
+    }
+    final generation = ++_generation;
+    bool current() => !_disposed && generation == _generation;
+    _userStop = false;
+    if (userInitiated) {
+      ref.read(connectionFailureProvider.notifier).state = null;
+      ref.read(connectionNoticeProvider.notifier).state = null;
+      ref.read(trafficHeldProvider.notifier).state = false;
+    }
     final demo = ref.read(vpnDemoModeProvider);
     if (!demo && engine is! WireGuardVpnEngine) {
       state = VpnStatus.error;
@@ -205,6 +424,8 @@ class ConnectionController extends Notifier<VpnStatus> {
       return;
     }
     state = VpnStatus.connecting;
+    await engine.applyPolicy(leakProtect: _preferences().leakProtect);
+    if (!current()) return;
     Session? session;
     bool validAttempt() =>
         current() &&
@@ -267,7 +488,9 @@ class ConnectionController extends Notifier<VpnStatus> {
             egressPlatformSupported &&
             engine is WireGuardVpnEngine) {
           final egressNode = preferredEgress(nodes);
-          if (egressNode == null || !validAttempt()) throw await _noLineOrPlan();
+          if (egressNode == null || !validAttempt()) {
+            throw await _noLineOrPlan();
+          }
           await _connectEgress(engine, egressNode.id, session!,
               current: current, validAttempt: validAttempt);
           return;
@@ -337,8 +560,7 @@ class ConnectionController extends Notifier<VpnStatus> {
             _ => VpnFailure(
                 'REQUEST_FAILED', e.message.isEmpty ? '连接失败，请重试' : e.message),
           },
-        FormatException e => VpnFailure(
-            'NODE_UNAVAILABLE',
+        FormatException e => VpnFailure('NODE_UNAVAILABLE',
             e.message.isEmpty ? '线路暂不可用，请刷新后重新选择' : e.message),
         _ => const VpnFailure('CONNECT_FAILED', '连接失败，请重试'),
       };

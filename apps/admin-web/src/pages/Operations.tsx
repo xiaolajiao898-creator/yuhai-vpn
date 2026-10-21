@@ -1,6 +1,7 @@
 import {useEffect,useRef,useState} from 'react';
 import {Alert,Button,Card,Descriptions,Form,Input,Modal,Select,Space,Table,Tag,Typography} from 'antd';
 import {adminApi,type AdminSession} from '../api/client';
+import {SiteStats} from './SiteStats';
 import {modules,display,cell,readModule,prepareAction,type Row,type ProtectedAction} from '../api/operations';
 const {Title,Paragraph}=Typography;
 type Field={key:string;label:string;choices?:string[];number?:boolean;secret?:boolean;required?:boolean};
@@ -46,4 +47,6 @@ export function OperationsPage({moduleKey,session,demo=false}:{moduleKey:string;
 // 行标识用多字段组合：邀请关系没有 id、流量按用户/设备/节点分组时日期为空，
 // 单字段兜底会让整页行共用同一个 key，React 会复用错行导致显示错乱。
 function rowKeyOf(r:Row):string{const k=[r.id,r.order_no,r.tx_hash,r.stat_date,r.user_id,r.device_id,r.node_id,r.inviter_user_id,r.invitee_user_id,r.address].filter(v=>v!==undefined&&v!==null&&v!=='').map(String).join('|');return k||'row';}
-export function DashboardPage({session,demo=false}:{session:AdminSession;demo?:boolean}){const [data,setData]=useState<Row|null>(null),[error,setError]=useState('');useEffect(()=>{if(demo)return;const c=new AbortController();adminApi.get<Row>('/dashboard',c.signal).then(setData).catch(e=>{if(!c.signal.aborted)setError(e.message);});return()=>c.abort();},[demo,session.id]);if(demo)return <Alert message="请登录测试后台查看实际运营总览"/>;if(error)return <Alert type="error" message={error}/>;const fields=[['users.devices_active','有效设备数'],['finance.orders_created_today','今日订单'],['finance.deposit_exceptions_open','待处理到账'],['invite.rewards_in_review','待复核奖励'],['traffic.upload_bytes','近7日上传字节'],['traffic.download_bytes','近7日下载字节']];return <><Title level={2}>运营总览</Title><Paragraph>按当前管理员权限显示数据；缺少权限的项目不展示为零。</Paragraph><Space wrap align="start">{fields.map(([path,label])=><Card key={path} title={label} style={{minWidth:230}}><Title level={3}>{data?display(cell(data,path)):'…'}</Title></Card>)}</Space></>;}
+export function DashboardPage({session,demo=false}:{session:AdminSession;demo?:boolean}){const [data,setData]=useState<Row|null>(null),[error,setError]=useState('');useEffect(()=>{if(demo)return;const c=new AbortController();adminApi.get<Row>('/dashboard',c.signal).then(setData).catch(e=>{if(!c.signal.aborted)setError(e.message);});return()=>c.abort();},[demo,session.id]);if(demo)return <Alert message="请登录测试后台查看实际运营总览"/>;if(error)return <Alert type="error" message={error}/>;const fields=[['users.devices_active','有效设备数'],['finance.orders_created_today','今日订单'],['finance.deposit_exceptions_open','待处理到账'],['invite.rewards_in_review','待复核奖励'],['traffic.upload_bytes','近7日上传字节'],['traffic.download_bytes','近7日下载字节']];const sections=Array.isArray(data?.sections)?data.sections:[];
+ const site=data?.site&&typeof data.site==='object'?data.site as never:null;
+ return <><Title level={2}>运营总览</Title><Paragraph>按当前管理员权限显示数据；缺少权限的项目不展示为零。</Paragraph><Space wrap align="start">{fields.map(([path,label])=><Card key={path} title={label} style={{minWidth:230}}><Title level={3}>{data?display(cell(data,path)):'…'}</Title></Card>)}</Space>{sections.includes('site')&&site&&<SiteStats site={site}/>}</>;}

@@ -36,6 +36,14 @@ class PendingProbeEngine extends MockVpnEngine {
 }
 
 void main() {
+  test('信号按探测耗时分档，不表示带宽', () {
+    expect(signalLabel(80), '信号好');
+    expect(signalLabel(150), '信号中');
+    expect(signalLabel(300), '信号弱');
+    expect(signalLabel(900), '信号差');
+    expect(signalLabel(null), isEmpty);
+  });
+
   test('节点不完整、重复、假协议和混合可用状态拒绝；空列表保留', () {
     expect(parseNodes({'nodes': <dynamic>[]}), isEmpty);
     expect(() => parseNodes({}), throwsFormatException);

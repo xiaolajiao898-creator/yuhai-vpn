@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/network/api_client.dart';
+import 'api_fallback_debug.dart'
+    if (dart.vm.product) 'api_fallback_release.dart';
 import '../core/platform/platform_name.dart';
 import '../core/security/device_key.dart';
 import '../core/security/software_device_key.dart';
@@ -13,8 +15,8 @@ import '../core/storage/durable_id_store.dart';
 import '../core/storage/session_store.dart';
 
 /// 全局依赖注入。测试时用 ProviderScope(overrides: ...) 替换。
-const apiBaseUrl =
-    String.fromEnvironment('YH_API_BASE', defaultValue: 'http://10.0.2.2:8080');
+/// 发行包必须传入 YH_API_BASE。默认值留空，避免把开发环境地址编进真机安装包。
+const apiBaseUrl = String.fromEnvironment('YH_API_BASE');
 const appVersion = '1.0.0+100';
 
 bool isSecureApiBaseUrl(String value, {bool debug = kDebugMode}) {
@@ -50,20 +52,20 @@ bool isSecureApiBaseUrl(String value, {bool debug = kDebugMode}) {
 }
 
 String checkedApiBaseUrl() {
-  if (!isSecureApiBaseUrl(apiBaseUrl, debug: kDebugMode)) {
+  final value = apiBaseUrl.isNotEmpty ? apiBaseUrl : debugApiFallback;
+  if (!isSecureApiBaseUrl(value, debug: kDebugMode)) {
     throw StateError('正式构建必须使用有效的 HTTPS API 域名');
   }
-  return apiBaseUrl;
+  return value;
 }
 
-final sessionStoreProvider = Provider<SessionStore>((ref) => SessionStore(
-    appSecureStorage, ref.watch(durableIdStoreProvider)));
-final deviceKeyProvider = Provider<DeviceKey>((_) =>
-    !kIsWeb &&
-            (defaultTargetPlatform == TargetPlatform.windows ||
-                defaultTargetPlatform == TargetPlatform.macOS)
-        ? SoftwareDeviceKey()
-        : NativeDeviceKey());
+final sessionStoreProvider = Provider<SessionStore>(
+    (ref) => SessionStore(appSecureStorage, ref.watch(durableIdStoreProvider)));
+final deviceKeyProvider = Provider<DeviceKey>((_) => !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.macOS)
+    ? SoftwareDeviceKey()
+    : NativeDeviceKey());
 final apiClientProvider = Provider<ApiClient>((ref) => ApiClient(
       baseUrl: checkedApiBaseUrl(),
       deviceKey: ref.watch(deviceKeyProvider),

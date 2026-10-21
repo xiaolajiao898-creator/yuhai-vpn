@@ -59,6 +59,14 @@ void main() {
       expect(ConnectionPreferences.decode(raw), const ConnectionPreferences());
     }
     expect(ProtocolPreference.shadowsocks2022.wireValue, 'SS2022');
+    final legacy = ConnectionPreferences.decode(
+        '{"version":1,"protocol":"WIREGUARD","reduce_motion":false,"auto_connect":false}');
+    expect(legacy.autoRecover, isTrue);
+    expect(legacy.leakProtect, isTrue);
+    final off = ConnectionPreferences.decode(
+        '{"version":1,"protocol":"WIREGUARD","reduce_motion":false,"auto_connect":false,"auto_recover":false,"leak_protect":false}');
+    expect(off.autoRecover, isFalse);
+    expect(off.leakProtect, isFalse);
     for (final protocol in ProtocolPreference.values) {
       final preferences =
           ConnectionPreferences(protocol: protocol, reduceMotion: true);
@@ -137,8 +145,8 @@ void main() {
     await tester.pumpAndSettle();
     final auto = tester.widget<SwitchListTile>(
         find.byKey(const ValueKey('automatic-connect')));
-    final killSwitch = tester.widget<ListTile>(
-        find.byKey(const ValueKey('kill-switch-guidance')));
+    final killSwitch = tester
+        .widget<ListTile>(find.byKey(const ValueKey('kill-switch-guidance')));
     final split = tester.widget<SwitchListTile>(
         find.byKey(const ValueKey('split-tunnel-unavailable')));
     expect(auto.value, isFalse);

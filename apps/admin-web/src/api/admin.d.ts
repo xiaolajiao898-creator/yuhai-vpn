@@ -99,8 +99,8 @@ export interface paths {
         };
         /**
          * 后台总览（按调用者实际持有的能力分段）
-         * @description 总览是跨域视图：users / nodes / traffic / finance / invite 五段分属 users.read、nodes.read、
-         *     traffic.read、finance.read、invite.read 五个独立能力。
+         * @description 总览是跨域视图：users / nodes / traffic / finance / invite / site 六段分属 users.read、nodes.read、
+         *     traffic.read、finance.read、invite.read、site.stats.read 六个独立能力。
          *
          *     **只返回调用者实际持有能力的那几段，其余整块不出现**，并由 `sections` 列出本次包含了哪几段。
          *     少一段与「那段是 0」必须能区分：首页上一个孤零零的 0 会被读成「今天没单」，
@@ -114,6 +114,9 @@ export interface paths {
          *     `users.devices_active` 是未撤销的设备记录数，不是在线会话数；
          *     `nodes.by_status` 是登记状态，不代表心跳新鲜；`invite.rewards_in_review` 只数 REVIEW
          *     （PENDING 归 worker，不是待办）。状态分布不硬编码枚举，数据库里有什么就返回什么。
+         *
+         *     `site` 按 Asia/Kuala_Lumpur 自然日。pageviews 是限流后的浏览次数（PV），visitors 是 IP 哈希去重（UV）；
+         *     历史访客不是每日访客相加。下载同一哈希、同一通道、同一天只计一次。android_legacy 是旧版安装包，不并进 android。
          */
         get: operations["getDashboard"];
         put?: never;
@@ -1927,7 +1930,7 @@ export interface components {
         };
         /** @description sections 列出本次实际包含的段；未列出的段不在响应里，不能当成 0。 */
         Dashboard: {
-            sections: ("users" | "nodes" | "traffic" | "finance" | "invite")[];
+            sections: ("users" | "nodes" | "traffic" | "finance" | "invite" | "site")[];
             users?: {
                 by_status: {
                     [key: string]: string;
@@ -1956,8 +1959,32 @@ export interface components {
             invite?: {
                 rewards_in_review: string;
             };
+            site?: {
+                /** @constant */
+                timezone: "Asia/Kuala_Lumpur";
+                pageviews: {
+                    today: string;
+                    history: string;
+                };
+                visitors: {
+                    today: string;
+                    history: string;
+                };
+                downloads: {
+                    android: components["schemas"]["DashboardSiteDownload"];
+                    windows: components["schemas"]["DashboardSiteDownload"];
+                    android_legacy: components["schemas"]["DashboardSiteDownload"];
+                };
+            };
             /** Format: date-time */
             observed_at: string;
+        };
+        DashboardSiteDownload: {
+            today: string;
+            week: string;
+            month: string;
+            previous_month: string;
+            history: string;
         };
         ManagedDeviceOverviewPage: {
             items: {
@@ -5302,6 +5329,8 @@ export interface operations {
                     min_tier?: number;
                     sort_order?: number;
                     supports_udp?: boolean;
+                    /** @description 0 表示不设上限。出口没有心跳，这个数字不是在线人数。 */
+                    capacity_users?: number;
                 };
             };
         };

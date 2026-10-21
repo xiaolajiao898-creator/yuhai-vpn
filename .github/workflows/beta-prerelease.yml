@@ -1,0 +1,137 @@
+name: beta-prerelease
+
+# 手动发布，或向测试分支推送时发布一次。附件只有真机 APK 和 Windows 安装包。
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cursor/site-stats-node-health-6839
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  windows:
+    uses: ./.github/workflows/windows-client.yml
+  publish:
+    needs: windows
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: YuhaiVPN-Windows-candidate-x64
+          path: dist/windows
+      - name: 取同一提交的 arm64 安装包
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id="$(python3 - <<'PY'
+          import json, os, subprocess, sys, time
+          repo = os.environ["GITHUB_REPOSITORY"]
+          sha = os.environ["GITHUB_SHA"]
+          deadline = time.time() + 80 * 60
+          while time.time() < deadline:
+              runs = json.loads(subprocess.check_output([
+                  "gh", "run", "list", "--repo", repo, "--commit", sha,
+                  "--workflow", "ci.yml", "--limit", "20",
+                  "--json", "databaseId,status,conclusion,url",
+              ], text=True))
+              pending = False
+              saw = False
+              for run in runs:
+                  view = json.loads(subprocess.check_output([
+                      "gh", "run", "view", str(run["databaseId"]),
+                      "--repo", repo, "--json", "jobs",
+                  ], text=True))
+                  arm = [job for job in view["jobs"] if job.get("name") == "android-arm64"]
+                  if not arm:
+                      continue
+                  saw = True
+                  job = arm[0]
+                  if job.get("conclusion") == "success":
+                      print(run["databaseId"])
+                      sys.exit(0)
+                  if job.get("status") != "completed":
+                      pending = True
+              if saw and not pending:
+                  print("android-arm64 已结束但没有成功", file=sys.stderr)
+                  sys.exit(1)
+              print("等待 android-arm64", file=sys.stderr, flush=True)
+              time.sleep(30)
+          print("等待 arm64 安装包超时", file=sys.stderr)
+          sys.exit(1)
+          PY
+          )"
+          echo "android-arm64 run $run_id"
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+            --name yuhai-candidate-arm64-v8a-release-debugsigned \
+            --dir dist/android
+      - name: 检查附件并发布预发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          apk="$(find dist/android -type f -name '*.apk' -print -quit)"
+          exe="$(find dist/windows -type f -name '*.exe' -print -quit)"
+          if [ -z "$apk" ] || [ -z "$exe" ]; then
+            echo "缺少 APK 或 Windows 安装包"
+            find dist -type f -print
+            exit 1
+          fi
+          mkdir -p dist/public
+          cp "$apk" dist/public/yuhai-vpn-android-arm64-v8a.apk
+          cp "$exe" dist/public/YuhaiVPN-Windows-x64.exe
+          python3 apps/mobile/android/ci/assert-public-assets.py \
+            dist/public/yuhai-vpn-android-arm64-v8a.apk \
+            dist/public/YuhaiVPN-Windows-x64.exe
+          short="${GITHUB_SHA:0:7}"
+          tag="beta-${short}"
+          apk_hash="$(sha256sum dist/public/yuhai-vpn-android-arm64-v8a.apk | awk '{print $1}')"
+          exe_hash="$(sha256sum dist/public/YuhaiVPN-Windows-x64.exe | awk '{print $1}')"
+          apk_bytes="$(stat -c%s dist/public/yuhai-vpn-android-arm64-v8a.apk)"
+          exe_bytes="$(stat -c%s dist/public/YuhaiVPN-Windows-x64.exe)"
+          page="https://github.com/${GITHUB_REPOSITORY}/releases/tag/${tag}"
+          apk_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/yuhai-vpn-android-arm64-v8a.apk"
+          exe_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/YuhaiVPN-Windows-x64.exe"
+          cat > dist/notes.md <<EOF
+          这是提交 \`${GITHUB_SHA}\` 的真机测试包，不是正式版。
+
+          - 安卓：\`com.yuhai.yuhai_vpn.candidate\`，arm64-v8a，公开的 Android 调试证书签名，可与正式版同时安装。
+          - Windows：x64 安装包，未使用正式签名私钥。
+          - 两个包都连接 \`https://api.yhvpn.io\`。附件里没有正式钥匙、服务器地址列表或私钥。
+
+          | 文件 | 大小 | SHA256 |
+          |---|---:|---|
+          | yuhai-vpn-android-arm64-v8a.apk | ${apk_bytes} 字节 | \`${apk_hash}\` |
+          | YuhaiVPN-Windows-x64.exe | ${exe_bytes} 字节 | \`${exe_hash}\` |
+
+          - 安卓：${apk_url}
+          - Windows：${exe_url}
+          EOF
+          sed -i 's/^          //' dist/notes.md
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
+              dist/public/yuhai-vpn-android-arm64-v8a.apk \
+              dist/public/YuhaiVPN-Windows-x64.exe
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --prerelease --notes-file dist/notes.md
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --prerelease \
+              --latest=false \
+              --title "真机测试 ${tag}" \
+              --notes-file dist/notes.md \
+              dist/public/yuhai-vpn-android-arm64-v8a.apk \
+              dist/public/YuhaiVPN-Windows-x64.exe
+          fi
+          {
+            echo "预发布 ${page}"
+            echo "安卓 ${apk_url}"
+            echo "安卓 bytes=${apk_bytes} sha256=${apk_hash}"
+            echo "Windows ${exe_url}"
+            echo "Windows bytes=${exe_bytes} sha256=${exe_hash}"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

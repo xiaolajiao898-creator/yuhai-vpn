@@ -11,7 +11,7 @@ export const protocolLabels:Record<string,string>={SOCKS5:'SOCKS5',HTTP:'HTTP �
 
 export type EgressItem={
   id:string;name:string;protocol:string;host:string;port:number;country_code:string;city:string;region:string;kind:string;
-  supports_udp:boolean;identity_hint:string;params:Record<string,string>;min_tier:number;status:EgressStatus;sort_order:number;
+  supports_udp:boolean;capacity_users:number;identity_hint:string;params:Record<string,string>;min_tier:number;status:EgressStatus;sort_order:number;
   source:string;subscription_id:string|null;created_at:string;updated_at:string;
 };
 export type EgressPage={items:EgressItem[];total:string;page:number;page_size:number;observed_at:string};
@@ -20,7 +20,7 @@ export type ImportOptions={default_protocol:'SOCKS5'|'HTTP'|'HTTPS';default_udp:
 export type PreviewRow={line:number;source:string;protocol?:string;host?:string;port?:number;name?:string;country_code?:string;supports_udp:boolean;error?:string;duplicate?:boolean;existing_id?:string};
 export type PreviewResult={rows:PreviewRow[];summary:{total:number;valid:number;invalid:number;duplicate:number;existing:number}};
 export type ImportResult={created:number;updated:number;skipped:number;failed:number;disabled:number;ids:string[];rows:{line:number;source:string;error?:string}[]};
-export type EgressUpdate={name?:string;status?:EgressStatus;country_code?:string;city?:string;region?:string;min_tier?:number;sort_order?:number;supports_udp?:boolean};
+export type EgressUpdate={name?:string;status?:EgressStatus;country_code?:string;city?:string;region?:string;min_tier?:number;sort_order?:number;supports_udp?:boolean;capacity_users?:number};
 export type Subscription={id:string;name:string;url_hint:string;default_protocol:string;country_code:string;region:string;min_tier:number;status:string;last_fetched_at:string|null;last_result:string;endpoint_count?:number};
 export type SubscriptionInput={name:string;url:string;default_protocol:'SOCKS5'|'HTTP'|'HTTPS';country_code:string;region:string;min_tier:number};
 
@@ -64,7 +64,7 @@ export function optionsProblem(o:ImportOptions):string{
 
 export function readItem(v:unknown):EgressItem{
   if(!object(v)||!validEgressId(v.id)||!str(v.name,64)||!str(v.protocol,32)||!str(v.host,253)||!int(v.port,1,65535)||!str(v.country_code,2)||
-    !str(v.city,64)||!str(v.region,32)||typeof v.supports_udp!=='boolean'||!masked(v.identity_hint)||!object(v.params)||!int(v.min_tier,1,9)||
+    !str(v.city,64)||!str(v.region,32)||typeof v.supports_udp!=='boolean'||!int(v.capacity_users,0,1000000)||!masked(v.identity_hint)||!object(v.params)||!int(v.min_tier,1,9)||
     !['ENABLED','DISABLED'].includes(v.status as string)||!int(v.sort_order,-2147483648)||!str(v.source,32)||(v.subscription_id!==null&&!str(v.subscription_id,24))||
     !str(v.created_at,40)||!str(v.updated_at,40))throw invalid();
   // HTTP 类出口声称支持 UDP：数据不一致，拒绝显示而不是照搬。

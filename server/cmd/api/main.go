@@ -28,6 +28,7 @@ import (
 	"github.com/yuhai-vpn/server/internal/plan"
 	"github.com/yuhai-vpn/server/internal/redeem"
 	"github.com/yuhai-vpn/server/internal/redisx"
+	"github.com/yuhai-vpn/server/internal/sitestats"
 	"github.com/yuhai-vpn/server/internal/traffic"
 	"github.com/yuhai-vpn/server/internal/trial"
 	"github.com/yuhai-vpn/server/internal/tron"
@@ -77,7 +78,7 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := buildRouter(routerDeps{Config: cfg, Pool: pool, Clock: clk, Account: accountSvc, MW: mw,
-		InviteBaseURL: os.Getenv("INVITE_BASE_URL"), Cipher: enc})
+		InviteBaseURL: os.Getenv("INVITE_BASE_URL"), Cipher: enc, Redis: rdb})
 
 	srv := &http.Server{Addr: cfg.APIListen, Handler: r, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	go func() {
@@ -106,6 +107,7 @@ type routerDeps struct {
 	InviteBaseURL string
 	// Cipher 解密出口凭据；测试里可为 nil（出口下发随之拒绝）。
 	Cipher *fieldenc.Cipher
+	Redis  *redisx.Client
 }
 
 func buildRouter(d routerDeps) *gin.Engine {
@@ -132,5 +134,8 @@ func buildRouter(d routerDeps) *gin.Engine {
 	(&connect.Handler{Svc: &connect.Service{Pool: d.Pool, Clock: d.Clock, Cipher: d.Cipher}, MW: d.MW}).Mount(v1)
 	(&redeem.Handler{Svc: redeemSvc, MW: d.MW}).Mount(v1)
 	(&trial.Handler{Svc: trialSvc, MW: d.MW}).Mount(v1)
+	(&sitestats.Handler{Svc: &sitestats.Service{
+		Counter: &sitestats.PGCounter{Pool: d.Pool}, Redis: d.Redis, Pepper: d.Config.SecretPepper, Clock: d.Clock,
+	}}).Mount(v1)
 	return r
 }

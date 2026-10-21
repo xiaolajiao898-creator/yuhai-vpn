@@ -50,6 +50,19 @@ class _RecordingEngine implements WireGuardVpnEngine {
       null;
 
   @override
+  bool get canRecover => false;
+  @override
+  Future<void> applyPolicy({required bool leakProtect}) async {}
+  @override
+  Future<int?> probeTunnel() async => null;
+  @override
+  Future<bool> holdTraffic() async => false;
+  @override
+  Future<void> releaseTraffic() async {}
+  @override
+  Future<int> networkEpoch() async => 0;
+
+  @override
   Future<String> publicKey(String identity) async => 'test-public-key';
 
   void dispose() {}

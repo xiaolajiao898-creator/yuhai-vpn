@@ -41,9 +41,9 @@ export function makePreviewEgress(_session:AdminSession):EgressSource{
   let seq=3;
   const keys=new Map<string,string>();
   const items:EgressItem[]=[
-    {id:'e1',name:'新加坡 · 住宅 01',protocol:'SOCKS5',host:'203.0.113.10',port:1080,country_code:'SG',city:'新加坡',region:'ASIA',kind:'PROXY',supports_udp:true,identity_hint:'al***',params:{source_kind:'IMPORT'},min_tier:1,status:'ENABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:now(),updated_at:now()},
-    {id:'e2',name:'洛杉矶 · 机房 01',protocol:'HTTP',host:'198.51.100.21',port:3128,country_code:'US',city:'洛杉矶',region:'AMERICAS',kind:'PROXY',supports_udp:false,identity_hint:'bo***',params:{},min_tier:1,status:'ENABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:now(),updated_at:now()},
-    {id:'e3',name:'东京 · 自建 Reality',protocol:'VLESS',host:'jp1.example.com',port:443,country_code:'JP',city:'东京',region:'ASIA',kind:'NODE',supports_udp:true,identity_hint:'1f***',params:{security:'reality',sni:'www.example.com',flow:'xtls-rprx-vision'},min_tier:2,status:'DISABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:now(),updated_at:now()},
+    {id:'e1',name:'新加坡 · 住宅 01',protocol:'SOCKS5',host:'203.0.113.10',port:1080,country_code:'SG',city:'新加坡',region:'ASIA',kind:'PROXY',supports_udp:true,capacity_users:0,identity_hint:'al***',params:{source_kind:'IMPORT'},min_tier:1,status:'ENABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:now(),updated_at:now()},
+    {id:'e2',name:'洛杉矶 · 机房 01',protocol:'HTTP',host:'198.51.100.21',port:3128,country_code:'US',city:'洛杉矶',region:'AMERICAS',kind:'PROXY',supports_udp:false,capacity_users:200,identity_hint:'bo***',params:{},min_tier:1,status:'ENABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:now(),updated_at:now()},
+    {id:'e3',name:'东京 · 自建 Reality',protocol:'VLESS',host:'jp1.example.com',port:443,country_code:'JP',city:'东京',region:'ASIA',kind:'NODE',supports_udp:true,capacity_users:0,identity_hint:'1f***',params:{security:'reality',sni:'www.example.com',flow:'xtls-rprx-vision'},min_tier:2,status:'DISABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:now(),updated_at:now()},
   ];
   items.forEach(i=>keys.set(`${i.protocol}|${i.host}|${i.port}|${i.identity_hint.slice(0,2)}`,i.id));
   const subs:Subscription[]=[{id:'s1',name:'供应商 A（示例）',url_hint:'sub.example.com',default_protocol:'SOCKS5',country_code:'SG',region:'ASIA',min_tier:1,status:'ACTIVE',last_fetched_at:null,last_result:'尚未抓取（演示）'}];
@@ -65,7 +65,7 @@ export function makePreviewEgress(_session:AdminSession):EgressSource{
         const found=keys.get(key);
         if(found){if(o.update_existing){updated++;ids.push(found);}else skipped++;continue;}
         const id=`e${++seq}`;keys.set(key,id);ids.push(id);created++;
-        items.push({id,name:row.name||row.host!,protocol:row.protocol!,host:row.host!,port:row.port!,country_code:o.country_code,city:o.city,region:o.region,kind:'PROXY',supports_udp:row.supports_udp,identity_hint:'**',params:{},min_tier:o.min_tier,status:o.enable?'ENABLED':'DISABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:now(),updated_at:now()});
+        items.push({id,name:row.name||row.host!,protocol:row.protocol!,host:row.host!,port:row.port!,country_code:o.country_code,city:o.city,region:o.region,kind:'PROXY',supports_udp:row.supports_udp,capacity_users:0,identity_hint:'**',params:{},min_tier:o.min_tier,status:o.enable?'ENABLED':'DISABLED',sort_order:0,source:'IMPORT',subscription_id:null,created_at:now(),updated_at:now()});
       }
       const failed=rows.filter(r=>r.error).length;
       return {created,updated,skipped,failed,disabled:0,ids,rows:rows.filter(r=>r.error).map(r=>({line:r.line,source:r.source,error:r.error}))};

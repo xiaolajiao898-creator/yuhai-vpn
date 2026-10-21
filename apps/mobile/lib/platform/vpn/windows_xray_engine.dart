@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'egress_profile.dart';
+import 'network_epoch.dart';
 import 'vpn_engine.dart';
 import 'windows_job.dart';
+import 'windows_traffic_guard.dart';
 import 'windows_wireguard_engine.dart';
 import 'windows_xray_config.dart';
 import 'windows_xray_process.dart';
@@ -39,8 +41,8 @@ enum _TunnelMode { idle, xray, wireGuard }
 /// Windows 出口引擎：校验服务端 Xray JSON，补上 TUN 字段后从标准输入交给 xray.exe。
 ///
 /// 配置不写磁盘。xray 被放进 Job Object，应用退出或崩溃时一起结束。只有从隧道地址
-/// 发出的 HTTPS 探测成功才报告已连接，之后每分钟复核一次。流量读 Wintun 网卡计数，
-/// 不在本机开 API 端口。
+/// 发出的 HTTPS 探测成功才报告已连接，之后大约每 20 秒复核一次。流量读 Wintun 网卡计数，
+/// 不在本机开 API 端口。断网保护用动态 WFP 会话，进程退出后规则消失。
 ///
 /// WireGuard 引擎仍可在确实存在 WireGuard 节点时被调用；没有这类节点时连接控制器
 /// 不会走到它，界面也不会提示去安装 WireGuard。
@@ -59,7 +61,8 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
     DateTime Function()? now,
     Duration pollInterval = const Duration(seconds: 1),
     Duration handshakeTimeout = const Duration(seconds: 25),
-    int recheckEvery = 60,
+    int recheckEvery = 20,
+    WindowsTrafficGuard? trafficGuard,
   })  : _launch = launch ?? launchXrayProcess,
         _probe = probe ?? probeTunnelHttps,
         _readStats = readStats ?? readWindowsAdapterStats,
@@ -75,7 +78,8 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
         _now = now ?? DateTime.now,
         _pollInterval = pollInterval,
         _handshakeTimeout = handshakeTimeout,
-        _recheckEvery = recheckEvery {
+        _recheckEvery = recheckEvery,
+        _guard = trafficGuard ?? WindowsTrafficGuard() {
     final wireGuardEngine = _wireGuard;
     if (wireGuardEngine != null) {
       _wireGuardStatus = wireGuardEngine.status.listen((status) {
@@ -106,6 +110,9 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
   final Duration _pollInterval;
   final Duration _handshakeTimeout;
   final int _recheckEvery;
+  final WindowsTrafficGuard _guard;
+  final NetworkEpoch _epoch = NetworkEpoch();
+  bool _leakProtect = true;
 
   // 同步投递：探测结果返回时，等待方已经能读到新状态。
   final _status = StreamController<VpnStatus>.broadcast(sync: true);
@@ -131,6 +138,54 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   @override
   bool get canProbe => !_disposed;
+
+  @override
+  bool get canRecover => !_disposed && Platform.isWindows;
+
+  @override
+  Future<void> applyPolicy({required bool leakProtect}) async {
+    _leakProtect = leakProtect;
+  }
+
+  @override
+  Future<int?> probeTunnel() async {
+    if (_disposed || _mode != _TunnelMode.xray || _process == null) return null;
+    final watch = Stopwatch()..start();
+    final ok = await _probe().catchError((Object _) => false);
+    watch.stop();
+    if (!ok) return null;
+    final ms = watch.elapsedMilliseconds;
+    if (ms < 0 || ms > 15000) return null;
+    return ms;
+  }
+
+  @override
+  Future<bool> holdTraffic() async {
+    if (_disposed || !_leakProtect || !Platform.isWindows) return false;
+    final executable = Platform.resolvedExecutable;
+    final held = await _guard.hold([
+      executable,
+      '$_binaryDirectory\\xray.exe',
+    ]);
+    return held;
+  }
+
+  @override
+  Future<void> releaseTraffic() async {
+    _guard.release();
+  }
+
+  @override
+  Future<int> networkEpoch() async {
+    if (_disposed || !Platform.isWindows) return 0;
+    try {
+      final interfaces = await NetworkInterface.list(
+          includeLinkLocal: false, includeLoopback: false);
+      return _epoch.observe(physicalInterfaceSignature(interfaces));
+    } catch (_) {
+      return _epoch.observe('');
+    }
+  }
 
   @override
   Stream<VpnStatus> get status => _status.stream;
@@ -249,11 +304,12 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
     }
     _process = spawned;
     _expectExit = false;
-    unawaited(spawned.exitCode.then((_) {
+    unawaited(spawned.exitCode.then((_) async {
       if (_disposed || generation != _generation || _expectExit) return;
       _expectExit = true;
       _ticker.stop();
       _process = null;
+      if (_leakProtect) await holdTraffic();
       _emitFailure(const VpnFailure('NETWORK_UNAVAILABLE', '网络暂不可用，请检查网络后重试'));
     }));
     await _sample(generation);
@@ -331,6 +387,8 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   Future<void> _failHandshake(int generation) async {
     if (generation != _generation) return;
+    if (_leakProtect) await holdTraffic();
+    if (generation != _generation) return;
     _expectExit = true;
     _ticker.stop();
     _process?.kill();
@@ -353,6 +411,8 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   @override
   Future<void> disconnect() async {
+    // 用户断开才拆掉防火墙。重连只走 _stopXray，规则留着。
+    await releaseTraffic();
     if (_mode == _TunnelMode.wireGuard) {
       _mode = _TunnelMode.idle;
       await _wireGuard?.disconnect();
@@ -391,6 +451,7 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
     _ticker.stop();
     _process?.kill();
     _process = null;
+    _guard.release();
     unawaited(_supervisor.release());
     unawaited(_wireGuardStatus?.cancel() ?? Future<void>.value());
     unawaited(_wireGuardStats?.cancel() ?? Future<void>.value());
