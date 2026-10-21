@@ -75,10 +75,12 @@ cd apps/mobile
 export YH_CANDIDATE=multiproto
 export YH_ABI=arm64-v8a
 export YH_RELEASE_DEBUG_SIGN=1
+export YH_API_BASE="${YH_API_BASE:-https://api.yhvpn.io}"
 unset YH_VPN_PROBE || true
+mapfile -t defines < <(python3 "$root/apps/mobile/tool/release_defines.py")
 flutter pub get
 flutter build apk --release --split-per-abi --target-platform android-arm64 \
-  --dart-define=YH_API_BASE=https://api.yhvpn.io
+  "${defines[@]}"
 
 cd "$root"
 apk=apps/mobile/build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
@@ -117,6 +119,7 @@ if grep -q 'application-debuggable' /tmp/badging-arm64.txt; then
 fi
 "${bt}apksigner" verify --print-certs "$apk" > /tmp/certs-arm64.txt
 grep -q 'CN=Android Debug' /tmp/certs-arm64.txt
+python3 "$root/apps/mobile/tool/assert_baked_api.py" "$apk"
 bytes="$(stat -c%s "$apk")"
 hash="$(sha256sum "$apk" | awk '{print $1}')"
 echo "yuhai-candidate-arm64-v8a-release-debugsigned bytes=$bytes sha256=$hash"
