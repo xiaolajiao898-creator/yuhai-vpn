@@ -117,8 +117,7 @@ class _NodesPageState extends ConsumerState<NodesPage>
       final t = TimeOfDay.now();
       final hh = t.hour.toString().padLeft(2, '0');
       final mm = t.minute.toString().padLeft(2, '0');
-      _probeMessage =
-          '$hh:$mm 每条线路连了 4 次探测端口，取成功那几次的中位数。探测失败次数不是丢包率，也不代表下载速度';
+      _probeMessage = '$hh:$mm 每条线路连了 4 次探测端口，取成功那几次的中位数。探测失败次数不是丢包率，也不代表下载速度';
     }
     if (mounted && generation == _generation) setState(() => _probing = false);
   }
@@ -177,16 +176,23 @@ class _NodesPageState extends ConsumerState<NodesPage>
     );
   }
 
-  Widget _body(BuildContext context, List<NodeItem> list, String? selected,
-      Map<String, int?> latency, Map<String, ProbeQuality> quality,
+  Widget _body(
+      BuildContext context,
+      List<NodeItem> list,
+      String? selected,
+      Map<String, int?> latency,
+      Map<String, ProbeQuality> quality,
       NodeShortcuts shortcuts) {
     final text = Theme.of(context).textTheme;
     final byId = {for (final n in list) n.id: n};
     final chosen = byId[selected];
-    final autoAvailable = list.any((n) =>
-        canAutoSelect(n, egressSupported: egressPlatformSupported));
+    final autoAvailable = list
+        .any((n) => canAutoSelect(n, egressSupported: egressPlatformSupported));
     final autoProbes = list.any((n) =>
-        n.available && !n.isEgress && n.probeHost != null && n.probePort != null);
+        n.available &&
+        !n.isEgress &&
+        n.probeHost != null &&
+        n.probePort != null);
     final matches = list
         .where((n) => matchesQuery(
             query: _query,
@@ -203,7 +209,9 @@ class _NodesPageState extends ConsumerState<NodesPage>
           selected: selected == n.id,
           favorite: shortcuts.favorites.contains(n.id),
           onTap: () => _choose(n.id),
-          onUpgrade: n.lockedReason == 'TIER' ? () => context.push(Routes.plans) : null,
+          onUpgrade: n.lockedReason == 'TIER'
+              ? () => context.push(Routes.plans)
+              : null,
           onFavorite: () {
             // 先取好提示入口，异步失败回来时不再使用可能已失效的 context。
             final messenger = ScaffoldMessenger.of(context);
@@ -283,9 +291,7 @@ class _NodesPageState extends ConsumerState<NodesPage>
               child: Text(_probeMessage!, style: text.labelSmall)),
         _Section(
             title: '收藏',
-            empty: shortcuts.favorites.isEmpty
-                ? null
-                : '收藏的线路已下架，可在列表中重新收藏',
+            empty: shortcuts.favorites.isEmpty ? null : '收藏的线路已下架，可在列表中重新收藏',
             children: [
               for (final id in shortcuts.favorites)
                 if (byId[id] != null) tile(byId[id]!)
@@ -313,7 +319,8 @@ class _NodesPageState extends ConsumerState<NodesPage>
             title: group.$1.isEmpty
                 ? countryName('')
                 : '${countryFlag(group.$1)}  ${countryName(group.$1)}',
-            trailing: '${group.$2.where((n) => n.available).length}/${group.$2.length} 可用',
+            trailing:
+                '${group.$2.where((n) => n.available).length}/${group.$2.length} 可用',
             children: [for (final n in group.$2) tile(n)]),
       const SizedBox(height: 8),
       Text('每30秒自动核实 · 下拉也可刷新', style: text.labelSmall),
@@ -449,8 +456,8 @@ class _LineTile extends StatelessWidget {
             if (quality == null && latency.containsKey(n.id) && ms == null)
               '本次检测未响应',
             if (n.load != null) '负载 ${n.load}%',
-            if (n.isEgress && (n.capacityUsers == null || n.capacityUsers == 0))
-              '未设上限',
+            if (n.isEgress && n.capacityUsers == 0) '未设上限',
+            if (n.isEgress && n.capacityUsers == null) '人数上限未知',
             if (n.isEgress && n.onlineCount == null) '在线人数未统计',
           ].join(' · ')
         : n.unavailableLabel;

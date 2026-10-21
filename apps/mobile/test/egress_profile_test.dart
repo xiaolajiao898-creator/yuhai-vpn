@@ -68,8 +68,14 @@ void main() {
       expect(p.supportsUdp, isFalse);
       expect(p.notice, contains('UDP'));
       final args = p.nativeArguments(5);
-      expect(args.keys.toSet(),
-          {'identity', 'generation', 'egressId', 'protocol', 'config', 'expiresAt'});
+      expect(args.keys.toSet(), {
+        'identity',
+        'generation',
+        'egressId',
+        'protocol',
+        'config',
+        'expiresAt'
+      });
       expect(jsonDecode(args['config'] as String), egressConfig());
       expect(args['expiresAt'], '2026-10-28T01:00:00.000Z');
       // 调试输出不能带出凭据。
@@ -182,6 +188,48 @@ void main() {
       }, platformSupported: false);
       expect(other.single.available, isFalse);
       expect(other.single.lockedReason, 'PLATFORM');
+      expect(list.first.capacityUsers, 0);
+      expect(list.first.isSaturated, isFalse);
+    });
+
+    test('现网出口缺少 capacity_users 时仍可选线，人数上限按未知', () {
+      final current = item({})..remove('capacity_users');
+      final missing = parseEgress({
+        'egress': [current]
+      }, platformSupported: true);
+      expect(missing.single.available, isTrue);
+      expect(missing.single.capacityUsers, isNull);
+      expect(missing.single.isSaturated, isFalse);
+      expect(missing.single.protocols, ['SOCKS5']);
+      expect(missing.single.id, 'e1');
+
+      final explicitNull = parseEgress({
+        'egress': [
+          item({'capacity_users': null})
+        ]
+      }, platformSupported: true);
+      expect(explicitNull.single.capacityUsers, isNull);
+      expect(explicitNull.single.available, isTrue);
+
+      final capped = parseEgress({
+        'egress': [
+          item({'capacity_users': 40})
+        ]
+      }, platformSupported: true);
+      expect(capped.single.capacityUsers, 40);
+      expect(capped.single.isSaturated, isFalse);
+
+      for (final bad in <Object>[-1, 1000001, '0', 1.5, true]) {
+        expect(
+            () => parseEgress({
+                  'egress': [
+                    item({'capacity_users': bad})
+                  ]
+                }, platformSupported: true),
+            throwsA(isA<FormatException>()
+                .having((error) => error.message, 'message', '线路资料无效')),
+            reason: '$bad');
+      }
     });
 
     test('畸形出口条目整体拒绝，不静默丢弃', () {
