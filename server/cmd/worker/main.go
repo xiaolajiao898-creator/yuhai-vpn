@@ -15,12 +15,14 @@ import (
 	"github.com/yuhai-vpn/server/internal/config"
 	"github.com/yuhai-vpn/server/internal/db"
 	"github.com/yuhai-vpn/server/internal/deposit"
+	"github.com/yuhai-vpn/server/internal/fieldenc"
 	"github.com/yuhai-vpn/server/internal/invite"
 	"github.com/yuhai-vpn/server/internal/nodecontrol"
 	"github.com/yuhai-vpn/server/internal/order"
 	"github.com/yuhai-vpn/server/internal/outbox"
 	"github.com/yuhai-vpn/server/internal/safelog"
 	"github.com/yuhai-vpn/server/internal/tron"
+	"github.com/yuhai-vpn/server/internal/worldvpn"
 )
 
 // 任务表（间隔见方案 6.4、8.5、7.4、12.3）。每个任务必须可重入。
@@ -77,6 +79,23 @@ func main() {
 			return e
 		}},
 	)
+	enc, err := fieldenc.New(cfg.FieldEncKeyID, cfg.FieldEncKey)
+	if err != nil {
+		slog.Error("字段加密初始化失败", "err", safelog.Error(err))
+		os.Exit(1)
+	}
+	wvSettings, err := worldvpn.LoadSettings()
+	if err != nil {
+		slog.Error("批发线路配置错误，拒绝启动", "err", safelog.Error(err))
+		os.Exit(1)
+	}
+	wholesale := &worldvpn.Service{
+		Settings: wvSettings, API: worldvpn.NewClient(wvSettings),
+		Store: &worldvpn.PG{Pool: pool, Cipher: enc}, Clock: clk, Pepper: cfg.SecretPepper,
+	}
+	if wvSettings.Enabled() {
+		slog.Info("worldvpn sync enabled", "sandbox", wvSettings.Sandbox)
+	}
 	orderSvc := &order.Service{Pool: pool, Clock: clk}
 	depositSvc := &deposit.Service{Pool: pool, Clock: clk, Production: cfg.IsProduction()}
 	tronGrid := deposit.TronSource{Grid: &tron.TronGrid{APIKey: cfg.TronGridAPIKey}}
@@ -86,6 +105,9 @@ func main() {
 		os.Exit(1)
 	}
 	jobs = append(jobs, rewardJobs...)
+	jobs = append(jobs, job{"worldvpn_sync", 20 * time.Second, func(c context.Context, _ time.Time) error {
+		return wholesale.Run(c)
+	}})
 	// When the reward gate is closed, ORDER_COMPLETED is not registered; the
 	// dispatcher leaves these events pending, including pre-existing events.
 	dispatcher := &outbox.Dispatcher{Pool: pool, Handlers: rewardHandlers}

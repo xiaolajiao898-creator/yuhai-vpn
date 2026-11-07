@@ -36,6 +36,40 @@ class PendingProbeEngine extends MockVpnEngine {
 }
 
 void main() {
+  test('批发线路用 w 编号，不改现有节点解析', () {
+    final lines = parseWorldVPN({
+      'lines': [
+        {
+          'id': 'w43',
+          'name': 'Australia S1',
+          'country_code': 'AU',
+          'region': 'OCEANIA',
+          'available': true,
+          'locked_reason': null,
+          'probe': {'host': '203.0.113.10', 'port': 51820},
+        }
+      ]
+    }, platformSupported: true);
+    expect(lines.single.id, 'w43');
+    expect(lines.single.protocols, ['WIREGUARD']);
+    expect(lines.single.isEgress, isFalse);
+    expect(
+        () => parseWorldVPN({
+          'lines': [
+            {
+              'id': '43',
+              'name': 'Australia S1',
+              'country_code': 'AU',
+              'region': 'OCEANIA',
+              'available': true,
+              'locked_reason': null,
+              'probe': {'host': '203.0.113.10', 'port': 51820},
+            }
+          ]
+        }, platformSupported: true),
+        throwsFormatException);
+  });
+
   test('节点不完整、重复、假协议和混合可用状态拒绝；空列表保留', () {
     expect(parseNodes({'nodes': <dynamic>[]}), isEmpty);
     expect(() => parseNodes({}), throwsFormatException);

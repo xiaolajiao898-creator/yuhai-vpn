@@ -89,9 +89,13 @@ class WireGuardProfile extends ConnectProfile {
     required this.dns,
     required this.mtu,
     required this.expiresAt,
+    this.issuedPrivateKey,
   }) : super(protocol: 'WIREGUARD', server: endpoint);
 
   final String identity, endpoint, serverPublicKey, address;
+
+  /// 批发线路由 WorldVPN 生成。只在连接这一刻交给引擎，不写入本机长期钥匙库。
+  final String? issuedPrivateKey;
   final List<String> dns;
   final int mtu;
   final DateTime expiresAt;
@@ -192,16 +196,111 @@ class WireGuardProfile extends ConnectProfile {
         expiresAt: expires.subtract(Duration(seconds: clockOffsetSeconds)));
   }
 
-  Map<String, Object> nativeArguments(int generation) => {
-        'identity': identity,
-        'generation': generation,
-        'nodeId': nodeId,
-        'protocol': 'WIREGUARD',
-        'endpoint': endpoint,
-        'serverPublicKey': serverPublicKey,
-        'address': address,
-        'dns': dns,
-        'mtu': mtu,
-        'expiresAt': expiresAt.toUtc().toIso8601String(),
-      };
+  /// 批发连接材料。nodeId 用纯数字，好沿用现有引擎的校验；线路编号仍是 `w` 开头。
+  static WireGuardProfile parseIssued(Map<String, dynamic> response,
+      {required String lineId,
+      required String identity,
+      required DateTime now,
+      int clockOffsetSeconds = 0}) {
+    const invalid = FormatException('WireGuard 连接资料无效');
+    bool exact(Map value, Set<String> keys) =>
+        value.length == keys.length && value.keys.every(keys.contains);
+    if (!validVpnIdentity(identity) ||
+        !RegExp(r'^w[1-9][0-9]*$').hasMatch(lineId) ||
+        !exact(response, {
+          'line_id',
+          'server_id',
+          'expires_at',
+          'endpoint',
+          'server_public_key',
+          'address',
+          'dns',
+          'mtu',
+          'interface_private_key',
+        }) ||
+        response['line_id'] != lineId) {
+      throw invalid;
+    }
+    final serverId = response['server_id'];
+    final id = serverId is String ? BigInt.tryParse(serverId) : null;
+    if (id == null ||
+        id <= BigInt.zero ||
+        id > BigInt.parse('9223372036854775807') ||
+        id.toString() != serverId ||
+        'w$serverId' != lineId) {
+      throw invalid;
+    }
+    final rawExpiry = response['expires_at'];
+    final expires = rawExpiry is String &&
+            RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$')
+                .hasMatch(rawExpiry)
+        ? DateTime.tryParse(rawExpiry)
+        : null;
+    if (expires == null ||
+        rawExpiry is! String ||
+        expires.year != int.parse(rawExpiry.substring(0, 4)) ||
+        expires.month != int.parse(rawExpiry.substring(5, 7)) ||
+        expires.day != int.parse(rawExpiry.substring(8, 10)) ||
+        expires.hour != int.parse(rawExpiry.substring(11, 13)) ||
+        expires.minute != int.parse(rawExpiry.substring(14, 16)) ||
+        expires.second != int.parse(rawExpiry.substring(17, 19))) {
+      throw invalid;
+    }
+    final serverNow = now.add(Duration(seconds: clockOffsetSeconds));
+    final endpoint = response['endpoint'];
+    final serverKey = response['server_public_key'];
+    final privateKey = response['interface_private_key'];
+    final address = response['address'];
+    final dns = response['dns'];
+    final mtu = response['mtu'];
+    if (!expires.isAfter(serverNow) ||
+        expires
+            .isAfter(serverNow.add(const Duration(minutes: 5, seconds: 5))) ||
+        endpoint is! String ||
+        !_endpoint(endpoint) ||
+        !validWireGuardPublicKey(serverKey) ||
+        privateKey is! String ||
+        !validWireGuardPublicKey(privateKey) ||
+        privateKey == serverKey ||
+        address is! String ||
+        !_address(address) ||
+        dns is! List ||
+        dns.isEmpty ||
+        dns.length > 8 ||
+        dns.any((v) => v is! String || !_ip(v)) ||
+        dns.toSet().length != dns.length ||
+        mtu is! int ||
+        mtu < 1280 ||
+        mtu > 1500) {
+      throw invalid;
+    }
+    return WireGuardProfile._(
+        nodeId: id.toString(),
+        identity: identity,
+        endpoint: endpoint,
+        serverPublicKey: serverKey as String,
+        address: address,
+        dns: List<String>.unmodifiable(dns.cast<String>()),
+        mtu: mtu,
+        expiresAt: expires.subtract(Duration(seconds: clockOffsetSeconds)),
+        issuedPrivateKey: privateKey);
+  }
+
+  Map<String, Object> nativeArguments(int generation) {
+    final args = <String, Object>{
+      'identity': identity,
+      'generation': generation,
+      'nodeId': nodeId,
+      'protocol': 'WIREGUARD',
+      'endpoint': endpoint,
+      'serverPublicKey': serverPublicKey,
+      'address': address,
+      'dns': dns,
+      'mtu': mtu,
+      'expiresAt': expiresAt.toUtc().toIso8601String(),
+    };
+    final issued = issuedPrivateKey;
+    if (issued != null) args['issuedPrivateKey'] = issued;
+    return args;
+  }
 }

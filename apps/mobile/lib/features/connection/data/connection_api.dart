@@ -59,5 +59,27 @@ extension EgressConnectionApi on ConnectionApi {
   }
 }
 
+extension WorldVPNConnectionApi on ConnectionApi {
+  /// 批发线路的 WireGuard 配置。私钥只在这一次响应里，不缓存。
+  Future<WireGuardProfile> worldvpnProfile(
+      Session session, String lineId) async {
+    if (!RegExp(r'^w[1-9][0-9]*$').hasMatch(lineId)) {
+      throw const FormatException('线路编号无效');
+    }
+    final response = await client.call('POST', '/v1/connect/worldvpn',
+        expectedSession: session, json: {'line_id': lineId}, sign: true);
+    return WireGuardProfile.parseIssued(response,
+        lineId: lineId,
+        identity: vpnIdentity(session),
+        now: DateTime.now().toUtc(),
+        clockOffsetSeconds: client.clockOffsetSeconds);
+  }
+
+  Future<void> releaseWorldVPN(Session session) async {
+    await client.call('POST', '/v1/connect/worldvpn/release',
+        expectedSession: session, json: const {}, sign: true);
+  }
+}
+
 final connectionApiProvider = Provider<ConnectionApi>(
     (ref) => ConnectionApi(ref.watch(apiClientProvider)));
