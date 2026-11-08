@@ -53,6 +53,14 @@ func TestForwardMigrationLeavesRedeemSchemaIntact(t *testing.T) {
 	if strings.Contains(sql46, "CREATE TABLE redeem") {
 		t.Fatal("00046 recreates a redeem table")
 	}
+	later, err := os.ReadFile("../db/migrations/00047_worldvpn_billing_memory.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql47 := stripSQLComments(strings.Split(string(later), "-- +goose Down")[0])
+	if strings.Contains(strings.ToLower(sql47), "redeem_codes") || strings.Contains(sql47, "trial_grants") || strings.Contains(sql47, "subscription_ledger") {
+		t.Fatal("00047 must not touch redeem, trial, or payment ledger tables")
+	}
 }
 
 func stripSQLComments(sql string) string {

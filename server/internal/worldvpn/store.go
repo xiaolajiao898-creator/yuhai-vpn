@@ -110,7 +110,7 @@ WHERE t.granted_at >= $1
 }
 
 func (p *PG) PendingGrants(ctx context.Context, limit int) ([]grant, error) {
-	rows, err := p.Pool.Query(ctx, `SELECT id, user_id, period_months, source FROM worldvpn_grants WHERE status='PENDING' ORDER BY id LIMIT $1`, limit)
+	rows, err := p.Pool.Query(ctx, `SELECT id, user_id, period_months, source, upstream_username, upstream_password_enc FROM worldvpn_grants WHERE status='PENDING' ORDER BY id LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -118,12 +118,56 @@ func (p *PG) PendingGrants(ctx context.Context, limit int) ([]grant, error) {
 	var out []grant
 	for rows.Next() {
 		var g grant
-		if err := rows.Scan(&g.ID, &g.UserID, &g.Months, &g.Source); err != nil {
+		var user *string
+		var blob []byte
+		if err := rows.Scan(&g.ID, &g.UserID, &g.Months, &g.Source, &user, &blob); err != nil {
 			return nil, err
+		}
+		if user != nil && *user != "" {
+			if p.Cipher == nil {
+				return nil, errors.New("worldvpn: 缺少字段加密")
+			}
+			plain, err := p.Cipher.Decrypt(blob, grantAAD(g.ID))
+			if err != nil {
+				return nil, err
+			}
+			g.Billed = true
+			g.UpstreamUser = *user
+			g.UpstreamPass = string(plain)
 		}
 		out = append(out, g)
 	}
 	return out, rows.Err()
+}
+
+func grantAAD(id int64) []byte {
+	return fieldenc.AAD("worldvpn_grants", "upstream_password_enc", id)
+}
+
+func (p *PG) RememberBilling(ctx context.Context, id int64, username, password string) error {
+	if username == "" || password == "" {
+		return errors.New("worldvpn: 批发账号不完整")
+	}
+	if p.Cipher == nil {
+		return errors.New("worldvpn: 缺少字段加密")
+	}
+	blob, err := p.Cipher.Encrypt([]byte(password), grantAAD(id))
+	if err != nil {
+		return err
+	}
+	_, err = p.Pool.Exec(ctx, `UPDATE worldvpn_grants SET upstream_username=$2, upstream_password_enc=$3, updated_at=now() WHERE id=$1 AND status='PENDING'`, id, username, blob)
+	return err
+}
+
+func (p *PG) AlignExpiry(ctx context.Context, now time.Time) error {
+	// 只把本地记录缩短到当前订阅，不把批发侧没续过的到期时间往后拨。
+	_, err := p.Pool.Exec(ctx, `
+UPDATE worldvpn_accounts a
+   SET expire_at = s.expire_at, updated_at = now()
+  FROM subscriptions s
+ WHERE s.user_id = a.user_id AND a.status = 'ACTIVE'
+   AND s.tier > 0 AND s.expire_at IS NOT NULL AND s.expire_at < a.expire_at`)
+	return err
 }
 
 func (p *PG) FinishGrant(ctx context.Context, id int64, status, lastErr string) error {
@@ -204,7 +248,13 @@ func (p *PG) AccountsToDisable(ctx context.Context, now time.Time) ([]account, e
 SELECT a.user_id, a.vpn_username, a.expire_at, a.source, a.sandbox
 FROM worldvpn_accounts a
 JOIN users u ON u.id = a.user_id
-WHERE a.status = 'ACTIVE' AND (a.expire_at <= $1 OR u.status <> 'ACTIVE')`, now)
+WHERE a.status = 'ACTIVE' AND (
+  u.status <> 'ACTIVE'
+  OR a.expire_at <= $1
+  OR NOT EXISTS (
+    SELECT 1 FROM subscriptions s
+     WHERE s.user_id = a.user_id AND s.tier > 0 AND s.expire_at > $1)
+)`, now)
 	if err != nil {
 		return nil, err
 	}

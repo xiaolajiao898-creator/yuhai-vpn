@@ -12,26 +12,39 @@ import (
 
 type fakeAPI struct {
 	adds, renews, deletes, peerAdds, peerDels, trials int
+	renewUsers                                        []string
+	addUsers                                          []string
+	trialUser, trialPass                              string
+	deletedPeers                                      []string
 	servers                                           []serverLine
 	material                                          wireGuardMaterial
 	addErr                                            error
 }
 
-func (f *fakeAPI) AddVPN(context.Context, string, string, int) (vpnAccount, error) {
+func (f *fakeAPI) AddVPN(_ context.Context, user, _ string, _ int) (vpnAccount, error) {
 	f.adds++
+	f.addUsers = append(f.addUsers, user)
 	if f.addErr != nil {
 		return vpnAccount{}, f.addErr
 	}
 	return vpnAccount{Username: "sampleUsername", Password: "samplePassword"}, nil
 }
-func (f *fakeAPI) RenewVPN(context.Context, string, int) error { f.renews++; return nil }
+func (f *fakeAPI) RenewVPN(_ context.Context, user string, _ int) error {
+	f.renews++
+	f.renewUsers = append(f.renewUsers, user)
+	return nil
+}
 func (f *fakeAPI) DeleteVPN(context.Context, string, bool) error {
 	f.deletes++
 	return nil
 }
 func (f *fakeAPI) GetTrial(context.Context, string) (vpnAccount, error) {
 	f.trials++
-	return vpnAccount{Username: "sampleUsername", Password: "samplePassword"}, nil
+	user, pass := f.trialUser, f.trialPass
+	if user == "" {
+		user, pass = "sampleUsername", "samplePassword"
+	}
+	return vpnAccount{Username: user, Password: pass}, nil
 }
 func (f *fakeAPI) ListServers(context.Context) ([]serverLine, error) { return f.servers, nil }
 func (f *fakeAPI) AddWireGuardPeer(context.Context, string, int64) (peerCreated, error) {
@@ -41,27 +54,31 @@ func (f *fakeAPI) AddWireGuardPeer(context.Context, string, int64) (peerCreated,
 func (f *fakeAPI) GetWireGuardConfig(context.Context, string, string) (wireGuardMaterial, error) {
 	return f.material, nil
 }
-func (f *fakeAPI) DeleteWireGuardPeer(context.Context, string, string, bool) error {
+func (f *fakeAPI) DeleteWireGuardPeer(_ context.Context, _, id string, _ bool) error {
 	f.peerDels++
+	f.deletedPeers = append(f.deletedPeers, id)
 	return nil
 }
 
 type memStore struct {
-	grants   []grant
-	done     map[int64]string
-	accounts map[int64]account
-	peers    []openPeer
-	nextID   int64
-	users    map[int64]string
-	banned   map[int64]bool
-	trials   map[int64]string
-	sub      map[int64]time.Time
+	grants    []grant
+	done      map[int64]string
+	accounts  map[int64]account
+	peers     []openPeer
+	nextID    int64
+	users     map[int64]string
+	banned    map[int64]bool
+	trials    map[int64]string
+	sub       map[int64]time.Time
+	subKnown  map[int64]bool
+	saveFails int
 }
 
 func newMem() *memStore {
 	return &memStore{
 		done: map[int64]string{}, accounts: map[int64]account{}, users: map[int64]string{},
 		banned: map[int64]bool{}, trials: map[int64]string{}, sub: map[int64]time.Time{},
+		subKnown: map[int64]bool{},
 	}
 }
 
@@ -85,6 +102,29 @@ func (m *memStore) FinishGrant(_ context.Context, id int64, status, _ string) er
 	m.done[id] = status
 	return nil
 }
+func (m *memStore) RememberBilling(_ context.Context, id int64, username, password string) error {
+	for i := range m.grants {
+		if m.grants[i].ID == id {
+			m.grants[i].Billed = true
+			m.grants[i].UpstreamUser = username
+			m.grants[i].UpstreamPass = password
+			return nil
+		}
+	}
+	return errors.New("missing grant")
+}
+func (m *memStore) AlignExpiry(_ context.Context, _ time.Time) error {
+	for id, a := range m.accounts {
+		if !m.subKnown[id] || a.Status != "ACTIVE" {
+			continue
+		}
+		if sub, ok := m.sub[id]; ok && sub.Before(a.ExpireAt) {
+			a.ExpireAt = sub
+			m.accounts[id] = a
+		}
+	}
+	return nil
+}
 func (m *memStore) UserAccountNo(_ context.Context, userID int64) (string, error) {
 	if m.banned[userID] {
 		return "", httpx.NewError(httpx.ErrAccountDisabled, "账户不可用")
@@ -100,13 +140,19 @@ func (m *memStore) Account(_ context.Context, userID int64) (account, bool, erro
 	return a, ok, nil
 }
 func (m *memStore) SaveAccount(_ context.Context, a account) error {
+	if m.saveFails > 0 {
+		m.saveFails--
+		return errors.New("db unavailable")
+	}
 	m.accounts[a.UserID] = a
 	return nil
 }
 func (m *memStore) AccountsToDisable(_ context.Context, now time.Time) ([]account, error) {
 	var out []account
 	for _, a := range m.accounts {
-		if a.Status == "ACTIVE" && (!a.ExpireAt.After(now) || m.banned[a.UserID]) {
+		sub, known := m.sub[a.UserID]
+		noSub := m.subKnown[a.UserID] && (!known || !sub.After(now))
+		if a.Status == "ACTIVE" && (!a.ExpireAt.After(now) || m.banned[a.UserID] || noSub) {
 			out = append(out, a)
 		}
 	}
@@ -123,7 +169,15 @@ func (m *memStore) MarkDisabled(_ context.Context, userID int64) error {
 	}
 	return nil
 }
-func (m *memStore) PeersToRelease(context.Context) ([]openPeer, error) { return nil, nil }
+func (m *memStore) PeersToRelease(context.Context) ([]openPeer, error) {
+	var out []openPeer
+	for _, p := range m.peers {
+		if p.ID > 0 && p.Releasing {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
 func (m *memStore) MarkPeerReleased(_ context.Context, id int64) error {
 	for i := range m.peers {
 		if m.peers[i].ID == id {
@@ -167,7 +221,17 @@ func (m *memStore) InsertPeer(_ context.Context, p openPeer) error {
 	return nil
 }
 func (m *memStore) RequestRelease(ctx context.Context, userID, deviceID int64) (openPeer, bool, error) {
-	return m.DevicePeer(ctx, userID, deviceID)
+	p, ok, err := m.DevicePeer(ctx, userID, deviceID)
+	if !ok || err != nil {
+		return p, ok, err
+	}
+	for i := range m.peers {
+		if m.peers[i].ID == p.ID {
+			m.peers[i].Releasing = true
+		}
+	}
+	p.Releasing = true
+	return p, true, nil
 }
 
 func TestGrantThenRenewAndDisable(t *testing.T) {
@@ -265,6 +329,132 @@ func TestLinesAndTrial(t *testing.T) {
 	}
 	if api.trials != 1 {
 		t.Fatalf("second sync must not open another trial, calls=%d", api.trials)
+	}
+}
+
+func TestTrialThenPaidRenewsRealWholesaleUser(t *testing.T) {
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.users[7] = "8302571644"
+	mem.sub[7] = now.Add(24 * time.Hour)
+	mem.grants = []grant{{ID: 1, UserID: 7, Months: 0, Source: "TRIAL"}}
+	api := &fakeAPI{trialUser: "wvpn-issued-7", trialPass: "issued-secret"}
+	svc := &Service{Settings: Settings{Username: "reseller", Password: "secret", Sandbox: false, LiveConfirm: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if mem.accounts[7].Username != "wvpn-issued-7" || mem.accounts[7].Password != "issued-secret" {
+		t.Fatalf("trial stored local name: %+v", mem.accounts[7])
+	}
+	if mem.accounts[7].Username == "yh8302571644" {
+		t.Fatal("stored the local placeholder")
+	}
+	mem.sub[7] = now.Add(30 * 24 * time.Hour)
+	mem.grants = append(mem.grants, grant{ID: 2, UserID: 7, Months: 1, Source: "ORDER"})
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if api.adds != 0 || api.renews != 1 || len(api.renewUsers) != 1 || api.renewUsers[0] != "wvpn-issued-7" {
+		t.Fatalf("paid after trial: adds=%d renews=%v", api.adds, api.renewUsers)
+	}
+	if mem.done[2] != "DONE" || mem.accounts[7].Username != "wvpn-issued-7" {
+		t.Fatalf("grant not finished on the issued account: %+v done=%s", mem.accounts[7], mem.done[2])
+	}
+}
+
+func TestBillingIsNotRepeatedWhenSaveFails(t *testing.T) {
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.users[7] = "8302571644"
+	mem.sub[7] = now.Add(30 * 24 * time.Hour)
+	mem.grants = []grant{{ID: 1, UserID: 7, Months: 1, Source: "ORDER"}}
+	mem.saveFails = 1
+	api := &fakeAPI{}
+	svc := &Service{Settings: Settings{Username: "reseller", Password: "secret", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if api.adds != 1 || api.renews != 0 || mem.done[1] == "DONE" {
+		t.Fatalf("first attempt adds=%d renews=%d done=%s", api.adds, api.renews, mem.done[1])
+	}
+	if !mem.grants[0].Billed || mem.grants[0].UpstreamUser != "yh8302571644" {
+		t.Fatalf("billing was not remembered: %+v", mem.grants[0])
+	}
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if api.adds != 1 || api.renews != 0 || mem.done[1] != "DONE" || mem.accounts[7].Username != "yh8302571644" {
+		t.Fatalf("retry billed again: adds=%d renews=%d done=%s acc=%+v", api.adds, api.renews, mem.done[1], mem.accounts[7])
+	}
+}
+
+func TestAlreadyExistsDoesNotRenew(t *testing.T) {
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.users[7] = "8302571644"
+	mem.sub[7] = now.Add(30 * 24 * time.Hour)
+	mem.grants = []grant{{ID: 1, UserID: 7, Months: 1, Source: "ORDER"}}
+	api := &fakeAPI{addErr: &APIError{Action: "addVPN", Message: "user already exists"}}
+	svc := &Service{Settings: Settings{Username: "reseller", Password: "secret", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if api.adds != 1 || api.renews != 0 || mem.done[1] != "DONE" {
+		t.Fatalf("exists path billed a renewal: adds=%d renews=%d done=%s", api.adds, api.renews, mem.done[1])
+	}
+}
+
+func TestRevokedDeviceReleasesWholesalePeer(t *testing.T) {
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.users[7] = "8302571644"
+	mem.sub[7] = now.Add(30 * 24 * time.Hour)
+	mem.accounts[7] = account{UserID: 7, Username: "wvpn-issued-7", Password: "pw", Status: "ACTIVE", ExpireAt: mem.sub[7], Sandbox: true}
+	mem.peers = []openPeer{{ID: 4, UserID: 7, DeviceID: 9, ServerID: 43, WireGuardID: "wg-9", Sandbox: true}}
+	api := &fakeAPI{}
+	svc := &Service{Settings: Settings{Username: "reseller", Password: "secret", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if _, ok, err := mem.RequestRelease(context.Background(), 7, 9); err != nil || !ok || !mem.peers[0].Releasing {
+		t.Fatalf("revoke did not mark peer: %+v %v", mem.peers, err)
+	}
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if api.peerDels != 1 || len(api.deletedPeers) != 1 || api.deletedPeers[0] != "wg-9" {
+		t.Fatalf("peer not deleted: %+v", api.deletedPeers)
+	}
+}
+
+func TestShortenedSubscriptionDisablesWholesaleAccount(t *testing.T) {
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.users[7] = "8302571644"
+	mem.subKnown[7] = true
+	mem.sub[7] = now.Add(-time.Hour)
+	mem.accounts[7] = account{UserID: 7, Username: "wvpn-issued-7", Password: "pw", Status: "ACTIVE", ExpireAt: now.Add(20 * 24 * time.Hour), Source: "ORDER", Sandbox: true}
+	api := &fakeAPI{}
+	svc := &Service{Settings: Settings{Username: "reseller", Password: "secret", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if api.deletes != 1 || mem.accounts[7].Status != "DISABLED" {
+		t.Fatalf("shortened subscription left wholesale active: deletes=%d %+v", api.deletes, mem.accounts[7])
+	}
+}
+
+func TestShortenedButStillValidSubscriptionPullsExpiryForward(t *testing.T) {
+	now := time.Date(2026, 11, 7, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.users[7] = "8302571644"
+	mem.subKnown[7] = true
+	mem.sub[7] = now.Add(48 * time.Hour)
+	mem.accounts[7] = account{UserID: 7, Username: "wvpn-issued-7", Password: "pw", Status: "ACTIVE", ExpireAt: now.Add(30 * 24 * time.Hour), Source: "ORDER", Sandbox: true}
+	api := &fakeAPI{}
+	svc := &Service{Settings: Settings{Username: "reseller", Password: "secret", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if err := svc.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if api.deletes != 0 || !mem.accounts[7].ExpireAt.Equal(mem.sub[7]) || mem.accounts[7].Status != "ACTIVE" {
+		t.Fatalf("expiry not aligned: deletes=%d %+v", api.deletes, mem.accounts[7])
 	}
 }
 

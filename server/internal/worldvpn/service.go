@@ -38,10 +38,13 @@ type account struct {
 }
 
 type grant struct {
-	ID     int64
-	UserID int64
-	Months int
-	Source string
+	ID           int64
+	UserID       int64
+	Months       int
+	Source       string
+	Billed       bool
+	UpstreamUser string
+	UpstreamPass string
 }
 
 type openPeer struct {
@@ -51,6 +54,7 @@ type openPeer struct {
 	ServerID    int64
 	WireGuardID string
 	Sandbox     bool
+	Releasing   bool
 }
 
 type lineAccess struct {
@@ -64,6 +68,9 @@ type Store interface {
 	CollectOrders(ctx context.Context, after time.Time) error
 	PendingGrants(ctx context.Context, limit int) ([]grant, error)
 	FinishGrant(ctx context.Context, id int64, status, lastErr string) error
+	// RememberBilling 记下这次批发调用已经成功，重试只补写本地账，不再次扣点。
+	RememberBilling(ctx context.Context, id int64, username, password string) error
+	AlignExpiry(ctx context.Context, now time.Time) error
 	UserAccountNo(ctx context.Context, userID int64) (string, error)
 	SubscriptionExpire(ctx context.Context, userID int64) (time.Time, bool, error)
 	Account(ctx context.Context, userID int64) (account, bool, error)
@@ -129,6 +136,9 @@ func (s *Service) Run(ctx context.Context) error {
 			_ = s.Store.FinishGrant(ctx, g.ID, "PENDING", clipErr(err))
 		}
 	}
+	if err := s.Store.AlignExpiry(ctx, now); err != nil {
+		return err
+	}
 	if err := s.disableExpired(ctx, now); err != nil {
 		return err
 	}
@@ -142,6 +152,9 @@ func (s *Service) applyGrant(ctx context.Context, g grant, now time.Time) error 
 	if _, ok := PlanCodeForMonths(g.Months); !ok {
 		return s.Store.FinishGrant(ctx, g.ID, "SKIPPED", "duration not a wholesale month")
 	}
+	if g.Billed {
+		return s.finishBilled(ctx, g, now)
+	}
 	no, err := s.Store.UserAccountNo(ctx, g.UserID)
 	if err != nil {
 		return err
@@ -158,8 +171,9 @@ func (s *Service) applyGrant(ctx context.Context, g grant, now time.Time) error 
 	if err != nil {
 		return err
 	}
-	reuse := ok && current.Status == "ACTIVE" && current.Sandbox == s.Settings.Sandbox && current.ExpireAt.After(now.Add(-time.Hour))
-	if reuse {
+	// 试用期内付费必须续批发侧已经存在的那个账号，而不是本地编的用户名。
+	renew := ok && current.Status == "ACTIVE" && current.Sandbox == s.Settings.Sandbox && current.Username != ""
+	if renew {
 		username = current.Username
 		password = current.Password
 		if err := s.API.RenewVPN(ctx, username, g.Months); err != nil {
@@ -168,69 +182,77 @@ func (s *Service) applyGrant(ctx context.Context, g grant, now time.Time) error 
 	} else {
 		created, err := s.API.AddVPN(ctx, username, password, g.Months)
 		if err != nil {
+			// 上次已经开通过，只是本地没记下。再续费会多扣一个月。
 			if !alreadyExists(err) {
 				return err
 			}
-			if err := s.API.RenewVPN(ctx, username, g.Months); err != nil {
-				return err
-			}
-		} else if !s.Settings.Sandbox {
+		} else if !s.Settings.Sandbox && created.Username != "" && created.Password != "" {
 			username, password = created.Username, created.Password
 		}
+	}
+	if err := s.Store.RememberBilling(ctx, g.ID, username, password); err != nil {
+		return err
+	}
+	g.Billed = true
+	g.UpstreamUser = username
+	g.UpstreamPass = password
+	return s.finishBilled(ctx, g, now)
+}
+
+// applyTrial 使用 getTrial 返回的批发账号。丢掉它再对本地用户名续费，批发侧没有这个账号，开通会一直停在 PENDING。
+func (s *Service) applyTrial(ctx context.Context, g grant, now time.Time) error {
+	if g.Billed {
+		return s.finishBilled(ctx, g, now)
+	}
+	no, err := s.Store.UserAccountNo(ctx, g.UserID)
+	if err != nil {
+		return err
+	}
+	local, err := localUsername(no)
+	if err != nil {
+		return err
+	}
+	created, err := s.API.GetTrial(ctx, "trial-"+local+"@users.invalid")
+	if err != nil {
+		return err
+	}
+	if created.Username == "" || created.Password == "" {
+		return &APIError{Action: "getTrial", Message: "缺少账号"}
+	}
+	if err := s.Store.RememberBilling(ctx, g.ID, created.Username, created.Password); err != nil {
+		return err
+	}
+	g.Billed = true
+	g.UpstreamUser = created.Username
+	g.UpstreamPass = created.Password
+	if g.Source == "" {
+		g.Source = "TRIAL"
+	}
+	return s.finishBilled(ctx, g, now)
+}
+
+func (s *Service) finishBilled(ctx context.Context, g grant, now time.Time) error {
+	if g.UpstreamUser == "" || g.UpstreamPass == "" {
+		return errors.New("worldvpn: 已扣点的开通缺少批发账号")
 	}
 	exp, has, err := s.Store.SubscriptionExpire(ctx, g.UserID)
 	if err != nil {
 		return err
 	}
 	if !has || !exp.After(now) {
-		exp = now.AddDate(0, 0, 30*g.Months)
+		if g.Months == 0 {
+			exp = now.Add(24 * time.Hour)
+		} else {
+			exp = now.AddDate(0, 0, 30*g.Months)
+		}
 	}
 	source := g.Source
 	if source == "" {
 		source = "ORDER"
 	}
 	if err := s.Store.SaveAccount(ctx, account{
-		UserID: g.UserID, Username: username, Password: password, Status: "ACTIVE",
+		UserID: g.UserID, Username: g.UpstreamUser, Password: g.UpstreamPass, Status: "ACTIVE",
 		ExpireAt: exp, Source: source, Sandbox: s.Settings.Sandbox,
-	}); err != nil {
-		return err
-	}
-	return s.Store.FinishGrant(ctx, g.ID, "DONE", "")
-}
-
-// applyTrial 跟着现有的 24 小时试用走。用户表没有邮箱，只向批发接口传一个不会投递的占位地址。
-func (s *Service) applyTrial(ctx context.Context, g grant, now time.Time) error {
-	current, ok, err := s.Store.Account(ctx, g.UserID)
-	if err != nil {
-		return err
-	}
-	if ok && current.Status == "ACTIVE" && current.Sandbox == s.Settings.Sandbox && current.ExpireAt.After(now) {
-		return s.Store.FinishGrant(ctx, g.ID, "DONE", "")
-	}
-	no, err := s.Store.UserAccountNo(ctx, g.UserID)
-	if err != nil {
-		return err
-	}
-	username, err := localUsername(no)
-	if err != nil {
-		return err
-	}
-	password, err := randomPassword()
-	if err != nil {
-		return err
-	}
-	if _, err := s.API.GetTrial(ctx, "trial-"+username+"@users.invalid"); err != nil {
-		return err
-	}
-	exp := now.Add(24 * time.Hour)
-	if sub, has, err := s.Store.SubscriptionExpire(ctx, g.UserID); err != nil {
-		return err
-	} else if has && sub.After(now) && sub.Before(exp) {
-		exp = sub
-	}
-	if err := s.Store.SaveAccount(ctx, account{
-		UserID: g.UserID, Username: username, Password: password, Status: "ACTIVE",
-		ExpireAt: exp, Source: "TRIAL", Sandbox: s.Settings.Sandbox,
 	}); err != nil {
 		return err
 	}
