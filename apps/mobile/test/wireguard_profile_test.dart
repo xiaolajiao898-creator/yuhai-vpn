@@ -36,6 +36,31 @@ WireGuardProfile parseProfile(Map<String, dynamic> value, {DateTime? now}) =>
         now: now ?? profileNow);
 
 void main() {
+  test('批发配置把接口私钥交给现有引擎，自建配置仍然不带私钥', () {
+    final now = DateTime.utc(2026, 11, 7, 1);
+    final issuedKey = base64Encode(List<int>.filled(32, 3));
+    final profile = WireGuardProfile.parseIssued({
+      'line_id': 'w43',
+      'server_id': '43',
+      'expires_at': now.add(const Duration(minutes: 5)).toIso8601String(),
+      'endpoint': 'vpn.example.com:51820',
+      'server_public_key': serverPublic,
+      'address': '10.0.0.2/32',
+      'dns': ['1.1.1.1'],
+      'mtu': 1280,
+      'interface_private_key': issuedKey,
+    }, lineId: 'w43', identity: '8302571644:123', now: now);
+    expect(profile.nodeId, '43');
+    expect(profile.issuedPrivateKey, issuedKey);
+    expect(profile.nativeArguments(1)['issuedPrivateKey'], issuedKey);
+    expect(parseProfile(profileResponse()).issuedPrivateKey, isNull);
+    expect(
+        parseProfile(profileResponse())
+            .nativeArguments(1)
+            .containsKey('issuedPrivateKey'),
+        isFalse);
+  });
+
   test('只把当前设备当前节点的公开资料送往原生，校准时钟保留有效时间', () {
     final profile = parseProfile(profileResponse());
     expect(profile.identity, '8302571644:123');

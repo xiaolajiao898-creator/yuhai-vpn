@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/yuhai-vpn/server/internal/auth"
+	"github.com/yuhai-vpn/server/internal/worldvpn"
 )
 
 // Repo 是本模块用到的全部 SQL；显式列出便于评审。资金类 SQL 走 sqlc（internal/db/queries）。
@@ -186,8 +187,14 @@ func RevokeDeviceInTx(ctx context.Context, tx pgx.Tx, userID, deviceID int64, no
 	if _, err := tx.Exec(ctx, `UPDATE device_credentials SET status = 'REVOKED' WHERE device_id = $1 AND status='ACTIVE'`, deviceID); err != nil {
 		return false, err
 	}
-	_, err = tx.Exec(ctx, `UPDATE auth_sessions SET revoked_at = $2 WHERE device_id = $1 AND revoked_at IS NULL`, deviceID, now)
-	return changed, err
+	if _, err = tx.Exec(ctx, `UPDATE auth_sessions SET revoked_at = $2 WHERE device_id = $1 AND revoked_at IS NULL`, deviceID, now); err != nil {
+		return false, err
+	}
+	// 吊销后批发侧的 WireGuard peer 也要删，否则旧设备还能连，并占着 3 条名额。
+	if err = worldvpn.ReleaseDeviceTx(ctx, tx, userID, deviceID, now); err != nil {
+		return false, err
+	}
+	return changed, nil
 }
 
 func (r *Repo) touchDevice(ctx context.Context, deviceID int64, now time.Time) {

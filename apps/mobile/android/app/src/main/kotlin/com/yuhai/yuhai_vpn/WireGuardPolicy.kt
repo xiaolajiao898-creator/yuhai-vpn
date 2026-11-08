@@ -8,9 +8,11 @@ import java.util.Base64
 /** Strict public-material validation before any key access or tunnel mutation. */
 internal object WireGuardPolicy {
     data class Profile(val identity: String, val expires: Long, val address: String,
-        val endpoint: String, val publicKey: String, val dns: List<String>, val mtu: Int)
+        val endpoint: String, val publicKey: String, val dns: List<String>, val mtu: Int,
+        val issuedPrivateKey: String? = null)
     private val fields = setOf("identity", "generation", "nodeId", "protocol", "endpoint",
         "serverPublicKey", "address", "dns", "mtu", "expiresAt")
+    private val issuedFields = fields + "issuedPrivateKey"
     fun identity(id: String) = id.matches(Regex("[A-Za-z0-9_-]{1,64}:[A-Za-z0-9_-]{1,64}"))
     fun integer(value: Any?): Long? = when (value) { is Int -> value.toLong(); is Long -> value; else -> null }
     private fun ipv4(s: String): List<Int>? {
@@ -39,7 +41,7 @@ internal object WireGuardPolicy {
         return host(h) && (!rawHost.startsWith("[") || h.contains(':')) && match.groupValues[2].toInt() <= 65535
     }
     fun parse(args: Map<*, *>, now: Long): Profile {
-        require(args.keys == fields)
+        require(args.keys == fields || args.keys == issuedFields)
         val id = args["identity"] as? String ?: error("identity")
         require(identity(id) && args["protocol"] == "WIREGUARD")
         require((integer(args["generation"]) ?: 0) > 0)
@@ -65,6 +67,13 @@ internal object WireGuardPolicy {
         // Both IP families are routed: IPv6 requires an MTU of at least 1280.
         val mtu = integer(args["mtu"]) ?: error("mtu")
         require(mtu in 1280..1500)
-        return Profile(id, expiry, address, endpoint, publicKey, dns, mtu.toInt())
+        val issued = if (args.keys == issuedFields) {
+            val raw = args["issuedPrivateKey"] as? String ?: error("issued")
+            val keyBytes = Base64.getDecoder().decode(raw)
+            require(keyBytes.size == 32 && keyBytes.any { it != 0.toByte() } && Base64.getEncoder().encodeToString(keyBytes) == raw)
+            require(raw != publicKey)
+            raw
+        } else null
+        return Profile(id, expiry, address, endpoint, publicKey, dns, mtu.toInt(), issued)
     }
 }

@@ -31,6 +31,7 @@ import (
 	"github.com/yuhai-vpn/server/internal/traffic"
 	"github.com/yuhai-vpn/server/internal/trial"
 	"github.com/yuhai-vpn/server/internal/tron"
+	"github.com/yuhai-vpn/server/internal/worldvpn"
 
 	"github.com/yuhai-vpn/server/internal/safelog"
 )
@@ -73,11 +74,25 @@ func main() {
 		WGPool: cfg.WGAddressPool, WGReserved: cfg.WGAddressReserved,
 		Tron: &tron.TronGrid{APIKey: cfg.TronGridAPIKey}, ResetPayTo: cfg.PasswordResetPayTo}
 
+	wvSettings, err := worldvpn.LoadSettings()
+	if err != nil {
+		slog.Error("批发线路配置错误，拒绝启动", "err", safelog.Error(err))
+		os.Exit(1)
+	}
+	var wholesale *worldvpn.Service
+	if wvSettings.Enabled() {
+		wholesale = &worldvpn.Service{
+			Settings: wvSettings, API: worldvpn.NewClient(wvSettings),
+			Store: &worldvpn.PG{Pool: pool, Cipher: enc}, Clock: clk, Pepper: cfg.SecretPepper,
+		}
+		slog.Info("worldvpn enabled", "sandbox", wvSettings.Sandbox)
+	}
+
 	if cfg.IsProduction() {
 		gin.SetMode(gin.ReleaseMode)
 	}
 	r := buildRouter(routerDeps{Config: cfg, Pool: pool, Clock: clk, Account: accountSvc, MW: mw,
-		InviteBaseURL: os.Getenv("INVITE_BASE_URL"), Cipher: enc})
+		InviteBaseURL: os.Getenv("INVITE_BASE_URL"), Cipher: enc, WorldVPN: wholesale})
 
 	srv := &http.Server{Addr: cfg.APIListen, Handler: r, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	go func() {
@@ -106,6 +121,8 @@ type routerDeps struct {
 	InviteBaseURL string
 	// Cipher 解密出口凭据；测试里可为 nil（出口下发随之拒绝）。
 	Cipher *fieldenc.Cipher
+	// WorldVPN 未配置时为 nil：路由仍挂上，请求得到 50303，不访问批发接口。
+	WorldVPN *worldvpn.Service
 }
 
 func buildRouter(d routerDeps) *gin.Engine {
@@ -132,5 +149,6 @@ func buildRouter(d routerDeps) *gin.Engine {
 	(&connect.Handler{Svc: &connect.Service{Pool: d.Pool, Clock: d.Clock, Cipher: d.Cipher}, MW: d.MW}).Mount(v1)
 	(&redeem.Handler{Svc: redeemSvc, MW: d.MW}).Mount(v1)
 	(&trial.Handler{Svc: trialSvc, MW: d.MW}).Mount(v1)
+	(&worldvpn.Handler{Svc: d.WorldVPN, MW: d.MW}).Mount(v1)
 	return r
 }

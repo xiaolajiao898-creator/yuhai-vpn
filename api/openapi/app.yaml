@@ -1406,6 +1406,86 @@ paths:
         '503': { description: 50302 出口不存在、已停用或登记内容无效, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/worldvpn/lines:
+    get:
+      tags: [connect]
+      operationId: listWorldVPNLines
+      x-auth-level: S1
+      summary: |
+        批发线路列表，来自 WorldVPN listServers。编号形如 "w43"。
+        未配置批发账号时返回 50303，客户端应把它当成「没有批发线路」。
+        已有的兑换码、试用和 USDT 支付不变。可用线路的 probe 只用于测延迟。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [lines]
+                        properties:
+                          lines:
+                            type: array
+                            maxItems: 1000
+                            items: { $ref: '#/components/schemas/WorldVPNLine' }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/connect/worldvpn:
+    post:
+      tags: [connect]
+      operationId: connectWorldVPN
+      x-auth-level: S2
+      summary: |
+        为当前设备向批发侧 addWireGuardPeer，再 getWireGuardConfig，把解析后的配置交给现有 WireGuard 引擎。
+        响应含接口私钥，Cache-Control: no-store，服务端不保存这份私钥。
+        每个宇海用户同时最多 3 条未释放的 WireGuard 配置。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [line_id]
+              properties:
+                line_id: { type: string, pattern: '^w[1-9][0-9]*$' }
+      responses:
+        '200':
+          description: OK（Cache-Control no-store）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties: { data: { $ref: '#/components/schemas/WorldVPNProfile' } }
+        '403': { description: 40301 没有可用套餐, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        '409': { description: 40902 同时在线设备已达 3 台, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/connect/worldvpn/release:
+    post:
+      tags: [connect]
+      operationId: releaseWorldVPN
+      x-auth-level: S2
+      summary: 断开时尽力删除本设备的 WireGuard peer。失败会留给后台重试。
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [released]
+                        properties: { released: { type: boolean } }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/connect/quality:
     post:
       tags: [connect]
@@ -2053,6 +2133,36 @@ components:
             properties:
               node_id: { type: string }
               reason: { type: string, enum: [OFFLINE, TIER, MAINTENANCE, PROTOCOL_UNSUPPORTED] }
+
+    WorldVPNLine:
+      type: object
+      required: [id, name, country_code, region, available, locked_reason, probe]
+      properties:
+        id: { type: string, pattern: '^w[1-9][0-9]*$' }
+        name: { type: string }
+        country_code: { type: string, minLength: 2, maxLength: 2 }
+        region: { type: string, enum: [ASIA, EUROPE, AMERICAS, OCEANIA, OTHER] }
+        available: { type: boolean }
+        locked_reason: { type: [string, 'null'] }
+        probe:
+          type: [object, 'null']
+          required: [host, port]
+          properties:
+            host: { type: string }
+            port: { type: integer }
+    WorldVPNProfile:
+      type: object
+      required: [line_id, server_id, expires_at, endpoint, server_public_key, address, dns, mtu, interface_private_key]
+      properties:
+        line_id: { type: string }
+        server_id: { type: string }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+        endpoint: { type: string }
+        server_public_key: { type: string }
+        address: { type: string }
+        dns: { type: array, items: { type: string } }
+        mtu: { type: integer }
+        interface_private_key: { type: string, description: 只在本次连接响应中出现，不入库 }
 
     InviteInfo:
       type: object

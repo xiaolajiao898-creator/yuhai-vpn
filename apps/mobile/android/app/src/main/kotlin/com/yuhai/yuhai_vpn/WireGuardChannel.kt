@@ -229,7 +229,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             val expires = profile.expires
             if(VpnService.prepare(activity)!=null) { failure(result,"PERMISSION_DENIED"); return }
             val key = Key.fromBase64(profile.publicKey)
-            val pair = keyPair(id)
+            val pair = profile.issuedPrivateKey?.let { KeyPair(Key.fromBase64(it)) } ?: keyPair(id)
             require(key != pair.publicKey)
             val address = profile.address; val endpoint = profile.endpoint
             val dns = profile.dns; val mtu = profile.mtu

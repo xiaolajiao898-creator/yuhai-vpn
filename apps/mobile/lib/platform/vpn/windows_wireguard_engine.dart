@@ -218,13 +218,19 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
     _lastSample = null;
     _set(VpnStatus.connecting);
     try {
-      final pair = await _keyPair(profile.identity);
-      final seed = await pair.extractPrivateKeyBytes();
+      final String privateKey;
+      final issued = profile.issuedPrivateKey;
+      if (issued != null) {
+        privateKey = issued;
+      } else {
+        final pair = await _keyPair(profile.identity);
+        final seed = await pair.extractPrivateKeyBytes();
+        privateKey = base64Encode(seed);
+      }
       if (await _serviceInstalled()) {
         await _run(_wireguardExe, ['/uninstalltunnelservice', tunnelName]);
       }
-      await _writeConfig(
-          buildConfig(privateKey: base64Encode(seed), profile: profile));
+      await _writeConfig(buildConfig(privateKey: privateKey, profile: profile));
       final r = await _run(_wireguardExe, ['/installtunnelservice', _configPath]);
       if (generation != _generation) return;
       if (r.exitCode != 0) {

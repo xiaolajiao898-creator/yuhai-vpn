@@ -1,6 +1,6 @@
 module github.com/yuhai-vpn/server
 
-go 1.26.9
+go 1.26.10
 
 // 首次拉取依赖：go mod tidy（版本以 tidy 解析结果为准）
 require (

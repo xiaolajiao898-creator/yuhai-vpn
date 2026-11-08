@@ -55,6 +55,7 @@ class ConnectionController extends Notifier<VpnStatus> {
   var _generation = 0;
   var _disposed = false;
   var _acceptEngineEvents = false;
+  String? _wholesaleLine;
 
   @override
   VpnStatus build() {
@@ -79,6 +80,7 @@ class ConnectionController extends Notifier<VpnStatus> {
         state = VpnStatus.error;
         ref.read(connectionFailureProvider.notifier).state =
             const VpnFailure('SELECTION_CHANGED', '线路选择已变化，请重新连接');
+        _releaseWholesale();
         unawaited(engine.disconnect().catchError((Object _) {}));
       }
     });
@@ -93,6 +95,7 @@ class ConnectionController extends Notifier<VpnStatus> {
       sub.cancel();
       failures.cancel();
       if (nativeStarted) {
+        _releaseWholesale();
         unawaited(engine.disconnect().catchError((Object _) {}));
       }
     });
@@ -152,6 +155,18 @@ class ConnectionController extends Notifier<VpnStatus> {
     _remember(id);
   }
 
+  void _releaseWholesale() {
+    final line = _wholesaleLine;
+    _wholesaleLine = null;
+    if (line == null) return;
+    final session = ref.read(sessionProvider).valueOrNull;
+    if (session == null) return;
+    unawaited(ref
+        .read(connectionApiProvider)
+        .releaseWorldVPN(session)
+        .catchError((Object _) {}));
+  }
+
   /// 记入「最近使用」：只记本机、只记编号；保存失败不影响连接。
   void _remember(String id) {
     unawaited(ref
@@ -170,6 +185,7 @@ class ConnectionController extends Notifier<VpnStatus> {
         state == VpnStatus.reconnecting) {
       _acceptEngineEvents = false;
       state = VpnStatus.disconnecting;
+      _releaseWholesale();
       try {
         await engine.disconnect();
       } catch (_) {
@@ -294,6 +310,21 @@ class ConnectionController extends Notifier<VpnStatus> {
       if (confirmed == null || confirmed.probeHost == null || !validAttempt()) {
         throw const FormatException('线路状态已变化');
       }
+      if (!demo && confirmed.id.startsWith('w')) {
+        if (!worldvpnPlatformSupported) {
+          throw const VpnFailure('ENGINE_UNAVAILABLE', '当前设备暂不支持该线路类型');
+        }
+        final profile = await ref
+            .read(connectionApiProvider)
+            .worldvpnProfile(session!, confirmed.id);
+        if (!current()) return;
+        if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+        _wholesaleLine = confirmed.id;
+        _acceptEngineEvents = true;
+        await engine.connect(profile);
+        _remember(confirmed.id);
+        return;
+      }
       ConnectProfile profile;
       if (demo) {
         profile = ConnectProfile(
@@ -319,6 +350,7 @@ class ConnectionController extends Notifier<VpnStatus> {
     } catch (error) {
       if (!current()) return;
       _acceptEngineEvents = false;
+      _releaseWholesale();
       state = VpnStatus.error;
       ref.read(connectionFailureProvider.notifier).state = switch (error) {
         VpnFailure failure => failure,

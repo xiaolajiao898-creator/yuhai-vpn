@@ -96,6 +96,74 @@ class NodeItem {
         supportsUdp: j['supports_udp']);
   }
 
+  /// `GET /v1/worldvpn/lines`。编号 `w` 开头，仍走 WireGuard，不走 Xray。
+  static NodeItem fromWorldVPNJson(Map<String, dynamic> j,
+      {required bool platformSupported}) {
+    bool text(dynamic v, int limit) =>
+        v is String &&
+        v.isNotEmpty &&
+        v.length <= limit &&
+        !RegExp(r'[\x00-\x1f]').hasMatch(v);
+    const keys = {
+      'id',
+      'name',
+      'country_code',
+      'region',
+      'available',
+      'locked_reason',
+      'probe'
+    };
+    final id = j['id'];
+    final number = id is String && id.startsWith('w')
+        ? BigInt.tryParse(id.substring(1))
+        : null;
+    const regions = {'ASIA', 'EUROPE', 'AMERICAS', 'OCEANIA', 'OTHER'};
+    if (j.length != keys.length ||
+        !j.keys.every(keys.contains) ||
+        number == null ||
+        number <= BigInt.zero ||
+        number > BigInt.parse('9223372036854775807') ||
+        'w$number' != id ||
+        !text(j['name'], 64) ||
+        j['country_code'] is! String ||
+        !RegExp(r'^[A-Z]{2}$').hasMatch(j['country_code']) ||
+        !regions.contains(j['region']) ||
+        j['available'] is! bool ||
+        (j['locked_reason'] != null && !text(j['locked_reason'], 32))) {
+      throw const FormatException('线路资料无效');
+    }
+    final serverAvailable = j['available'] == true;
+    final probe = j['probe'];
+    if (serverAvailable) {
+      if (j['locked_reason'] != null ||
+          probe is! Map ||
+          !text(probe['host'], 255) ||
+          !RegExp(r'^[A-Za-z0-9:._-]+$').hasMatch(probe['host']) ||
+          probe['port'] is! int ||
+          probe['port'] < 1 ||
+          probe['port'] > 65535) {
+        throw const FormatException('线路资料无效');
+      }
+    } else if (j['locked_reason'] == null || probe != null) {
+      throw const FormatException('线路资料无效');
+    }
+    final available = serverAvailable && platformSupported;
+    return NodeItem(
+        id: id,
+        name: j['name'],
+        countryCode: j['country_code'],
+        city: '',
+        region: j['region'],
+        available: available,
+        lockedReason: available
+            ? null
+            : (serverAvailable ? 'PLATFORM' : j['locked_reason']),
+        isRecommended: false,
+        probeHost: available ? probe['host'] as String : null,
+        probePort: available ? probe['port'] as int : null,
+        protocols: available ? const ['WIREGUARD'] : const <String>[]);
+  }
+
   static NodeItem fromJson(Map<String, dynamic> j, {bool allowMock = false}) {
     bool text(dynamic v, int limit) =>
         v is String &&
@@ -205,8 +273,34 @@ List<NodeItem> parseEgress(Map<String, dynamic> data,
   return result;
 }
 
+List<NodeItem> parseWorldVPN(Map<String, dynamic> data,
+    {required bool platformSupported}) {
+  final raw = data['lines'];
+  if (raw is! List || raw.length > 1000) {
+    throw const FormatException('线路列表不完整');
+  }
+  final ids = <String>{};
+  final result = <NodeItem>[];
+  for (final value in raw) {
+    if (value is! Map<String, dynamic>) {
+      throw const FormatException('线路资料无效');
+    }
+    final item =
+        NodeItem.fromWorldVPNJson(value, platformSupported: platformSupported);
+    if (!ids.add(item.id)) throw const FormatException('线路编号重复');
+    result.add(item);
+  }
+  return result;
+}
+
 /// 出口可由安卓与 Windows 的 Xray 内核连接；其他平台照样列出但标明不支持，不静默隐藏。
 bool get egressPlatformSupported =>
+    !kIsWeb &&
+    (defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.windows);
+
+/// 批发 WireGuard 走现有引擎：安卓原生隧道和 Windows 的 WireGuard 隧道。
+bool get worldvpnPlatformSupported =>
     !kIsWeb &&
     (defaultTargetPlatform == TargetPlatform.android ||
         defaultTargetPlatform == TargetPlatform.windows);
@@ -228,5 +322,14 @@ final nodesProvider = FutureProvider.autoDispose<List<NodeItem>>((ref) async {
     if (e.code != 40401) rethrow;
     egress = const [];
   }
-  return List<NodeItem>.unmodifiable([...nodes, ...egress]);
+  List<NodeItem> wholesale;
+  try {
+    wholesale = parseWorldVPN(await api.call('GET', '/v1/worldvpn/lines'),
+        platformSupported: worldvpnPlatformSupported);
+  } on ApiException catch (e) {
+    // 50303：没配批发账号。40401：旧服务还没有这条路由。
+    if (e.code != 40401 && e.code != 50303) rethrow;
+    wholesale = const [];
+  }
+  return List<NodeItem>.unmodifiable([...nodes, ...egress, ...wholesale]);
 });
