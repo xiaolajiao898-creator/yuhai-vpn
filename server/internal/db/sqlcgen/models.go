@@ -905,3 +905,45 @@ type UserBalance struct {
 	Version        int64
 	UpdatedAt      time.Time
 }
+
+type WorldvpnAccount struct {
+	UserID      int64
+	VpnUsername string
+	PasswordEnc []byte
+	Status      string
+	ExpireAt    time.Time
+	Source      string
+	Sandbox     bool
+	UpdatedAt   time.Time
+}
+
+type WorldvpnGrant struct {
+	ID                  int64
+	Source              string
+	SourceID            int64
+	UserID              int64
+	PeriodMonths        int32
+	Status              string
+	LastError           string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	UpstreamUsername    pgtype.Text
+	UpstreamPasswordEnc []byte
+}
+
+type WorldvpnPeer struct {
+	ID                 int64
+	UserID             int64
+	DeviceID           int64
+	ServerID           int64
+	WireguardID        string
+	Sandbox            bool
+	ReleaseRequestedAt *time.Time
+	ReleasedAt         *time.Time
+	CreatedAt          time.Time
+}
+
+type WorldvpnState struct {
+	Singleton bool
+	SyncAfter time.Time
+}
