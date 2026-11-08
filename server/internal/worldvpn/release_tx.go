@@ -18,13 +18,22 @@ func ReleaseDeviceTx(ctx context.Context, tx pgx.Tx, userID, deviceID int64, now
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	// 表不存在时这条语句会让整个事务进入失败状态。先建保存点，缺表就回滚到这里，吊销仍可提交。
+	if _, err := tx.Exec(ctx, "SAVEPOINT worldvpn_release_peer"); err != nil {
+		return err
+	}
 	_, err := tx.Exec(ctx, `
 UPDATE worldvpn_peers
    SET release_requested_at = COALESCE(release_requested_at, $3)
  WHERE user_id = $1 AND device_id = $2 AND released_at IS NULL`, userID, deviceID, now)
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
-		return nil
+	if err != nil {
+		_, _ = tx.Exec(ctx, "ROLLBACK TO SAVEPOINT worldvpn_release_peer")
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "42P01" {
+			return nil
+		}
+		return err
 	}
+	_, err = tx.Exec(ctx, "RELEASE SAVEPOINT worldvpn_release_peer")
 	return err
 }
