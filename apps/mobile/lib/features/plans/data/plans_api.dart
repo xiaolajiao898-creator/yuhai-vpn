@@ -46,10 +46,27 @@ class PlansApi {
   Future<QuoteResult> quote(String planCode) async =>
       QuoteResult.fromJson(await ref.read(apiClientProvider).call('POST', '/v1/plans/quote', json: {'plan_code': planCode}, sign: true));
 
+  /// 同一报价（+支付方式）的幂等键：第一次提交时生成，之后超时/失败重试都沿用同一个，
+  /// 服务端据此把重试识别为同一笔下单，不会重复建单。成功后才丢弃。
+  final Map<String, String> _orderKeys = {};
+
+  String _orderKey(String quoteId, String payMethod) {
+    final k = '$quoteId\n$payMethod';
+    final existing = _orderKeys[k];
+    if (existing != null) return existing;
+    // 报价有效期很短；只保留最近的若干个，避免无界增长。
+    if (_orderKeys.length >= 32) _orderKeys.remove(_orderKeys.keys.first);
+    return _orderKeys[k] = const Uuid().v4();
+  }
+
   /// 创建订单；返回订单原始 JSON（支付页在第 5–6 周消费）。
-  Future<Map<String, dynamic>> createOrder({required String quoteId, required String payMethod}) =>
-      ref.read(apiClientProvider).call('POST', '/v1/orders',
-          json: {'order_type': 'PLAN', 'quote_id': quoteId, 'pay_method': payMethod}, sign: true, idempotencyKey: const Uuid().v4());
+  Future<Map<String, dynamic>> createOrder({required String quoteId, required String payMethod}) async {
+    final k = '$quoteId\n$payMethod';
+    final res = await ref.read(apiClientProvider).call('POST', '/v1/orders',
+        json: {'order_type': 'PLAN', 'quote_id': quoteId, 'pay_method': payMethod}, sign: true, idempotencyKey: _orderKey(quoteId, payMethod));
+    _orderKeys.remove(k);
+    return res;
+  }
 }
 
 final plansApiProvider = Provider<PlansApi>((ref) => PlansApi(ref));

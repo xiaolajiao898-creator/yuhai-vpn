@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yuhai_vpn/core/support_config.dart';
 import 'package:yuhai_vpn/features/account/data/trial_api.dart';
 import 'package:yuhai_vpn/features/home/data/me_api.dart';
 import 'package:yuhai_vpn/features/plans/data/plans_api.dart';
@@ -12,14 +13,14 @@ Widget plansApp(List<Override> overrides) => ProviderScope(
     );
 
 void main() {
-  testWidgets('没有套餐时说明价格尚未上架，并提供重试和客服', (tester) async {
+  testWidgets('没有套餐时说明价格尚未上架，并提供重试；客服入口只在配置了链接时出现', (tester) async {
     await tester.pumpWidget(plansApp([
       plansProvider.overrideWith((ref) async => <PlanItem>[]),
     ]));
     await tester.pumpAndSettle();
     expect(find.text('还没有可购买的套餐'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
-    expect(find.text('联系客服'), findsOneWidget);
+    expect(find.text('联系客服'), kSupportAvailable ? findsOneWidget : findsNothing);
     expect(find.textContaining('USDT'), findsNothing);
     expect(tester.takeException(), isNull);
   });

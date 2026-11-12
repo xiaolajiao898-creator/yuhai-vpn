@@ -6,7 +6,9 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../core/storage/app_secure_storage.dart';
+import 'tunnel_host_pins.dart';
 import 'vpn_engine.dart';
+import 'windows_system_tools.dart';
 import 'wireguard_profile.dart';
 
 /// 运行外部程序的抽象，便于测试替换。
@@ -76,6 +78,13 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
   DateTime? _lastSample;
 
   String get _wireguardExe => '$_wgDir\\wireguard.exe';
+
+  /// 隧道服务的程序路径（断网保护的放行名单要用它：握手包由这个进程发出）。
+  String get wireguardExePath => _wireguardExe;
+
+  /// 握手超时、即将卸载隧道服务之前调用。WireGuard 服务自带的防火墙会随服务一起消失，
+  /// 断网保护要在这之前先把自己的拦截规则装好，中间不能留空档。
+  Future<void> Function()? beforeTimeoutTeardown;
   String get _wgExe => '$_wgDir\\wg.exe';
   String get _configPath => '$_dataDir\\$tunnelName.conf';
 
@@ -138,7 +147,7 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
       return false;
     }
     // `net session` 只有管理员才能成功，用来判断是否以管理员身份运行。
-    final admin = await _run('net', ['session']);
+    final admin = await _run(windowsSystem32Tool('net.exe'), ['session']);
     if (admin.exitCode != 0) {
       _fail('PERMISSION_DENIED', '请右键宇海VPN图标，选择「以管理员身份运行」');
       return false;
@@ -149,8 +158,17 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
   // ---------------- 配置 ----------------
 
   /// 生成 WireGuard 配置文本（包含私钥，只写入受保护目录，绝不记录日志）。
+  ///
+  /// [endpoint] 只用于断网保护拦着、系统查不到服务器域名时，换成之前查到的 `IP:端口`
+  /// （见 tunnel_host_pins.dart）。不是 IP 字面量的一律不用，仍写资料里的 endpoint。
   static String buildConfig(
-      {required String privateKey, required WireGuardProfile profile}) {
+      {required String privateKey,
+      required WireGuardProfile profile,
+      String? endpoint}) {
+    final host = endpoint == null ? null : wireGuardEndpointHost(endpoint);
+    final peer = host != null && InternetAddress.tryParse(host) != null
+        ? endpoint!
+        : profile.endpoint;
     final b = StringBuffer()
       ..writeln('[Interface]')
       ..writeln('PrivateKey = $privateKey')
@@ -161,18 +179,62 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
       ..writeln('[Peer]')
       ..writeln('PublicKey = ${profile.serverPublicKey}')
       ..writeln('AllowedIPs = 0.0.0.0/0, ::/0')
-      ..writeln('Endpoint = ${profile.endpoint}')
+      ..writeln('Endpoint = $peer')
       ..writeln('PersistentKeepalive = 25');
     return b.toString();
   }
 
+  /// 只信任 SYSTEM（S-1-5-18）与本机 Administrators 组（S-1-5-32-544）。
+  static const _trustedSids = {'S-1-5-18', 'S-1-5-32-544'};
+
+  static const _untrustedDir = VpnFailure('CONFIG_DIR_UNTRUSTED',
+      '配置目录的所有者或权限不安全，已拒绝写入私钥。请删除 %ProgramData%\\YuhaiVPN 文件夹后重试，或联系客服');
+
+  /// 读取目录的所有者与全部访问规则（均以 SID 表示，不受系统语言影响）。
+  /// 第一行是所有者 SID，其后每行一条访问规则的 SID。读取失败返回 null。
+  Future<List<String>?> _ownerAndAceSids(String path) async {
+    final quoted = "'${path.replaceAll("'", "''")}'";
+    final r = await _run(windowsPowerShellExe(), [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '\$ErrorActionPreference = "Stop"; '
+          '\$sid = [System.Security.Principal.SecurityIdentifier]; '
+          '\$a = Get-Acl -LiteralPath $quoted; '
+          'Write-Output \$a.GetOwner(\$sid).Value; '
+          'foreach (\$r in \$a.GetAccessRules(\$true, \$true, \$sid)) { Write-Output \$r.IdentityReference.Value }',
+    ]);
+    if (r.exitCode != 0) return null;
+    final lines = r.stdout
+        .toString()
+        .split(RegExp(r'\r?\n'))
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    if (lines.isEmpty || lines.any((l) => !RegExp(r'^S-1-[0-9-]+$').hasMatch(l))) return null;
+    return lines;
+  }
+
+  /// 写入含私钥的配置前，确认目录确实只归 SYSTEM/管理员所有和访问。
+  /// - 目录是链接（符号链接/联接点）：拒绝。
+  /// - 目录已存在但所有者不是 SYSTEM/Administrators（例如普通用户抢先建好的）：拒绝，不去「修复」它。
+  /// - 新建的目录显式把所有者设为 Administrators；icacls 每一步都检查退出码。
+  /// - 收紧权限后再核对一次：所有者可信，且访问规则里只剩 SYSTEM 与 Administrators。
   Future<void> _writeConfig(String text) async {
     final dir = Directory(_dataDir);
-    if (!await dir.exists()) {
+    final icacls = windowsSystem32Tool('icacls.exe');
+    if (await FileSystemEntity.isLink(_dataDir)) throw _untrustedDir;
+    if (await dir.exists()) {
+      final before = await _ownerAndAceSids(_dataDir);
+      if (before == null || !_trustedSids.contains(before.first)) throw _untrustedDir;
+    } else {
       await dir.create(recursive: true);
+      if (await FileSystemEntity.isLink(_dataDir)) throw _untrustedDir;
+      final owner = await _run(icacls, [_dataDir, '/setowner', '*S-1-5-32-544']);
+      if (owner.exitCode != 0) throw _untrustedDir;
     }
     // 目录只允许 SYSTEM 与管理员访问（去掉继承来的 Users 读权限）。
-    await _run('icacls', [
+    final acl = await _run(icacls, [
       _dataDir,
       '/inheritance:r',
       '/grant:r',
@@ -180,12 +242,25 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
       '/grant:r',
       '*S-1-5-32-544:(OI)(CI)F'
     ]);
-    await File(_configPath).writeAsString(text, flush: true);
+    if (acl.exitCode != 0) throw _untrustedDir;
+    final after = await _ownerAndAceSids(_dataDir);
+    if (after == null || !_trustedSids.contains(after.first) || !after.skip(1).every(_trustedSids.contains)) {
+      throw _untrustedDir;
+    }
+    final file = File(_configPath);
+    if (await FileSystemEntity.isLink(_configPath)) throw _untrustedDir;
+    await file.writeAsString(text, flush: true);
   }
 
   Future<void> _wipeConfig() async {
     final f = File(_configPath);
     try {
+      // 只在可信目录里抹写：所有者不是 SYSTEM/Administrators 的目录里，配置文件可能是
+      // 普通用户放的硬链接，以管理员身份往里写零会破坏别处的文件。
+      if (await FileSystemEntity.isLink(_dataDir) || await FileSystemEntity.isLink(_configPath)) return;
+      if (!await f.exists()) return;
+      final owner = await _ownerAndAceSids(_dataDir);
+      if (owner == null || !_trustedSids.contains(owner.first)) return;
       if (await f.exists()) {
         final len = await f.length();
         await f.writeAsBytes(List<int>.filled(len, 0), flush: true);
@@ -197,14 +272,20 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
   }
 
   Future<bool> _serviceInstalled() async {
-    final r = await _run('sc', ['query', 'WireGuardTunnel\$$tunnelName']);
+    final r = await _run(windowsSystem32Tool('sc.exe'), ['query', 'WireGuardTunnel\$$tunnelName']);
     return r.exitCode == 0;
   }
 
   // ---------------- 连接 / 断开 ----------------
 
+  /// 只给 [WindowsXrayEngine] 用：断网保护拦着、系统查不到服务器域名时，下一次 [connect]
+  /// 把 endpoint 换成这个之前查到的 `IP:端口`。每次 [connect] 读取后即清空。
+  String? nextEndpointOverride;
+
   @override
   Future<void> connect(ConnectProfile profile) async {
+    final endpointOverride = nextEndpointOverride;
+    nextEndpointOverride = null;
     if (profile is! WireGuardProfile || profile.protocol != 'WIREGUARD') {
       throw const FormatException('只接受已验证的 WireGuard 配置');
     }
@@ -230,7 +311,10 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
       if (await _serviceInstalled()) {
         await _run(_wireguardExe, ['/uninstalltunnelservice', tunnelName]);
       }
-      await _writeConfig(buildConfig(privateKey: privateKey, profile: profile));
+      await _writeConfig(buildConfig(
+          privateKey: privateKey,
+          profile: profile,
+          endpoint: endpointOverride));
       final r = await _run(_wireguardExe, ['/installtunnelservice', _configPath]);
       if (generation != _generation) return;
       if (r.exitCode != 0) {
@@ -238,6 +322,13 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
         _fail('CONNECT_FAILED', '无法启动 WireGuard 隧道服务，请确认以管理员身份运行');
         return;
       }
+    } on VpnFailure catch (e) {
+      // 目录不可信时不碰里面的任何文件（可能是指向别处的链接）。
+      if (generation == _generation) {
+        if (e.code != _untrustedDir.code) await _wipeConfig();
+        _fail(e.code, e.message);
+      }
+      return;
     } catch (_) {
       if (generation == _generation) {
         await _wipeConfig();
@@ -286,6 +377,13 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
         _lastSample = now;
         _set(VpnStatus.connected);
       } else if (now.difference(started) > _handshakeTimeout) {
+        final guard = beforeTimeoutTeardown;
+        if (guard != null) {
+          try {
+            await guard();
+          } catch (_) {}
+          if (generation != _generation) return;
+        }
         await disconnect();
         if (generation + 1 == _generation) {
           _fail('HANDSHAKE_TIMEOUT', '线路握手超时，请重试或更换线路');
@@ -308,6 +406,23 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
           upSpeed: up < 0 ? 0 : up,
           downSpeed: down < 0 ? 0 : down,
           since: _connectedAt!.toUtc()));
+    }
+  }
+
+  /// 最近一次握手距今多少秒，读不到时返回 null。WireGuard 有流量（这里有 25 秒保活）时
+  /// 大约每两分钟重新握手一次；超过 180 秒（Reject-After-Time）没有新握手，这条隧道已经
+  /// 不能再传数据。
+  Future<int?> handshakeAgeSeconds() async {
+    if (_disposed || _connectedAt == null) return null;
+    try {
+      final r = await _run(_wgExe, ['show', tunnelName, 'dump']);
+      if (r.exitCode != 0) return null;
+      final d = parseDump(r.stdout.toString());
+      if (d == null || d.handshake <= 0) return null;
+      final age = _now().millisecondsSinceEpoch ~/ 1000 - d.handshake;
+      return age < 0 ? 0 : age;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -349,6 +464,19 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
       return null;
     }
   }
+
+  @override
+  bool get canRecover => false;
+  @override
+  Future<void> applyPolicy({required bool leakProtect}) async {}
+  @override
+  Future<int?> probeTunnel() async => null;
+  @override
+  Future<bool> holdTraffic() async => false;
+  @override
+  Future<void> releaseTraffic() async {}
+  @override
+  Future<int> networkEpoch() async => 0;
 
   void dispose() {
     if (_disposed) return;

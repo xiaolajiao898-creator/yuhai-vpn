@@ -147,14 +147,7 @@ class _RewardsPageState extends ConsumerState<RewardsPage> {
                         Row(children: [
                           Expanded(
                               child: Text(inviteRewardValue(reward),
-                                  style: const TextStyle(
-                                      fontFamily: 'Arial Rounded MT Bold',
-                                      fontFamilyFallback: [
-                                        'SF Pro Rounded',
-                                        YhFont.numeric
-                                      ],
-                                      fontSize: 24,
-                                      fontWeight: FontWeight.w800))),
+                                  style: YhType.latin(22))),
                           const SizedBox(width: 8),
                           Container(
                               padding: const EdgeInsets.symmetric(

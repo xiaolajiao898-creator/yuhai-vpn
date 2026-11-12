@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'windows_system_tools.dart';
+
 /// xray 标准输入。配置只从这里进去，不落盘。
 abstract interface class ConfigWriter {
   void add(List<int> data);
@@ -137,7 +139,7 @@ Future<bool> probeTunnelHttps() async {
 Future<({int rx, int tx})?> readWindowsAdapterStats(String name) async {
   if (!Platform.isWindows) return null;
   if (!RegExp(r'^[A-Za-z][A-Za-z0-9_-]{0,31}$').hasMatch(name)) return null;
-  final result = await Process.run('powershell.exe', [
+  final result = await Process.run(windowsPowerShellExe(), [
     '-NoProfile',
     '-NonInteractive',
     '-Command',
@@ -156,7 +158,7 @@ Future<({int rx, int tx})?> readWindowsAdapterStats(String name) async {
 
 Future<bool> windowsIsAdministrator() async {
   if (!Platform.isWindows) return false;
-  final result = await Process.run('net', ['session']);
+  final result = await Process.run(windowsSystem32Tool('net.exe'), ['session']);
   return result.exitCode == 0;
 }
 

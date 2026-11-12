@@ -13,8 +13,9 @@ import '../../home/data/me_api.dart';
 import '../data/orders_api.dart';
 
 /// P09 USDT 支付页（方案 9.9）：
-/// - 旧地址带 address_proof 时用内置公钥校验，失败不展示
-/// - 管理员审批的地址没有证明，直接展示
+/// - 地址带 address_proof 时用内置公钥校验；带了证明但校验失败，一律不展示地址
+/// - 没有证明的地址（管理员登记，服务端另有启用延迟）照常展示；若本包内置了资金公钥，
+///   额外显示提醒：请通过官方渠道核对地址
 /// - 二维码只编码地址；金额由用户手动核对，尾数用星辉色突出
 /// - 倒计时以 server_time 校准；每 3 秒轮询（If-None-Match），终态停止
 class PayPage extends ConsumerStatefulWidget {
@@ -31,6 +32,9 @@ class _PayPageState extends ConsumerState<PayPage> {
   String? _etag;
   bool? _proofOk;
   bool _signed = false;
+  bool _unsigned = false;
+  bool _polling = false;
+  bool _cancelling = false;
   Timer? _poll, _tick;
   Duration _clockOffset = Duration.zero;
   String? _error;
@@ -49,17 +53,24 @@ class _PayPageState extends ConsumerState<PayPage> {
     final proof = o.addressProof;
     var ok = false;
     var signed = false;
-    if (o.receiveAddress != null && proof == null) {
-      ok = true;
-    } else if (proof != null && o.receiveAddress != null && o.network != null) {
-      ok = await proof.verify(network: o.network!, address: o.receiveAddress!, pubKeys: fundAddressPubKeys);
+    var unsigned = false;
+    if (proof != null) {
+      // 带了证明就必须校验通过；失败（含地址/网络缺失）绝不展示地址。
+      if (o.receiveAddress != null && o.network != null) {
+        ok = await proof.verify(network: o.network!, address: o.receiveAddress!, pubKeys: fundAddressPubKeys);
+      }
       signed = ok;
+    } else if (o.receiveAddress != null) {
+      // 无证明的地址照常展示；本包配置了资金公钥时提醒用户另行核对。
+      ok = true;
+      unsigned = fundAddressPubKeys.values.any((k) => k.isNotEmpty);
     }
     if (!mounted) return;
     setState(() {
       _order = o;
       _proofOk = ok;
       _signed = signed;
+      _unsigned = unsigned;
     });
     if (o.isFinal) {
       _poll?.cancel();
@@ -68,6 +79,9 @@ class _PayPageState extends ConsumerState<PayPage> {
   }
 
   Future<void> _refresh() async {
+    // 3 秒一拍：上一次请求还没回来就跳过这一拍，避免慢网络下请求堆积、乱序覆盖。
+    if (_polling) return;
+    _polling = true;
     try {
       final (o, tag) = await ref.read(ordersApiProvider).poll(widget.orderNo, etag: _etag);
       _etag = tag;
@@ -77,10 +91,26 @@ class _PayPageState extends ConsumerState<PayPage> {
       }
     } catch (_) {
       // 轮询失败静默重试
+    } finally {
+      _polling = false;
     }
   }
 
   Future<void> _cancel() async {
+    // 进行中（含确认对话框打开期间）不再响应：同一时刻只有一个对话框、一个取消请求。
+    if (_cancelling) return;
+    setState(() {
+      _cancelling = true;
+      _error = null;
+    });
+    try {
+      await _cancelOnce();
+    } finally {
+      if (mounted) setState(() => _cancelling = false);
+    }
+  }
+
+  Future<void> _cancelOnce() async {
     final yes = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -92,12 +122,12 @@ class _PayPageState extends ConsumerState<PayPage> {
         ],
       ),
     );
-    if (yes != true) return;
+    if (yes != true || !mounted) return;
     try {
       await _apply(await ref.read(ordersApiProvider).cancel(widget.orderNo));
       if (mounted) context.pop();
     } catch (_) {
-      setState(() => _error = '取消失败，请刷新后重试');
+      if (mounted) setState(() => _error = '取消失败，请刷新后重试');
     }
   }
 
@@ -157,8 +187,12 @@ class _PayPageState extends ConsumerState<PayPage> {
               Center(
                 child: Container(
                   padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(color: YhColors.moonlight, borderRadius: BorderRadius.circular(YhRadius.listSelected)),
-                  child: QrImageView(data: o.receiveAddress!, size: 180, backgroundColor: YhColors.moonlight),
+                  // 二维码一律白底黑点，扫码最稳。
+                  decoration: BoxDecoration(
+                      color: Colors.white,
+                      border: Border.all(color: YhColors.hair),
+                      borderRadius: BorderRadius.circular(YhRadius.listSelected)),
+                  child: QrImageView(data: o.receiveAddress!, size: 180, backgroundColor: Colors.white),
                 ),
               ),
               const SizedBox(height: YhSpace.unit * 2),
@@ -171,8 +205,13 @@ class _PayPageState extends ConsumerState<PayPage> {
               ),
               const SizedBox(height: YhSpace.unit),
               Text('仅支持 TRON 网络的 USDT（TRC20）。转错网络无法找回。', style: text.labelSmall?.copyWith(color: YhColors.coral)),
+              if (_unsigned) ...[
+                const SizedBox(height: YhSpace.unit),
+                Text('此收款地址没有附带签名证明。付款前请通过官方渠道（官网或官方客服）核对地址，确认一致后再转账。',
+                    style: text.labelSmall?.copyWith(color: YhColors.starlight)),
+              ],
             ] else
-              Text(_proofOk == null ? '正在校验支付通道…' : '支付通道校验失败，请更新 App 或联系客服。为安全起见不展示地址。',
+              Text(_proofOk == null ? '正在校验支付通道…' : '收款地址签名校验失败，为安全起见不展示地址。请不要向任何地址转账，更新 App 或联系客服。',
                   style: text.bodyMedium?.copyWith(color: _proofOk == null ? YhColors.haze : YhColors.coral)),
           ]),
           const SizedBox(height: YhSpace.unit * 2),
@@ -180,7 +219,10 @@ class _PayPageState extends ConsumerState<PayPage> {
           if (_error != null) Text(_error!, style: text.bodyMedium?.copyWith(color: YhColors.coral)),
           const SizedBox(height: YhSpace.page),
           if (o.status == 'PENDING')
-            TextButton(onPressed: _cancel, child: const Text('取消订单', style: TextStyle(color: YhColors.haze))),
+            TextButton(
+              onPressed: _cancelling ? null : _cancel,
+              child: Text(_cancelling ? '正在取消…' : '取消订单', style: const TextStyle(color: YhColors.haze)),
+            ),
           const SizedBox(height: YhSpace.page),
         ],
       ),

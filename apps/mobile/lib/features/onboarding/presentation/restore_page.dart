@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/brand.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../core/network/api_client.dart';
@@ -62,15 +63,20 @@ class _RestorePageState extends ConsumerState<RestorePage> {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('恢复账户'), backgroundColor: Colors.transparent),
-      body: SafeArea(
+      appBar: AppBar(title: const Text('恢复账户')),
+      body: TideBackdrop(
+        linesTop: 0.84,
+        glow: 0.8,
+        child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: YhSpace.page),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               const SizedBox(height: YhSpace.unit * 2),
-              Text('输入账户密钥', style: text.headlineMedium),
+              const Eyebrow('RESTORE · 恢复账户'),
+              const SizedBox(height: 12),
+              Text('输入账户密钥', style: text.headlineMedium?.copyWith(fontSize: 38)),
               const SizedBox(height: YhSpace.unit),
               Text('形如 YH-XXXX-XXXX-XXXX-XXXX-XXXX，大小写与连字符可省略。', style: text.labelSmall),
               const SizedBox(height: YhSpace.page),
@@ -87,6 +93,7 @@ class _RestorePageState extends ConsumerState<RestorePage> {
               FilledButton(onPressed: _busy ? null : _restore, child: const Text('恢复')),
             ],
           ),
+        ),
         ),
       ),
     );

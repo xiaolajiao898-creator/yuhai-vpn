@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/providers.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/widgets/brand.dart';
 import '../data/app_info_api.dart';
 import 'settings_widgets.dart';
 
@@ -75,26 +76,11 @@ class _AboutPageState extends ConsumerState<AboutPage> {
       appBar: AppBar(title: const Text('关于宇海VPN')),
       body: ListView(padding: const EdgeInsets.all(YhSpace.page), children: [
         const SizedBox(height: 16),
-        Center(
-            child: Container(
-                width: 88,
-                height: 88,
-                decoration: BoxDecoration(
-                    color: YhColors.current,
-                    borderRadius: BorderRadius.circular(28),
-                    border: Border.all(color: YhColors.reef)),
-                child: const Icon(Icons.shield_moon_outlined,
-                    size: 44, color: YhColors.glow))),
-        const SizedBox(height: 16),
-        const Text('宇海VPN',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-                fontSize: 32,
-                fontWeight: FontWeight.w600,
-                fontFamily: YhFont.ui,
-                letterSpacing: 0.4)),
+        const Center(child: BrandMark(size: 88)),
+        const SizedBox(height: 18),
+        Text('宇海VPN', textAlign: TextAlign.center, style: YhType.display(40)),
         const SizedBox(height: 8),
-        const Text('深海之中，自在连接',
+        const Text('为宇海社区而生的VPN，您的安全宇海守护！',
             textAlign: TextAlign.center,
             style: TextStyle(color: YhColors.haze)),
         const SizedBox(height: 28),
@@ -107,9 +93,7 @@ class _AboutPageState extends ConsumerState<AboutPage> {
                       const Text('当前版本',
                           style: TextStyle(color: YhColors.haze)),
                       const SizedBox(height: 6),
-                      const Text(appVersion,
-                          style: TextStyle(
-                              fontSize: 26, fontWeight: FontWeight.w800)),
+                      Text(appVersion, style: YhType.latin(24, weight: FontWeight.w700)),
                       const SizedBox(height: 12),
                       const Text('开发演示版 · VPN 连接为模拟模式，尚未发布正式安装包。',
                           style: TextStyle(color: YhColors.starlight)),

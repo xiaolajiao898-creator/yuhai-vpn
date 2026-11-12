@@ -1,8 +1,15 @@
 package com.yuhai.yuhai_vpn
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
+import android.provider.Settings
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -19,8 +26,10 @@ import com.wireguard.crypto.KeyPair
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.net.URL
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.time.Instant
@@ -35,14 +44,33 @@ import javax.crypto.spec.GCMParameterSpec
  * Native WireGuard private keys never leave this class or appear in events.
  * 同一通道也承载出口（Xray 内核）连接：两种隧道共用同一个代次计数与单线程执行器，
  * 任何一次连接/断开都会先把另一种停掉，因此不会同时存在两条隧道。
+ *
+ * 生命周期：通道按进程只有一个（[attach]），隧道状态不随 Activity 销毁而丢失。
+ * Activity 销毁（例如从最近任务划掉）只调用 [detach] 解除界面绑定，不断开隧道；
+ * 重新打开后由新的 Activity 再 [attach]，仍可正常断开/重连这条隧道。
  */
-class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
-    companion object { const val PERMISSION_REQUEST = 23071 }
+class WireGuardChannel private constructor(private val appContext: Context) : MethodChannel.MethodCallHandler, EventChannel.StreamHandler {
+    companion object {
+        const val PERMISSION_REQUEST = 23071
+        @Volatile private var shared: WireGuardChannel? = null
+
+        /** 取得进程内唯一的通道并绑定到当前 Activity（主线程调用）。 */
+        fun attach(activity: Activity): WireGuardChannel {
+            val channel = synchronized(this) {
+                shared ?: WireGuardChannel(activity.applicationContext).also { shared = it }
+            }
+            channel.bind(activity)
+            return channel
+        }
+    }
+    /** 仅用于申请 VPN 权限（startActivityForResult）；界面不在时为 null。 */
+    @Volatile private var activity: Activity? = null
+    private var bound = false
     private val main = Handler(Looper.getMainLooper())
     private val executor = Executors.newSingleThreadExecutor()
     private val probes = Executors.newFixedThreadPool(4)
     private val generation = AtomicLong(0)
-    private val backend by lazy { GoBackend(activity.applicationContext) }
+    private val backend by lazy { GoBackend(appContext) }
     @Volatile private var sink: EventChannel.EventSink? = null
     private var permission: MethodChannel.Result? = null
     private var permissionInFlight = false
@@ -54,10 +82,12 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
     private var lastMono = 0L
     private var lastRx = 0L
     private var lastTx = 0L
-    private var connected = false
+    @Volatile private var connected = false
     @Volatile private var disposed = false
     private var xrayUp = false
     private var xraySamples = 0
+    private val networkEpoch = AtomicLong(0)
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     init {
         // 被系统或其他 VPN 应用接管：如实报告，不自动抢回。
@@ -65,14 +95,71 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             if (!disposed) try {
                 executor.execute {
                     val gen = generation.get(); val id = identity
-                    if (xrayUp && id != null) { try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }; event(gen, id, mapOf("type" to "error", "code" to "VPN_REVOKED")) }
+                    // 黑洞接口（断网保护）也由 XrayVpnService 承载：它被系统收回时同样要如实报告，
+                    // 否则界面还会说「已保护」。
+                    if ((xrayUp || XrayTunnel.holding) && id != null) { try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }; event(gen, id, mapOf("type" to "error", "code" to "VPN_REVOKED")) }
                 }
             } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) } // 执行器已关闭（页面已销毁）：隧道已随之停止
+        }
+        watchNetwork()
+    }
+
+    /**
+     * 只在「当前使用的物理网络」换了一个（Wi-Fi ↔ 移动数据、换了 Wi-Fi）时加一。
+     * - 不数 VPN 网络：WireGuard 连着时本应用的默认网络就是这条 VPN，黑洞接口接管时又变回
+     *   物理网络；拿它计数会把自己的重连当成「网络变了」，重连完又触发重连。
+     * - 不数后台网络：很多手机在 Wi-Fi 下仍保持移动数据在线，它的抖动不代表用户换了网络。
+     * Android 12 起用 registerBestMatchingNetworkCallback（请求默认带 NOT_VPN，跟的是系统选中的
+     * 物理网络）；更早的版本用本应用的默认网络回调并跳过 VPN（这时 WireGuard 连着期间的网络切换
+     * 看不到，由 WireGuard 自己漫游、断线自检兜底）。回调都在主线程，lastPhysical 不需要加锁。
+     */
+    private fun watchNetwork() {
+        try {
+            val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                private var lastPhysical: Network? = null
+                override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                    if (caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) return
+                    if (network != lastPhysical) { lastPhysical = network; networkEpoch.incrementAndGet() }
+                }
+                override fun onLost(network: Network) {
+                    if (network == lastPhysical) { lastPhysical = null; networkEpoch.incrementAndGet() }
+                }
+            }
+            networkCallback = callback
+            if (Build.VERSION.SDK_INT >= 31) {
+                val request = NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build()
+                cm.registerBestMatchingNetworkCallback(request, callback, main)
+            } else {
+                cm.registerDefaultNetworkCallback(callback, main)
+            }
+        } catch (t: Throwable) {
+            NativeFailures.rethrowIfFatal(t)
         }
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink) { sink = events }
     override fun onCancel(arguments: Any?) { sink = null }
+    /** 只在要取消的确实是当前监听者时才清空（旧界面的取消可能晚于新界面的监听）。 */
+    fun cancelSink(events: EventChannel.EventSink?) { if (events != null && sink === events) sink = null }
+
+    private fun bind(next: Activity) {
+        if (bound && activity !== next) {
+            // 新的界面（新的 Dart 引擎）从头计代次；旧引擎的在途结果因代次/身份不符而被丢弃。
+            generation.set(0)
+        }
+        activity = next; bound = true
+    }
+
+    /**
+     * Activity 销毁时只解除界面绑定：清掉事件监听、结束等待中的权限请求。
+     * 不停止隧道，不关闭执行器——VPN 由系统 VpnService 承载，应当在界面关闭后继续工作。
+     */
+    fun detach(old: Activity) {
+        if (activity !== old) return
+        activity = null; sink = null
+        permission?.success(false); permission = null; permissionInFlight = false
+    }
     private fun success(result: MethodChannel.Result, value: Any?) = main.post { result.success(value) }
     private fun failure(result: MethodChannel.Result, code: String) = main.post { result.error(code, "VPN operation failed", null) }
     private fun event(gen: Long, id: String, values: Map<String, Any>) = main.post {
@@ -85,10 +172,11 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
         when (call.method) {
             "prepare" -> {
                 if (permissionInFlight) { failure(result,"PERMISSION_DENIED"); return }
-                val intent = VpnService.prepare(activity)
-                if (intent == null) result.success(true) else {
+                val host = activity
+                val intent = VpnService.prepare(appContext)
+                if (intent == null) result.success(true) else if (host == null) failure(result,"PERMISSION_DENIED") else {
                     permission = result; permissionInFlight = true
-                    try { activity.startActivityForResult(intent, PERMISSION_REQUEST) }
+                    try { host.startActivityForResult(intent, PERMISSION_REQUEST) }
                     catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); permission = null; permissionInFlight = false; failure(result,"PERMISSION_DENIED") }
                 }
             }
@@ -125,6 +213,61 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                 if (!WireGuardPolicy.host(host) || port !in 1..65535 || timeout !in 1..5000) { result.success(null); return }
                 probes.execute { val start=SystemClock.elapsedRealtime(); try { Socket().use { it.connect(InetSocketAddress(host,port),timeout) };success(result,SystemClock.elapsedRealtime()-start) } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); success(result,null) } }
             }
+            "setLeakProtect" -> {
+                XrayTunnel.leakProtect = call.argument<Boolean>("enabled") == true
+                result.success(null)
+            }
+            "probeTunnel" -> probes.execute {
+                val ms = when {
+                    XrayTunnel.running -> XrayTunnel.probe()
+                    tunnel != null && connected -> httpsThroughTunnel()
+                    else -> null
+                }
+                success(result, ms)
+            }
+            "holdTraffic" -> executor.execute {
+                try { success(result, holdNow()) }
+                catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); success(result, false) }
+            }
+            // 界面重新打开（新的 Dart 引擎）时读一次：隧道或黑洞可能在界面关闭期间仍在。
+            "activeState" -> executor.execute {
+                try {
+                    val wg = tunnel != null
+                    val xray = xrayUp && XrayTunnel.running
+                    success(result, mapOf(
+                        "tunnel" to (wg || xray),
+                        "connected" to ((wg || xray) && connected),
+                        "held" to (!wg && !xray && XrayTunnel.holding)))
+                } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); success(result, null) }
+            }
+            "releaseTraffic" -> executor.execute {
+                try { stop(); identity = null; success(result, null) }
+                catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); failure(result, "DISCONNECT_FAILED") }
+            }
+            "networkEpoch" -> result.success(networkEpoch.get())
+            "lockdownState" -> {
+                val svc = XrayTunnel.serviceOrNull()
+                if (svc == null) {
+                    result.success(mapOf("running" to false, "alwaysOn" to false, "lockdown" to false))
+                } else {
+                    // VpnService.isAlwaysOn / isLockdownEnabled 都是 API 29 才有；更早的系统读不到，按 false 报。
+                    val alwaysOn = Build.VERSION.SDK_INT >= 29 && svc.isAlwaysOn
+                    val lockdown = Build.VERSION.SDK_INT >= 29 && svc.isLockdownEnabled
+                    result.success(mapOf("running" to true, "alwaysOn" to alwaysOn, "lockdown" to lockdown))
+                }
+            }
+            "openVpnSettings" -> {
+                try {
+                    val intent = Intent(Settings.ACTION_VPN_SETTINGS)
+                    val host = activity
+                    if (host != null) host.startActivity(intent)
+                    else appContext.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    result.success(true)
+                } catch (t: Throwable) {
+                    NativeFailures.rethrowIfFatal(t)
+                    result.success(false)
+                }
+            }
             else -> result.notImplemented()
         }
     }
@@ -136,7 +279,51 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
         try { tunnel?.let { backend.setState(it,Tunnel.State.DOWN,null) } }
         finally {
             tunnel=null;peerKey=null;connected=false
-            if (xrayUp) { xrayUp=false; XrayTunnel.stop(activity.applicationContext) }
+            xrayUp=false
+            // 黑洞接口也由 XrayTunnel 持有，即使这次没有跑 Xray 也要一并拆掉。
+            XrayTunnel.stop(appContext)
+        }
+    }
+    /**
+     * 拦住其他应用的流量：黑洞接口先接管系统 VPN，再拆当前隧道（WireGuard 或 Xray 内核）。
+     * 黑洞没建起来时不拆 WireGuard：一条死掉的 WireGuard 接口照样不放流量出去。
+     */
+    private fun holdNow(): Boolean {
+        val held = XrayTunnel.hold(appContext)
+        if (held) {
+            try { tunnel?.let { backend.setState(it, Tunnel.State.DOWN, null) } } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+            tunnel = null
+            peerKey = null
+        }
+        connected = false
+        xrayUp = false
+        return held
+    }
+    /** 重连：保护开启时先架黑洞再拆当前隧道。用户点断开才走 stop。 */
+    private fun pauseForReconnect() {
+        if (!XrayTunnel.leakProtect) { stop(); return }
+        if (!holdNow()) {
+            // 黑洞没建起来（多半是 VPN 权限已被拿走）：只能直接拆，紧接着建新隧道。
+            try { tunnel?.let { backend.setState(it, Tunnel.State.DOWN, null) } } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+            tunnel = null
+            peerKey = null
+        }
+    }
+    /** 只在 WireGuard 隧道已经起来时调用。本应用流量会进隧道，不会走物理网卡。 */
+    private fun httpsThroughTunnel(): Long? {
+        val start = SystemClock.elapsedRealtime()
+        return try {
+            val conn = URL("https://www.gstatic.com/generate_204").openConnection() as HttpURLConnection
+            conn.instanceFollowRedirects = false
+            conn.connectTimeout = 8000
+            conn.readTimeout = 8000
+            conn.requestMethod = "GET"
+            val code = conn.responseCode
+            conn.disconnect()
+            if (code == 204 || code == 200) SystemClock.elapsedRealtime() - start else null
+        } catch (t: Throwable) {
+            NativeFailures.rethrowIfFatal(t)
+            null
         }
     }
     private fun connectXray(call: MethodCall, result: MethodChannel.Result, gen: Long) {
@@ -144,21 +331,22 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             if (gen != generation.get()) { failure(result,"CONNECT_FAILED"); return }
             val profile = try { XrayPolicy.parse(call.arguments as? Map<*, *> ?: emptyMap<Any,Any>(), System.currentTimeMillis()) }
                 catch (t: Throwable) { NativeFailures.rethrowIfFatal(t); failure(result,"PROFILE_INVALID"); return }
-            if (VpnService.prepare(activity) != null) { failure(result,"PERMISSION_DENIED"); return }
-            stop()
+            if (VpnService.prepare(appContext) != null) { failure(result,"PERMISSION_DENIED"); return }
+            pauseForReconnect()
             if (gen != generation.get()) { failure(result,"CONNECT_FAILED"); return }
             val id = profile.identity
             identity=id;startedAt=System.currentTimeMillis();startedMono=SystemClock.elapsedRealtime();lastMono=startedMono;lastRx=0;lastTx=0;xraySamples=0
             event(gen,id,mapOf("type" to "status","status" to "connecting"))
             xrayUp = true
-            XrayTunnel.start(activity.applicationContext, profile.config)
+            XrayTunnel.start(appContext, profile.config)
             if (gen != generation.get()) { stop();failure(result,"CONNECT_FAILED");return }
             success(result,null)
             confirmXray(gen,id)
             main.postDelayed({ sampleXray(gen,id) },1000)
         } catch (t: Throwable) {
             NativeFailures.rethrowIfFatal(t)
-            try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+            try { if (XrayTunnel.leakProtect) holdNow() else stop() }
+            catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
             failure(result, NativeFailures.code(t))
         }
     }
@@ -177,7 +365,9 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                     connected = true; startedMono = SystemClock.elapsedRealtime()
                     event(gen,id,mapOf("type" to "status","status" to "connected","handshakeConfirmed" to true,"handshakeAt" to Instant.ofEpochMilli(now).toString()))
                 } else {
-                    try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+                    try {
+                        if (XrayTunnel.leakProtect) holdNow() else stop()
+                    } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
                     event(gen,id,mapOf("type" to "error","code" to "HANDSHAKE_TIMEOUT"))
                 }
             }
@@ -191,7 +381,9 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             try {
                 if (gen != generation.get() || !xrayUp) return@execute
                 if (!XrayTunnel.running) {
-                    try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+                    try {
+                        if (XrayTunnel.leakProtect) holdNow() else stop()
+                    } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
                     event(gen,id,mapOf("type" to "error","code" to "NETWORK_UNAVAILABLE")); return@execute
                 }
                 val (up, down) = XrayTunnel.traffic()
@@ -200,10 +392,10 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                     val mono = SystemClock.elapsedRealtime(); val delta = (mono - lastMono).coerceAtLeast(1)
                     event(gen,id,mapOf("type" to "stats","upBytes" to lastTx,"downBytes" to lastRx,"upSpeed" to up*1000/delta,"downSpeed" to down*1000/delta,"since" to startedAt))
                     lastMono = mono
-                    // 每分钟经出口复核一次；连不上就如实进入「重连中」，恢复后重新确认。
-                    if (++xraySamples % 60 == 0) try { probes.execute {
+                    // 大约每 20 秒经出口复核。保护开启时不拆接口，交给 Dart 决定重连。
+                    if (++xraySamples % 20 == 0) try { probes.execute {
                         if (XrayTunnel.probe() == null) later {
-                            if (gen == generation.get() && xrayUp && connected) {
+                            if (gen == generation.get() && xrayUp && connected && !XrayTunnel.leakProtect) {
                                 connected = false; startedAt = System.currentTimeMillis()
                                 event(gen,id,mapOf("type" to "status","status" to "reconnecting"))
                                 confirmXray(gen,id)
@@ -214,7 +406,8 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                 main.postDelayed({ sampleXray(gen,id) },1000)
             } catch (t: Throwable) {
                 NativeFailures.rethrowIfFatal(t)
-                try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+                try { if (XrayTunnel.leakProtect) holdNow() else stop() }
+                catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
                 val code = if (NativeFailures.code(t) == "ENGINE_NATIVE") "ENGINE_NATIVE" else "NETWORK_UNAVAILABLE"
                 event(gen,id,mapOf("type" to "error","code" to code))
             }
@@ -227,7 +420,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             val profile = WireGuardPolicy.parse(call.arguments as? Map<*, *> ?: emptyMap<Any,Any>(), System.currentTimeMillis())
             val id = profile.identity
             val expires = profile.expires
-            if(VpnService.prepare(activity)!=null) { failure(result,"PERMISSION_DENIED"); return }
+            if(VpnService.prepare(appContext)!=null) { failure(result,"PERMISSION_DENIED"); return }
             val key = Key.fromBase64(profile.publicKey)
             val pair = profile.issuedPrivateKey?.let { KeyPair(Key.fromBase64(it)) } ?: keyPair(id)
             require(key != pair.publicKey)
@@ -237,7 +430,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             // Route both families into the tunnel: IPv6 cannot silently bypass it.
             val peer=Peer.Builder().setPublicKey(key).parseEndpoint(endpoint).parseAllowedIPs("0.0.0.0/0, ::/0").setPersistentKeepalive(25).build()
             val config=Config.Builder().setInterface(iface).addPeer(peer).build()
-            stop()
+            pauseForReconnect()
             if(gen != generation.get() || expires<=System.currentTimeMillis()) { failure(result,"PROFILE_EXPIRED"); return }
             identity=id;startedAt=System.currentTimeMillis();startedMono=SystemClock.elapsedRealtime();lastMono=startedMono;lastRx=0;lastTx=0
             val current=object: Tunnel {
@@ -249,12 +442,17 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
             owned=current;tunnel=current;peerKey=key
             event(gen,id,mapOf("type" to "status","status" to "connecting"))
             backend.setState(current,Tunnel.State.UP,config)
+            // WireGuard 的接口已经接管系统 VPN，之前的黑洞 TUN 只剩失效的 fd。
+            XrayTunnel.superseded()
             if(gen != generation.get()) { stop();failure(result,"CONNECT_FAILED");return }
             success(result,null)
             main.postDelayed({ sample(gen,id,current) },1000)
         } catch (t: Throwable) {
             NativeFailures.rethrowIfFatal(t)
-            if(owned!=null && tunnel===owned) { try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) } }
+            if(owned!=null && tunnel===owned) {
+                try { if (XrayTunnel.leakProtect) holdNow() else stop() }
+                catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+            }
             failure(result, NativeFailures.code(t))
         }
     }
@@ -273,11 +471,16 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
                     event(gen,id,mapOf("type" to "stats","upBytes" to tx,"downBytes" to rx,"upSpeed" to ((tx-lastTx).coerceAtLeast(0)*1000/delta),"downSpeed" to ((rx-lastRx).coerceAtLeast(0)*1000/delta),"since" to startedAt))
                     lastRx=rx;lastTx=tx;lastMono=mono
                 }
-                if(!connected && mono-startedMono>30000) { stop();event(gen,id,mapOf("type" to "error","code" to "HANDSHAKE_TIMEOUT"));return@execute }
-                if(connected && handshake>0 && now-handshake>180000) { connected=false;startedMono=mono;startedAt=now;event(gen,id,mapOf("type" to "status","status" to "reconnecting")) }
+                if(!connected && mono-startedMono>30000) {
+                    try { if (XrayTunnel.leakProtect) holdNow() else stop() }
+                    catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+                    event(gen,id,mapOf("type" to "error","code" to "HANDSHAKE_TIMEOUT"));return@execute
+                }
+                if(connected && handshake>0 && now-handshake>180000 && !XrayTunnel.leakProtect) { connected=false;startedMono=mono;startedAt=now;event(gen,id,mapOf("type" to "status","status" to "reconnecting")) }
             } catch (t: Throwable) {
                 NativeFailures.rethrowIfFatal(t)
-                try { stop() } catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
+                try { if (XrayTunnel.leakProtect) holdNow() else stop() }
+                catch (stopError: Throwable) { NativeFailures.rethrowIfFatal(stopError) }
                 val code = if (NativeFailures.code(t) == "ENGINE_NATIVE") "ENGINE_NATIVE" else "NETWORK_UNAVAILABLE"
                 event(gen,id,mapOf("type" to "error","code" to code));return@execute
             }
@@ -286,7 +489,7 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
     }
     private fun keyPair(id: String): KeyPair {
         val hash=MessageDigest.getInstance("SHA-256").digest(id.toByteArray()).joinToString("") { "%02x".format(it) }
-        val alias="yuhai.wg.$hash";val prefs=activity.getSharedPreferences("yuhai.wg",0)
+        val alias="yuhai.wg.$hash";val prefs=appContext.getSharedPreferences("yuhai.wg",0)
         val ks=KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
         if(!ks.containsAlias(alias)) {
             check(!prefs.contains(hash)) // missing wrapping key must not silently rotate a live peer
@@ -313,6 +516,13 @@ class WireGuardChannel(private val activity: Activity) : MethodChannel.MethodCal
     fun dispose() {
         disposed=true;generation.incrementAndGet();permission?.success(false);permission=null;sink=null
         XrayTunnel.onRevoked = null
+        networkCallback?.let { callback ->
+            try {
+                val cm = appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                cm.unregisterNetworkCallback(callback)
+            } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) }
+        }
+        networkCallback = null
         executor.execute { try { stop() } catch (t: Throwable) { NativeFailures.rethrowIfFatal(t) } };executor.shutdown();probes.shutdownNow()
     }
 }

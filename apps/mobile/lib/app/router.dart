@@ -27,6 +27,7 @@ import '../features/payment/data/orders_api.dart';
 import '../features/payment/presentation/orders_page.dart';
 import '../features/payment/presentation/pay_page.dart';
 import '../features/payment/presentation/pay_result_page.dart';
+import '../core/widgets/brand.dart';
 import 'theme/tokens.dart';
 
 /// 路由表与方案 9.4 页面编号一一对应；页面文件在各 feature/presentation 下逐周补齐。
@@ -162,48 +163,21 @@ class YuhaiSplash extends StatelessWidget {
   const YuhaiSplash({super.key});
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
     return Scaffold(
-      body: Center(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Container(
-            width: 72,
-            height: 72,
-            decoration: BoxDecoration(
-              color: YhColors.accent,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const CustomPaint(painter: _WaveMark()),
-          ),
-          const SizedBox(height: 16),
-          Text('宇海VPN', style: text.headlineMedium),
-        ]),
+      body: TideBackdrop(
+        linesTop: 0.64,
+        child: Center(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            const BrandMark(size: 84),
+            const SizedBox(height: 22),
+            Text('宇海VPN', style: YhType.display(44)),
+            const SizedBox(height: 10),
+            Text('YUHAI VPN · 为宇海社区而生', style: YhType.eyebrow(color: YhColors.sub)),
+          ]),
+        ),
       ),
     );
   }
-}
-
-class _WaveMark extends CustomPainter {
-  const _WaveMark();
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = YhColors.buttonInk
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3
-      ..strokeCap = StrokeCap.round;
-    for (var i = 0; i < 3; i++) {
-      final y = size.height * (0.34 + i * 0.16);
-      final path = Path()
-        ..moveTo(size.width * 0.2, y)
-        ..quadraticBezierTo(size.width * 0.35, y - 8, size.width * 0.5, y)
-        ..quadraticBezierTo(size.width * 0.65, y + 8, size.width * 0.8, y);
-      canvas.drawPath(path, paint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class _Notifier extends ChangeNotifier {

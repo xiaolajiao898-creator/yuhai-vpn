@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
+import '../../../core/widgets/brand.dart';
 import '../../home/data/me_api.dart';
 import '../../home/presentation/account_summary.dart';
 import '../data/orders_api.dart';
@@ -20,35 +21,48 @@ class PayResultPage extends ConsumerWidget {
     final text = Theme.of(context).textTheme;
     final credited = order?.fulfillmentResult == 'CREDITED_TO_BALANCE';
     return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: YhSpace.page),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Spacer(),
-              Icon(credited ? Icons.account_balance_wallet_outlined : Icons.check_circle_outline, color: YhColors.glow, size: 56),
-              const SizedBox(height: YhSpace.page),
-              Text(credited ? '款项已存入余额' : '已开通', style: text.headlineMedium?.copyWith(color: YhColors.glow)),
-              const SizedBox(height: YhSpace.unit),
-              if (credited)
-                Text('套餐当时无法开通（例如主套餐已到期），金额已转入余额，可随时用余额重新购买。', style: text.bodyMedium?.copyWith(color: YhColors.haze))
-              else
-                me.when(
-                  data: (m) {
-                    final ent = m['entitlement'] as Map<String, dynamic>? ?? const {};
-                    final exp = formatExpiryLocal(ent['expire_at'] as String?);
-                    return Text(exp != '—' ? '${planLabel(ent)} · 到期 $exp' : '${order?.planName ?? ''} 已生效', style: text.bodyMedium?.copyWith(color: YhColors.haze));
-                  },
-                  loading: () => Text('正在同步…', style: text.labelSmall),
-                  error: (_, __) => const SizedBox.shrink(),
+      body: TideBackdrop(
+        linesTop: 0.66,
+        glow: 1.3,
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: YhSpace.page),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Spacer(),
+                Container(
+                  width: 72,
+                  height: 72,
+                  decoration: const BoxDecoration(color: YhColors.accent, shape: BoxShape.circle),
+                  child: Icon(credited ? Icons.account_balance_wallet_outlined : Icons.check_rounded,
+                      color: YhColors.buttonInk, size: 38),
                 ),
-              const SizedBox(height: YhSpace.unit),
-              Text('订单号 $orderNo', style: text.labelSmall?.copyWith(fontFamily: YhFont.numeric)),
-              const Spacer(),
-              FilledButton(onPressed: () => context.go(Routes.home), child: Text(credited ? '返回首页' : '开始连接')),
-              const SizedBox(height: YhSpace.page),
-            ],
+                const SizedBox(height: YhSpace.page),
+                Eyebrow(credited ? 'BALANCE · 已入余额' : 'ACTIVATED · 开通成功'),
+                const SizedBox(height: 12),
+                Text(credited ? '款项已存入余额' : '已开通',
+                    style: YhType.display(credited ? 38 : 60, color: YhColors.accentInk, height: 1.05)),
+                const SizedBox(height: YhSpace.unit),
+                if (credited)
+                  Text('套餐当时无法开通（例如主套餐已到期），金额已转入余额，可随时用余额重新购买。', style: text.bodyMedium?.copyWith(color: YhColors.haze))
+                else
+                  me.when(
+                    data: (m) {
+                      final ent = m['entitlement'] as Map<String, dynamic>? ?? const {};
+                      final exp = formatExpiryLocal(ent['expire_at'] as String?);
+                      return Text(exp != '—' ? '${planLabel(ent)} · 到期 $exp' : '${order?.planName ?? ''} 已生效', style: text.bodyMedium?.copyWith(color: YhColors.ink));
+                    },
+                    loading: () => Text('正在同步…', style: text.labelSmall),
+                    error: (_, __) => const SizedBox.shrink(),
+                  ),
+                const SizedBox(height: YhSpace.unit),
+                Text('订单号 $orderNo', style: text.labelSmall?.copyWith(fontFamily: YhFont.numeric)),
+                const Spacer(),
+                FilledButton(onPressed: () => context.go(Routes.home), child: Text(credited ? '返回首页' : '开始连接')),
+                const SizedBox(height: YhSpace.page),
+              ],
+            ),
           ),
         ),
       ),

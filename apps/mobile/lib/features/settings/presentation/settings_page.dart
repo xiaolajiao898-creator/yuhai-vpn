@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/brand.dart';
 import '../../../app/providers.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
+import '../../../core/support_config.dart';
 import '../../account/presentation/support_sheet.dart';
 import '../../account/data/account_api.dart';
 import '../../home/data/me_api.dart';
@@ -17,7 +19,7 @@ class SettingsPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final me = ref.watch(meProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('设置')),
+      appBar: AppBar(title: const Text('设置'), backgroundColor: Colors.transparent),
       body: me.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) =>
@@ -39,30 +41,29 @@ class SettingsPage extends ConsumerWidget {
               padding:
                   const EdgeInsets.fromLTRB(YhSpace.page, 8, YhSpace.page, 32),
               children: [
-                SettingsPanel(
-                    child: Padding(
-                  padding: const EdgeInsets.all(YhSpace.panel),
-                  child: Row(children: [
-                    const CircleAvatar(
-                        radius: 25,
-                        backgroundColor: YhColors.reef,
-                        child: Icon(Icons.person_outline,
-                            color: YhColors.moonlight)),
-                    const SizedBox(width: 16),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.fromLTRB(22, 22, 22, 20),
+                  decoration: BoxDecoration(
+                    color: YhColors.accent,
+                    borderRadius: BorderRadius.circular(YhRadius.surface),
+                  ),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                     Expanded(
                         child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
+                          const Eyebrow('ACCOUNT · 我的', color: YhColors.buttonInk),
+                          const SizedBox(height: 14),
                           Text('宇海VPN',
-                              style: Theme.of(context).textTheme.titleLarge),
-                          const SizedBox(height: 4),
+                              style: YhType.display(24, color: YhColors.buttonInk)),
+                          const SizedBox(height: 6),
                           Text('${data['account_no'] ?? '—'}',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  letterSpacing: 1)),
+                              style: YhType.latin(24, color: YhColors.buttonInk, spacing: 1)),
                         ])),
+                    const BrandMarkInverse(size: 54),
                   ]),
-                )),
+                ),
                 const SizedBox(height: 24),
                 SettingsPanel(
                     child: Column(children: [
@@ -130,12 +131,14 @@ class SettingsPage extends ConsumerWidget {
                       title: '关于宇海VPN',
                       subtitle: appVersion,
                       onTap: () => context.push(Routes.about)),
-                  const Divider(height: 1),
-                  SettingsRow(
-                      icon: Icons.support_agent_outlined,
-                      title: '联系客服',
-                      subtitle: 'Telegram',
-                      onTap: () => showSupportSheet(context)),
+                  if (kSupportAvailable) ...[
+                    const Divider(height: 1),
+                    SettingsRow(
+                        icon: Icons.support_agent_outlined,
+                        title: '联系客服',
+                        subtitle: 'Telegram',
+                        onTap: () => showSupportSheet(context)),
+                  ],
                 ])),
               ],
             ),

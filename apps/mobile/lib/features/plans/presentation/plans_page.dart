@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
+import '../../../core/widgets/brand.dart';
 import '../../../core/network/api_client.dart';
 import '../../../core/support_config.dart';
 import '../../account/data/trial_api.dart';
@@ -21,7 +22,10 @@ class PlansPage extends ConsumerWidget {
     final text = Theme.of(context).textTheme;
     return Scaffold(
       appBar: AppBar(title: const Text('套餐'), backgroundColor: Colors.transparent),
-      body: plans.when(
+      body: TideBackdrop(
+        linesTop: 0.9,
+        glow: 0.7,
+        child: plans.when(
         loading: () => const _PlansSkeleton(),
         error: (_, __) => _PlansMessage(
           icon: Icons.cloud_off_outlined,
@@ -30,7 +34,7 @@ class PlansPage extends ConsumerWidget {
           primary: '重试',
           onPrimary: () => ref.invalidate(plansProvider),
           secondary: '联系客服',
-          onSecondary: () => showSupportSheet(context),
+          onSecondary: kSupportAvailable ? () => showSupportSheet(context) : null,
         ),
         data: (list) {
           final time = list.where((p) => p.type == 'TIME').toList()
@@ -50,7 +54,7 @@ class PlansPage extends ConsumerWidget {
                   primary: '重试',
                   onPrimary: () => ref.invalidate(plansProvider),
                   secondary: '联系客服',
-                  onSecondary: () => showSupportSheet(context),
+                  onSecondary: kSupportAvailable ? () => showSupportSheet(context) : null,
                 ),
               ),
             ]);
@@ -63,11 +67,13 @@ class PlansPage extends ConsumerWidget {
             padding: const EdgeInsets.fromLTRB(YhSpace.page, 8, YhSpace.page, 32),
             children: [
               const _TrialOffer(),
-              Text('选择时长', style: text.titleLarge),
-              const SizedBox(height: 6),
+              const Eyebrow('PLANS · 选择时长'),
+              const SizedBox(height: 10),
+              Text('选择时长', style: YhType.display(38)),
+              const SizedBox(height: 8),
               Text('用 USDT 付款。不自动续费，到期即停。到账后自动开通。',
                   style: text.bodyMedium?.copyWith(color: YhColors.sub)),
-              const SizedBox(height: 16),
+              const SizedBox(height: 20),
               if (time.isEmpty)
                 Text('现在没有按时长卖的套餐。', style: text.bodyMedium)
               else
@@ -102,6 +108,7 @@ class PlansPage extends ConsumerWidget {
             ],
           );
         },
+      ),
       ),
     );
   }
@@ -200,26 +207,41 @@ class _TrialCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 22),
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
         decoration: BoxDecoration(
-          color: YhColors.accent.withValues(alpha: 0.12),
+          color: YhColors.accent,
           borderRadius: BorderRadius.circular(YhRadius.surface),
-          border: Border.all(color: YhColors.accent.withValues(alpha: 0.45)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(title, style: text.titleLarge?.copyWith(color: YhColors.accent)),
+          Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(child: Text(title, style: YhType.display(26, color: YhColors.buttonInk))),
+            const SizedBox(width: 10),
+            Text('24H', style: YhType.latin(22, color: YhColors.buttonInk)),
+          ]),
           const SizedBox(height: 6),
-          Text(body, style: text.bodyMedium),
+          Text(body, style: text.bodyMedium?.copyWith(color: YhColors.buttonInk.withValues(alpha: 0.82))),
           if (error != null) ...[
             const SizedBox(height: 8),
-            Text(error!, style: text.bodyMedium?.copyWith(color: YhColors.danger)),
+            Text(error!, style: text.bodyMedium?.copyWith(color: const Color(0xFF8A1F0E), fontWeight: FontWeight.w600)),
           ],
           if (action != null) ...[
-            const SizedBox(height: 12),
-            action!,
+            const SizedBox(height: 14),
+            Theme(
+              data: Theme.of(context).copyWith(
+                filledButtonTheme: FilledButtonThemeData(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: YhColors.buttonInk,
+                    foregroundColor: YhColors.accent,
+                    minimumSize: const Size.fromHeight(52),
+                    shape: const StadiumBorder(),
+                  ),
+                ),
+              ),
+              child: SizedBox(width: double.infinity, child: action!),
+            ),
           ],
         ]),
       ),
@@ -262,52 +284,52 @@ class _PlanCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    final border = recommended ? YhColors.accent : YhColors.line;
+    final ink = recommended ? YhColors.buttonInk : YhColors.ink;
+    final soft = recommended ? YhColors.buttonInk.withValues(alpha: 0.72) : YhColors.sub;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: Material(
-        color: recommended ? YhColors.accent.withValues(alpha: 0.08) : YhColors.paper,
+        color: recommended ? YhColors.accent : YhColors.paper,
         shape: RoundedRectangleBorder(
-          side: BorderSide(color: border, width: recommended ? 1.5 : 1),
+          side: BorderSide(color: recommended ? YhColors.accent : YhColors.hair),
           borderRadius: BorderRadius.circular(YhRadius.surface),
         ),
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
           child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(
-                  child: Row(children: [
-                    Flexible(child: Text(plan.name, style: text.titleLarge)),
+            padding: const EdgeInsets.fromLTRB(22, 20, 20, 20),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Flexible(child: Text(plan.name, style: YhType.display(30, color: ink))),
                     if (recommended) ...[
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
                         decoration: BoxDecoration(
-                          color: YhColors.accent,
+                          color: YhColors.buttonInk,
                           borderRadius: BorderRadius.circular(YhRadius.tag),
                         ),
                         child: Text(plan.badge ?? '推荐',
-                            style: text.labelSmall?.copyWith(color: YhColors.buttonInk, fontWeight: FontWeight.w700)),
+                            style: text.labelSmall?.copyWith(color: YhColors.accentInk, fontWeight: FontWeight.w700)),
                       ),
                     ] else if (plan.badge != null) ...[
                       const SizedBox(width: 8),
-                      Text(plan.badge!, style: text.labelSmall?.copyWith(color: YhColors.accent)),
+                      Text(plan.badge!, style: text.labelSmall?.copyWith(color: YhColors.accentInk)),
                     ],
                   ]),
-                ),
-                const SizedBox(width: 12),
-                Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                  Text(plan.listPrice,
-                      style: text.headlineMedium?.copyWith(
-                          fontFeatures: const [FontFeature.tabularFigures()])),
-                  Text('USDT', style: text.labelSmall),
+                  const SizedBox(height: 8),
+                  Text(_meta, style: text.bodySmall?.copyWith(color: soft, height: 1.5)),
                 ]),
+              ),
+              const SizedBox(width: 12),
+              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+                Text(plan.listPrice, style: YhType.latin(40, color: ink, height: 1)),
+                const SizedBox(height: 4),
+                Text('USDT', style: YhType.latin(11, color: soft, weight: FontWeight.w500, spacing: 2)),
               ]),
-              const SizedBox(height: 6),
-              Text(_meta, style: text.bodyMedium?.copyWith(color: YhColors.sub)),
             ]),
           ),
         ),
@@ -360,7 +382,9 @@ class _PlansMessage extends StatelessWidget {
   });
   final IconData icon;
   final String title, body, primary, secondary;
-  final VoidCallback onPrimary, onSecondary;
+  final VoidCallback onPrimary;
+  /// 为 null 时不显示次要按钮（例如未配置客服链接）。
+  final VoidCallback? onSecondary;
 
   @override
   Widget build(BuildContext context) {
@@ -370,18 +394,18 @@ class _PlansMessage extends StatelessWidget {
         padding: const EdgeInsets.all(YhSpace.page),
         child: Column(children: [
           const Spacer(),
-          Icon(icon, size: 48, color: YhColors.accent),
+          Icon(icon, size: 48, color: YhColors.accentInk),
           const SizedBox(height: 16),
           Text(title, style: text.headlineMedium, textAlign: TextAlign.center),
           const SizedBox(height: 8),
           Text(body, style: text.bodyMedium?.copyWith(color: YhColors.sub), textAlign: TextAlign.center),
           const SizedBox(height: 24),
           SizedBox(width: double.infinity, child: FilledButton(onPressed: onPrimary, child: Text(primary))),
-          const SizedBox(height: 8),
-          SizedBox(width: double.infinity, child: OutlinedButton(onPressed: onSecondary, child: Text(secondary))),
+          if (onSecondary != null) ...[
+            const SizedBox(height: 8),
+            SizedBox(width: double.infinity, child: OutlinedButton(onPressed: onSecondary, child: Text(secondary))),
+          ],
           const Spacer(),
-          Text(kSupportUrlIsPlaceholder ? '客服链接还没换成正式账号。' : '',
-              style: text.labelSmall, textAlign: TextAlign.center),
         ]),
       ),
     );

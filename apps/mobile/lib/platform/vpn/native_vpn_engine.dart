@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io' show Platform;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'egress_profile.dart';
@@ -58,6 +60,9 @@ class NativeVpnEngine implements WireGuardVpnEngine {
   DateTime? _startedAt;
   VpnStatus _current = VpnStatus.disconnected;
   Timer? _handshakeTimeout;
+
+  /// 断网保护。由连接控制器在每次连接前通过 [applyPolicy] 设定，默认开启。
+  bool _leakProtect = true;
 
   @override
   bool get canProbe => !_disposed;
@@ -172,6 +177,16 @@ class NativeVpnEngine implements WireGuardVpnEngine {
               _current != VpnStatus.reconnecting)) {
         return;
       }
+      if (canRecover && _leakProtect) {
+        // 断网保护开着：超时不等于用户断开，不能整条拆掉（那会把流量放回本地网络）。
+        // 让黑洞接口接管，再报超时，由连接控制器决定重连还是继续拦着。
+        unawaited(holdTraffic().whenComplete(() {
+          if (!_disposed && generation == _generation) {
+            _failure('HANDSHAKE_TIMEOUT');
+          }
+        }));
+        return;
+      }
       // Invalidate late native handshakes before requesting teardown.
       final stopped = disconnect();
       final stoppingGeneration = _generation;
@@ -228,6 +243,76 @@ class NativeVpnEngine implements WireGuardVpnEngine {
           : null;
     } catch (_) {
       return null;
+    }
+  }
+
+  @override
+  bool get canRecover => !kIsWeb && Platform.isAndroid;
+
+  @override
+  Future<void> applyPolicy({required bool leakProtect}) async {
+    _leakProtect = leakProtect;
+    if (!canRecover) return;
+    try {
+      await _invoke<void>('setLeakProtect', {'enabled': leakProtect});
+    } catch (_) {}
+  }
+
+  @override
+  Future<int?> probeTunnel() async {
+    if (!canRecover) return null;
+    try {
+      final result = await _invoke<int>('probeTunnel', {})
+          .timeout(const Duration(seconds: 8));
+      if (result == null || result < 0 || result > 15000) return null;
+      return result;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<bool> holdTraffic() async {
+    if (!canRecover) return false;
+    try {
+      return await _invoke<bool>('holdTraffic', {}) == true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  @override
+  Future<void> releaseTraffic() async {
+    if (!canRecover) return;
+    try {
+      await _invoke<void>('releaseTraffic', {});
+    } catch (_) {}
+  }
+
+  /// 原生侧现在的状态。界面被划掉后隧道或黑洞接口仍可能在，新界面打开时读一次。
+  /// tunnel：WireGuard 隧道或 Xray 内核在跑；held：只剩黑洞接口拦着流量。拿不到时返回 null。
+  Future<({bool tunnel, bool connected, bool held})?> activeState() async {
+    if (!canRecover) return null;
+    try {
+      final raw = await _invoke<Map<Object?, Object?>>('activeState', {})
+          .timeout(const Duration(seconds: 5));
+      final tunnel = raw?['tunnel'];
+      final connected = raw?['connected'];
+      final held = raw?['held'];
+      if (tunnel is! bool || connected is! bool || held is! bool) return null;
+      return (tunnel: tunnel, connected: connected, held: held);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<int> networkEpoch() async {
+    if (!canRecover) return 0;
+    try {
+      return await _invoke<int>('networkEpoch', {}) ?? 0;
+    } catch (_) {
+      return 0;
     }
   }
 

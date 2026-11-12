@@ -20,6 +20,13 @@ class XrayPolicyTest {
         "identity" to "123:456", "generation" to 7, "egressId" to "e12", "protocol" to "TROJAN",
         "config" to config, "expiresAt" to "2026-10-28T01:00:00.000Z")
 
+    @Test fun keepsInterfaceUntilReplacementIsReady() {
+        assertEquals(InterfaceStep.ReplaceOld, interfaceStep(true, newReady = true, oldOpen = true))
+        assertEquals(InterfaceStep.KeepOld, interfaceStep(true, newReady = false, oldOpen = true))
+        assertEquals(InterfaceStep.FailClosed, interfaceStep(true, newReady = false, oldOpen = false))
+        assertEquals(InterfaceStep.Release, interfaceStep(false, newReady = false, oldOpen = true))
+    }
+
     @Test fun acceptsServerShapedProfile() {
         val p = XrayPolicy.parse(args(), now)
         assertEquals("e12", p.egressId)

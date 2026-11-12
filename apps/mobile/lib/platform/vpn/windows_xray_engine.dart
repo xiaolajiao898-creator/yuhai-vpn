@@ -3,8 +3,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'egress_profile.dart';
+import 'network_epoch.dart';
+import 'tunnel_host_pins.dart';
 import 'vpn_engine.dart';
 import 'windows_job.dart';
+import 'windows_traffic_guard.dart';
 import 'windows_wireguard_engine.dart';
 import 'windows_xray_config.dart';
 import 'windows_xray_process.dart';
@@ -39,8 +42,8 @@ enum _TunnelMode { idle, xray, wireGuard }
 /// Windows 出口引擎：校验服务端 Xray JSON，补上 TUN 字段后从标准输入交给 xray.exe。
 ///
 /// 配置不写磁盘。xray 被放进 Job Object，应用退出或崩溃时一起结束。只有从隧道地址
-/// 发出的 HTTPS 探测成功才报告已连接，之后每分钟复核一次。流量读 Wintun 网卡计数，
-/// 不在本机开 API 端口。
+/// 发出的 HTTPS 探测成功才报告已连接，之后大约每 20 秒复核一次。流量读 Wintun 网卡计数，
+/// 不在本机开 API 端口。断网保护用动态 WFP 会话，进程退出后规则消失。
 ///
 /// WireGuard 引擎仍可在确实存在 WireGuard 节点时被调用；没有这类节点时连接控制器
 /// 不会走到它，界面也不会提示去安装 WireGuard。
@@ -59,7 +62,9 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
     DateTime Function()? now,
     Duration pollInterval = const Duration(seconds: 1),
     Duration handshakeTimeout = const Duration(seconds: 25),
-    int recheckEvery = 60,
+    int recheckEvery = 20,
+    WindowsTrafficGuard? trafficGuard,
+    TunnelHostMemory? tunnelHosts,
   })  : _launch = launch ?? launchXrayProcess,
         _probe = probe ?? probeTunnelHttps,
         _readStats = readStats ?? readWindowsAdapterStats,
@@ -75,11 +80,21 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
         _now = now ?? DateTime.now,
         _pollInterval = pollInterval,
         _handshakeTimeout = handshakeTimeout,
-        _recheckEvery = recheckEvery {
+        _recheckEvery = recheckEvery,
+        _guard = trafficGuard ?? WindowsTrafficGuard(),
+        _tunnelHosts = tunnelHosts {
     final wireGuardEngine = _wireGuard;
     if (wireGuardEngine != null) {
+      // 握手超时会卸掉隧道服务（连同它自带的防火墙）。断网保护开着时先装好自己的规则。
+      wireGuardEngine.beforeTimeoutTeardown = () async {
+        if (_mode == _TunnelMode.wireGuard && _leakProtect) await _engageGuard();
+      };
       _wireGuardStatus = wireGuardEngine.status.listen((status) {
-        if (_mode == _TunnelMode.wireGuard) _set(status);
+        if (_mode != _TunnelMode.wireGuard) return;
+        // 新隧道已有握手：WireGuard 服务自带的防火墙从服务启动起就在拦隧道外的流量，
+        // 这时再撤掉重连期间的规则，中间没有空档。
+        if (status == VpnStatus.connected) _releaseRecoveryGuard();
+        _set(status);
       });
       _wireGuardStats = wireGuardEngine.stats.listen((stats) {
         if (_mode == _TunnelMode.wireGuard && !_disposed) _stats.add(stats);
@@ -106,6 +121,23 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
   final Duration _pollInterval;
   final Duration _handshakeTimeout;
   final int _recheckEvery;
+  final WindowsTrafficGuard _guard;
+
+  /// 记下隧道服务器域名的地址，断网保护拦着、系统查不到域名时用（见 tunnel_host_pins.dart）。
+  /// 为 null 时不做这件事，连接资料原样使用。
+  final TunnelHostMemory? _tunnelHosts;
+
+  /// 线路编号 → 线路列表里给的探测地址，由 [noteLineHosts] 交来。
+  Map<String, String> _lineHosts = const {};
+  Future<void>? _lineHostsLookup;
+
+  /// 一次最多预先查这么多个线路域名，免得列表很长时一直在后台查。
+  static const _maxLineLookups = 32;
+  final NetworkEpoch _epoch = NetworkEpoch();
+  bool _leakProtect = true;
+
+  /// 重连期间装上的拦截规则还在。新隧道确认可用后撤掉，用户断开时也撤掉。
+  bool _guarding = false;
 
   // 同步投递：探测结果返回时，等待方已经能读到新状态。
   final _status = StreamController<VpnStatus>.broadcast(sync: true);
@@ -131,6 +163,169 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   @override
   bool get canProbe => !_disposed;
+
+  @override
+  bool get canRecover => !_disposed && Platform.isWindows;
+
+  @override
+  Future<void> applyPolicy({required bool leakProtect}) async {
+    _leakProtect = leakProtect;
+  }
+
+  @override
+  Future<int?> probeTunnel() async {
+    if (_disposed) return null;
+    if (_mode == _TunnelMode.wireGuard) {
+      // WireGuard（自建节点、WorldVPN 批发线路）看握手：有 25 秒保活时大约每两分钟重新握手，
+      // 超过 200 秒没有新握手才算断（Reject-After-Time 是 180 秒）。返回值不是延迟，只表示会话有效。
+      final age = await _wireGuard?.handshakeAgeSeconds();
+      if (_disposed || _mode != _TunnelMode.wireGuard) return null;
+      if (age == null || age > 200) return null;
+      return 1;
+    }
+    if (_mode != _TunnelMode.xray || _process == null) return null;
+    final watch = Stopwatch()..start();
+    final ok = await _probe().catchError((Object _) => false);
+    watch.stop();
+    if (!ok) return null;
+    final ms = watch.elapsedMilliseconds;
+    if (ms < 0 || ms > 15000) return null;
+    return ms;
+  }
+
+  /// 只放行本程序、xray.exe 和 wireguard.exe（存在的才放进名单：
+  /// 不存在的文件取不到 AppId，整组规则会装不上）。
+  Future<bool> _engageGuard() async {
+    if (_disposed || !_leakProtect || !Platform.isWindows) return false;
+    final wireGuard = _wireGuard;
+    final permits = <String>[
+      Platform.resolvedExecutable,
+      '$_binaryDirectory\\xray.exe',
+      if (wireGuard != null) wireGuard.wireguardExePath,
+    ].where((path) => File(path).existsSync()).toList();
+    final held = await _guard.hold(permits);
+    if (held) _guarding = true;
+    return held;
+  }
+
+  void _releaseRecoveryGuard() {
+    if (!_guarding) return;
+    _guarding = false;
+    _guard.release();
+  }
+
+  /// 没拦着时：顺手记下 Xray 要连的服务器域名的地址，配置不变。
+  /// 拦着、系统又查不到这些域名时：把记下的地址写进这次的配置（`dns.hosts`），
+  /// 让 xray.exe 不经系统 DNS 也能连上；地址和 SNI 不变。改完的配置校验不过就用原样的。
+  Future<String> _pinXrayHosts(String runtime) async {
+    final memory = _tunnelHosts;
+    if (memory == null) return runtime;
+    final List<String> hosts;
+    try {
+      hosts = xrayProxyHosts(runtime);
+    } on FormatException {
+      return runtime;
+    }
+    if (hosts.isEmpty) return runtime;
+    if (!_guarding) {
+      unawaited(memory.remember(hosts));
+      return runtime;
+    }
+    final pins = await memory.pinsFor(hosts);
+    if (pins.isEmpty) return runtime;
+    try {
+      final pinned = pinXrayHosts(runtime, pins);
+      checkXrayServerConfig(pinned);
+      return pinned;
+    } on FormatException {
+      return runtime;
+    }
+  }
+
+  /// WireGuard 同理：拦着、查不到服务器域名时返回记下的 `IP:端口`，否则返回 null（照用资料里的）。
+  ///
+  /// 兜底：批发线路从没连过、域名也没记过时，用线路列表里这条线路的探测地址（批发线路给的是
+  /// 服务器 IP）。WireGuard 按公钥认服务器，IP 不对只会握手失败，不会连到别人那里。
+  /// 自建线路没有这个兜底：它的探测地址就是 endpoint 的主机，已经由 [noteLineHosts] 预先查过。
+  Future<String?> _pinnedWireGuardEndpoint(WireGuardProfile profile) async {
+    final endpoint = profile.endpoint;
+    final memory = _tunnelHosts;
+    final host = wireGuardEndpointHost(endpoint);
+    if (memory == null || host == null) return null;
+    if (!_guarding) {
+      unawaited(memory.remember([host]));
+      return null;
+    }
+    final addresses = (await memory.pinsFor([host]))[host];
+    if (addresses != null && addresses.isNotEmpty) {
+      return pinWireGuardEndpoint(endpoint, addresses.first);
+    }
+    if (profile.issuedPrivateKey == null ||
+        InternetAddress.tryParse(host) != null) {
+      return null;
+    }
+    final probe = _lineHosts['w${profile.nodeId}'];
+    final ip = probe == null ? null : InternetAddress.tryParse(probe);
+    return ip == null ? null : pinWireGuardEndpoint(endpoint, ip);
+  }
+
+  /// 连接控制器每次刷新线路列表后调用（线路编号 → 探测地址）：
+  /// - 记下各线路的探测地址，供上面批发线路的兜底使用；
+  /// - 没拦着时顺手查一遍其中的域名并记下：出口线路和自建线路的探测地址就是要连的服务器，
+  ///   重连时换到一条以前没连过的线路，拦着的时候也有 IP 可用。查过程在后台，不耽误连接。
+  void noteLineHosts(Map<String, String> hostByLine) {
+    final memory = _tunnelHosts;
+    if (memory == null || _disposed) return;
+    _lineHosts = Map.unmodifiable(hostByLine);
+    if (_guarding || _lineHostsLookup != null) return;
+    final hosts = hostByLine.values
+        .where((h) => InternetAddress.tryParse(h) == null)
+        .toSet()
+        .take(_maxLineLookups)
+        .toList();
+    if (hosts.isEmpty) return;
+    _lineHostsLookup =
+        memory.remember(hosts).whenComplete(() => _lineHostsLookup = null);
+  }
+
+  /// 拦住除本程序、xray.exe、wireguard.exe 以外的出站连接，然后停掉当前隧道：
+  /// WireGuard 隧道服务自带的防火墙会挡住本程序直连服务端取新的连接材料，必须在
+  /// 自己的规则装好之后卸掉；Xray 的 TUN 还在时本程序的请求会掉进那条已经不通的隧道。
+  /// 规则一直留到新隧道确认可用，或用户点「断开」。
+  @override
+  Future<bool> holdTraffic() async {
+    final held = await _engageGuard();
+    if (!held) return false;
+    if (_mode == _TunnelMode.wireGuard) {
+      _mode = _TunnelMode.idle;
+      try {
+        await _wireGuard?.disconnect();
+      } catch (_) {}
+    } else if (_mode == _TunnelMode.xray) {
+      await _stopXray();
+      _connectedAt = null;
+      _mode = _TunnelMode.idle;
+    }
+    return true;
+  }
+
+  @override
+  Future<void> releaseTraffic() async {
+    _guarding = false;
+    _guard.release();
+  }
+
+  @override
+  Future<int> networkEpoch() async {
+    if (_disposed || !Platform.isWindows) return 0;
+    try {
+      final interfaces = await NetworkInterface.list(
+          includeLinkLocal: false, includeLoopback: false);
+      return _epoch.observe(physicalInterfaceSignature(interfaces));
+    } catch (_) {
+      return _epoch.observe('');
+    }
+  }
 
   @override
   Stream<VpnStatus> get status => _status.stream;
@@ -180,9 +375,11 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
       if (!_allowWireGuard) {
         throw const FormatException('当前版本的 Windows 客户端请选择出口线路');
       }
+      final endpoint = await _pinnedWireGuardEndpoint(profile);
       await _stopXray();
       _mode = _TunnelMode.wireGuard;
-      await _wireGuard!.connect(profile);
+      final wireGuard = _wireGuard!..nextEndpointOverride = endpoint;
+      await wireGuard.connect(profile);
       return;
     }
     if (profile is! EgressProfile) {
@@ -191,12 +388,13 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
     if (!profile.expiresAt.isAfter(_now())) {
       throw const VpnFailure('PROFILE_EXPIRED', '连接资料已过期，请重新连接');
     }
-    final String runtime;
+    String runtime;
     try {
       runtime = windowsRuntimeConfig(profile.config);
     } on FormatException {
       throw const VpnFailure('PROFILE_INVALID', '线路连接资料无效，请换一条线路或联系客服');
     }
+    runtime = await _pinXrayHosts(runtime);
     final interfaceName = windowsRuntimeInterfaceName(runtime);
     final generation = ++_generation;
     await _stopXray();
@@ -249,11 +447,12 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
     }
     _process = spawned;
     _expectExit = false;
-    unawaited(spawned.exitCode.then((_) {
+    unawaited(spawned.exitCode.then((_) async {
       if (_disposed || generation != _generation || _expectExit) return;
       _expectExit = true;
       _ticker.stop();
       _process = null;
+      if (_leakProtect) await holdTraffic();
       _emitFailure(const VpnFailure('NETWORK_UNAVAILABLE', '网络暂不可用，请检查网络后重试'));
     }));
     await _sample(generation);
@@ -275,6 +474,8 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
           _connectedAt = _now();
           _samples = 0;
           _lastSample = null;
+          // 新的 TUN 已经接管默认路由并通过探测，这时再撤掉重连期间的拦截规则。
+          _releaseRecoveryGuard();
           _set(VpnStatus.connected);
           return;
         }
@@ -331,6 +532,8 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   Future<void> _failHandshake(int generation) async {
     if (generation != _generation) return;
+    if (_leakProtect) await holdTraffic();
+    if (generation != _generation) return;
     _expectExit = true;
     _ticker.stop();
     _process?.kill();
@@ -353,17 +556,20 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   @override
   Future<void> disconnect() async {
-    if (_mode == _TunnelMode.wireGuard) {
-      _mode = _TunnelMode.idle;
-      await _wireGuard?.disconnect();
-      return;
-    }
+    // 用户断开：先拆隧道（包括重连途中可能还装着的 WireGuard 隧道服务），最后才撤拦截规则。
+    // 重连不走这里：重连只停 xray / 卸隧道服务，规则一直留着。
+    final wasWireGuard = _mode == _TunnelMode.wireGuard;
     ++_generation;
-    _set(VpnStatus.disconnecting);
+    if (!wasWireGuard) _set(VpnStatus.disconnecting);
     await _stopXray();
     _connectedAt = null;
     _mode = _TunnelMode.idle;
-    _set(VpnStatus.disconnected);
+    try {
+      await _wireGuard?.disconnect();
+    } finally {
+      await releaseTraffic();
+    }
+    if (!wasWireGuard) _set(VpnStatus.disconnected);
   }
 
   @override
@@ -391,6 +597,7 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
     _ticker.stop();
     _process?.kill();
     _process = null;
+    _guard.release();
     unawaited(_supervisor.release());
     unawaited(_wireGuardStatus?.cancel() ?? Future<void>.value());
     unawaited(_wireGuardStats?.cancel() ?? Future<void>.value());

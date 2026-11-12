@@ -1,11 +1,14 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 
 import '../security/device_key.dart';
 import '../storage/session_store.dart';
+import 'api_address_memory.dart';
 import 'request_signer.dart';
 
 /// 统一 API 客户端（方案 11.1–11.2）：
@@ -19,7 +22,8 @@ class ApiClient {
       required this.deviceKey,
       required this.store,
       required this.appVersion,
-      required this.platform})
+      required this.platform,
+      ApiAddressMemory? addressMemory})
       : dio = Dio(BaseOptions(
           baseUrl: baseUrl,
           followRedirects: false,
@@ -32,7 +36,17 @@ class ApiClient {
             'Accept-Language': 'zh-CN'
           },
           validateStatus: (_) => true,
-        ));
+        )) {
+    // 只有 Windows 传入（见 providers.dart）：断网保护拦着时系统查不了域名，
+    // 用上次查到的地址直连 API。其余和 dio 默认的 HttpClient 一样（空闲连接 3 秒后关闭）。
+    if (addressMemory != null) {
+      dio.httpClientAdapter = IOHttpClientAdapter(
+        createHttpClient: () => HttpClient()
+          ..idleTimeout = const Duration(seconds: 3)
+          ..connectionFactory = addressMemory.connect,
+      );
+    }
+  }
 
   final Dio dio;
   final DeviceKey deviceKey;

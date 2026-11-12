@@ -4,7 +4,9 @@ import 'package:flutter/services.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../core/support_config.dart';
 
-Future<void> showSupportSheet(BuildContext context) {
+/// 未配置客服链接时什么也不做；调用方应先用 [kSupportAvailable] 隐藏入口。
+Future<void> showSupportSheet(BuildContext context) async {
+  if (!kSupportAvailable) return;
   return showModalBottomSheet<void>(
     context: context,
     showDragHandle: true,
@@ -17,9 +19,7 @@ Future<void> showSupportSheet(BuildContext context) {
             Text(kSupportLabel, style: text.headlineMedium),
             const SizedBox(height: 8),
             Text(
-              kSupportUrlIsPlaceholder
-                  ? '客服链接还没换成正式的 Telegram。可以先复制保存。不要把密码或账户密钥发给任何人。'
-                  : '在 Telegram 里联系我们。请不要把密码或账户密钥发给任何人。',
+              '在 Telegram 里联系我们。请不要把密码或账户密钥发给任何人。',
               style: text.bodyMedium?.copyWith(color: YhColors.sub),
             ),
             const SizedBox(height: 16),
