@@ -116,7 +116,30 @@ jobs:
 
       - name: Build Flutter Windows release
         working-directory: apps/mobile
-        run: flutter build windows --release
+        env:
+          # 米白版发行包不再内置开发地址。release_defines.py 只接受这个公开的生产 API。
+          # 付款公钥和关于页地址如果放在仓库 Secrets 里，会在下面去掉空值后写进包；密钥本身不进仓库。
+          YH_API_BASE: https://api.yhvpn.io
+          YH_FUND_PUBKEY_1: ${{ secrets.YH_FUND_PUBKEY_1 }}
+          YH_FUND_PUBKEY_2: ${{ secrets.YH_FUND_PUBKEY_2 }}
+          YH_OFFICIAL_URL: ${{ secrets.YH_OFFICIAL_URL }}
+          YH_PRIVACY_URL: ${{ secrets.YH_PRIVACY_URL }}
+          YH_TERMS_URL: ${{ secrets.YH_TERMS_URL }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($name in @('YH_FUND_PUBKEY_1','YH_FUND_PUBKEY_2','YH_OFFICIAL_URL','YH_PRIVACY_URL','YH_TERMS_URL','YH_FUND_KEY_ID_1','YH_FUND_KEY_ID_2')) {
+            if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
+              Remove-Item "Env:$name" -ErrorAction SilentlyContinue
+            }
+          }
+          $defines = @(python tool/release_defines.py)
+          if ($LASTEXITCODE -ne 0 -or $defines.Count -eq 0) { throw 'release_defines.py failed' }
+          if ($defines -notcontains '--dart-define=YH_API_BASE=https://api.yhvpn.io') {
+            throw 'release build is missing the production API'
+          }
+          flutter build windows --release @defines
+          python tool/assert_baked_api.py build/windows/x64/runner/Release/data/app.so
 
       - name: Require bundled engine files
         run: |

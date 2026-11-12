@@ -61,7 +61,11 @@ Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "启动{#MyAppName}"; Flags: nowait postinstall skipifsilent
+; yuhai_vpn.exe 的清单是 requireAdministrator。这里不用 CreateProcess（默认的 Exec）：
+; 即使安装程序已经提权，CreateProcess 也会失败，code 740（需要提升权限）。
+; shellexec 走 ShellExecute，由系统处理提权。postinstall 保证装完、用户在完成页勾选后才启动，
+; 不会在许可证页或复制文件时启动。没有 [Code] 里的 Exec/ExecAsOriginalUser。
+Filename: "{app}\{#MyAppExeName}"; Description: "启动{#MyAppName}"; Flags: shellexec nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{commonappdata}\YuhaiVPN"
