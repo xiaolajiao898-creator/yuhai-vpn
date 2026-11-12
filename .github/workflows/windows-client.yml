@@ -134,6 +134,8 @@ jobs:
           choco install innosetup --no-progress -y
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $iscc)) { throw "ISCC not found at $iscc" }
+          # yuhai.iss 逐个收录这三个运行库；脚本从构建机的 VS Redist 复制并校验微软签名。
+          & 'apps/mobile/windows/packaging/bundle-vcruntime.ps1'
           & $iscc 'apps/mobile/windows/packaging/yuhai.iss'
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
 
