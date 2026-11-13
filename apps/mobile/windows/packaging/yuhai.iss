@@ -3,6 +3,9 @@
 
 #define MyAppName "宇海VPN"
 #define MyAppVersion "1.1.0"
+#ifndef MyBuildNumber
+  #define MyBuildNumber "110"
+#endif
 #define MyAppPublisher "宇海"
 #define MyAppExeName "yuhai_vpn.exe"
 #define ReleaseDir "..\..\build\windows\x64\runner\Release"
@@ -33,7 +36,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Flutter 桌面程序只支持 Windows 10 及以上。
 MinVersion=10.0
 LicenseFile=licenses\NOTICES.txt
-VersionInfoVersion=1.1.0.0
+VersionInfoVersion=1.1.0.{#MyBuildNumber}
 
 [Languages]
 ; 发行版 ISCC 6.7 的 Languages 目录没有简体中文。这份是 kira-96 的 6.5.0+ 翻译

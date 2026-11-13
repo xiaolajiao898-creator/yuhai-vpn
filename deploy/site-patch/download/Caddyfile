@@ -1,0 +1,57 @@
+# 贴进 yhvpn.io 站点块，并且放在原来的 file_server 之前。
+# Caddy 的 handle 互斥：站点里原来的 file_server 也要放进 handle，否则下载路径可能被静态文件抢走。
+# 例：
+#   yhvpn.io {
+#     import secure
+#     root * /opt/yuhai-vpn/site
+#     import /opt/yuhai-vpn/site-patch/download/Caddyfile
+#     handle {
+#       file_server
+#     }
+#   }
+# 如果不用 import，把下面的 handle 原样嵌进 yhvpn.io 即可。
+
+# 当前安装包由 API 决定。这里只反代，不把文件名写死。
+# GET 和 HEAD 都把 API 的 302 原样返回，缓存 60 秒。
+handle /download/latest/windows {
+	header {
+		defer
+		Cache-Control "public, max-age=60"
+	}
+	reverse_proxy https://api.yhvpn.io {
+		header_up Host api.yhvpn.io
+		rewrite /v1/app/download/windows
+	}
+}
+
+handle /download/latest/android {
+	header {
+		defer
+		Cache-Control "public, max-age=60"
+	}
+	reverse_proxy https://api.yhvpn.io {
+		header_up Host api.yhvpn.io
+		rewrite /v1/app/download/android
+	}
+}
+
+# 旧文件名转到 latest。包含 YuhaiVPN-Windows-x64.exe 和 YuhaiVPN-Windows-x64-candidate.exe。
+# redir 对 GET 和 HEAD 都是 302，不回正文。
+@old_windows path_regexp old_windows ^/download/YuhaiVPN-Windows-.*\.exe$
+handle @old_windows {
+	redir * /download/latest/windows 302
+}
+
+handle /download/yuhai-vpn-candidate-0928.apk {
+	redir * /download/latest/android 302
+}
+
+# 版本化文件可以缓存一年。和现有官网一样，文件在 /opt/yuhai-vpn/site 下面。
+handle /download/builds/* {
+	root * /opt/yuhai-vpn/site
+	header {
+		defer
+		Cache-Control "public, max-age=31536000, immutable"
+	}
+	file_server
+}

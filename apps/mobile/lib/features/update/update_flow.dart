@@ -103,6 +103,7 @@ Future<AppReleaseInfo?> fetchLatest(String platform, {HttpClient? client}) async
   final own = client == null;
   try {
     final request = await http.getUrl(uri);
+    request.followRedirects = false;
     final response = await request.close();
     final body = await response.transform(utf8.decoder).join();
     if (response.statusCode != 200) throw const UpdateRejected('暂时无法检查更新');

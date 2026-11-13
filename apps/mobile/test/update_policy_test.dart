@@ -31,6 +31,22 @@ void main() {
     expect(releaseFileName(Uri.parse('https://yhvpn.io/download/builds/../../secret')), 'secret');
   });
 
+  test('跳转后的地址也必须在允许的站点里', () {
+    final from = Uri.parse('https://yhvpn.io/download/latest/windows');
+    expect(
+      redirectedUrl(from, 302, '/download/builds/a.exe'),
+      Uri.parse('https://yhvpn.io/download/builds/a.exe'),
+    );
+    expect(
+      redirectedUrl(from, 302, 'https://api.yhvpn.io/v1/app/download/windows'),
+      Uri.parse('https://api.yhvpn.io/v1/app/download/windows'),
+    );
+    expect(redirectedUrl(from, 200, 'https://evil.example/a.exe'), isNull);
+    expect(() => redirectedUrl(from, 302, 'https://evil.example/a.exe'), throwsA(isA<UpdateRejected>()));
+    expect(() => redirectedUrl(from, 301, 'http://yhvpn.io/a.exe'), throwsA(isA<UpdateRejected>()));
+    expect(() => redirectedUrl(from, 308, 'https://user:secret@yhvpn.io/a.exe'), throwsA(isA<UpdateRejected>()));
+  });
+
   test('校验不一致就删除文件', () async {
     final dir = await Directory.systemTemp.createTemp('yuhai-update');
     addTearDown(() => dir.delete(recursive: true));
