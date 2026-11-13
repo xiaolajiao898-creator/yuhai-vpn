@@ -79,6 +79,9 @@ class ConnectionController extends Notifier<VpnStatus> {
   var _disposed = false;
   var _acceptEngineEvents = false;
 
+  /// 探测失败后的试连已经把配置交给引擎，但握手结果还没回来。界面销毁时也要拆隧道。
+  var _connectInFlight = false;
+
   /// 本设备可能还占着的 WorldVPN peer（w 开头的线路编号）。用户断开、改连非批发线路、
   /// 自动重连放弃时释放。同一设备改连另一条批发线路时，服务端先删旧 peer 再建新的，
   /// 一台设备最多一条（数据库唯一索引），所以重连不会叠加占用 3 台的名额。
@@ -124,6 +127,7 @@ class ConnectionController extends Notifier<VpnStatus> {
   VpnStatus build() {
     _disposed = false;
     _acceptEngineEvents = false;
+    _connectInFlight = false;
     final engine = ref.watch(vpnEngineProvider);
     _generation++;
     var active = true;
@@ -193,7 +197,7 @@ class ConnectionController extends Notifier<VpnStatus> {
     // SessionController explicitly invalidates this controller on logout/revoke.
     // Listening back to sessionProvider would create a Riverpod dependency cycle.
     ref.onDispose(() {
-      final nativeStarted = _acceptEngineEvents;
+      final nativeStarted = _acceptEngineEvents || _connectInFlight;
       active = false;
       _disposed = true;
       _generation++;
@@ -246,6 +250,191 @@ class ConnectionController extends Notifier<VpnStatus> {
       return const VpnFailure('NO_PLAN', '没有可用套餐，请先购买或兑换套餐');
     }
     return const VpnFailure('NO_LINE', '暂时没有可用线路，请稍后刷新再试');
+  }
+
+  /// 延迟全部测失败时，换下一条仍可能连上：账户、套餐、权限这类错误换线没有用。
+  bool _keepTryingLines(Object error) {
+    if (error is Error) return false;
+    if (error is VpnFailure) {
+      return !_fatalFailures.contains(error.code) &&
+          error.code != 'ENGINE_UNAVAILABLE' &&
+          error.code != 'PERMISSION_DENIED';
+    }
+    if (error is ApiException) {
+      return switch (error.code) {
+        40101 ||
+        40103 ||
+        40107 ||
+        40108 ||
+        40301 ||
+        40303 ||
+        40305 ||
+        40902 =>
+          false,
+        _ => true,
+      };
+    }
+    if (error is FormatException) {
+      return error.message != '连接选择或账户已变化' &&
+          error.message != 'VPN 身份无效' &&
+          error.message != 'VPN 设备公钥无效';
+    }
+    if (error is DioException) return isConnectTimeout(error);
+    return true;
+  }
+
+  /// 探测端口全部连不上时，按服务端返回的顺序直接试连，失败再试下一条，最多 3 条。
+  /// 不再弹出「没有测到可用线路」。能报告握手结果的引擎会等到连上或失败再换下一条。
+  Future<void> _connectProbeFallback(
+    List<NodeItem> ordered, {
+    required VpnEngine engine,
+    required Session? session,
+    required String protocol,
+    required bool demo,
+    required bool userInitiated,
+    required bool Function() current,
+    required bool Function() validAttempt,
+  }) async {
+    final lines = ordered.take(3).toList();
+    if (lines.isEmpty) throw await _noLineOrPlan();
+    if (!await engine.prepare()) {
+      if (current()) {
+        state = userInitiated ? VpnStatus.disconnected : VpnStatus.error;
+        ref.read(connectionFailureProvider.notifier).state =
+            const VpnFailure('PERMISSION_DENIED', '未获得连接权限');
+      }
+      return;
+    }
+    if (!current()) return;
+    if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+    final fresh = await ref.refresh(nodesProvider.future);
+    if (!current()) return;
+    _rememberLines(fresh);
+    Object? lastError;
+    for (var i = 0; i < lines.length; i++) {
+      try {
+        await _openFallbackLine(
+          fresh: fresh,
+          chosen: lines[i],
+          engine: engine,
+          session: session,
+          protocol: protocol,
+          demo: demo,
+          current: current,
+          validAttempt: validAttempt,
+        );
+        return;
+      } on _AttemptAborted {
+        return;
+      } catch (error) {
+        if (!current()) return;
+        _acceptEngineEvents = false;
+        try {
+          await engine.disconnect();
+        } catch (_) {}
+        if (!current()) return;
+        if (userInitiated || !_armed) await _releaseWholesale();
+        if (!current()) return;
+        lastError = error;
+        if (i == lines.length - 1 || !_keepTryingLines(error)) break;
+        state = VpnStatus.connecting;
+        ref.read(connectionFailureProvider.notifier).state = null;
+        ref.read(connectionNoticeProvider.notifier).state = null;
+      }
+    }
+    throw lastError ?? const VpnFailure('CONNECT_FAILED', '连接失败，请重试');
+  }
+
+  Future<void> _openFallbackLine({
+    required List<NodeItem> fresh,
+    required NodeItem chosen,
+    required VpnEngine engine,
+    required Session? session,
+    required String protocol,
+    required bool demo,
+    required bool Function() current,
+    required bool Function() validAttempt,
+  }) async {
+    if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+    final confirmed = fresh
+        .where((n) =>
+            n.id == chosen.id && n.available && n.protocols.contains(protocol))
+        .firstOrNull;
+    if (confirmed == null || confirmed.probeHost == null) {
+      throw const FormatException('线路状态已变化');
+    }
+    if (!demo && confirmed.id.startsWith('w')) {
+      if (!worldvpnPlatformSupported) {
+        throw const VpnFailure('ENGINE_UNAVAILABLE', '当前设备暂不支持该线路类型');
+      }
+      final profile = await ref
+          .read(connectionApiProvider)
+          .worldvpnProfile(session!, confirmed.id);
+      if (!current()) throw const _AttemptAborted();
+      if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+      _wholesaleLine = confirmed.id;
+      _wholesaleUnknown = false;
+      await _finishFallbackConnect(engine, profile, current);
+      _remember(confirmed.id);
+      return;
+    }
+    final ConnectProfile profile;
+    if (demo) {
+      profile = ConnectProfile(
+          nodeId: confirmed.id, protocol: 'MOCK', server: confirmed.probeHost!);
+    } else {
+      await _leaveWholesale();
+      if (!current()) throw const _AttemptAborted();
+      if (engine is! WireGuardVpnEngine) {
+        throw const VpnFailure('ENGINE_UNAVAILABLE', '当前平台暂不支持 VPN 连接');
+      }
+      final key = await engine.publicKey(vpnIdentity(session!));
+      if (!current()) throw const _AttemptAborted();
+      if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+      final api = ref.read(connectionApiProvider);
+      await api.uploadPublicKey(session, key);
+      if (!current()) throw const _AttemptAborted();
+      if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+      profile = await api.profile(session, confirmed.id, key);
+      if (!current()) throw const _AttemptAborted();
+      if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+    }
+    await _finishFallbackConnect(engine, profile, current);
+    _remember(confirmed.id);
+  }
+
+  /// 配置被引擎收下之后，还要等握手。30 秒内没连上就交给外层换下一条。
+  Future<void> _finishFallbackConnect(
+      VpnEngine engine, ConnectProfile profile, bool Function() current) async {
+    final watch = _HandshakeWatch(engine);
+    _connectInFlight = true;
+    try {
+      if (!engine.canRecover) _acceptEngineEvents = true;
+      await engine.connect(profile);
+      if (!current()) throw const _AttemptAborted();
+      if (engine.canRecover) {
+        final failure = await watch.untilSettled(
+          timeout: const Duration(seconds: 32),
+          isCurrent: current,
+        );
+        if (failure != null) throw failure;
+        _acceptEngineEvents = true;
+        _failuresOnLine = 0;
+        _badStreak = 0;
+        _triedLines.clear();
+        _epochSeen = null;
+        state = VpnStatus.connected;
+        if (!_userStop) _arm(engine);
+        return;
+      }
+      await Future<void>.delayed(Duration.zero);
+      if (!current()) throw const _AttemptAborted();
+      final failure = watch.failure;
+      if (failure != null) throw failure;
+    } finally {
+      _connectInFlight = false;
+      await watch.close();
+    }
   }
 
   bool _sameSession(Session expected) {
@@ -666,8 +855,22 @@ class ConnectionController extends Notifier<VpnStatus> {
               isCurrent: validAttempt);
           if (!current()) return;
           node = fastestProbed(probeable, latencies);
-          if (node == null || !validAttempt()) {
-            throw const VpnFailure('NO_LINE', '没有测到可用线路，请手动选择一条');
+          if (!validAttempt()) {
+            throw const FormatException('连接选择或账户已变化');
+          }
+          if (node == null) {
+            // WireGuard 走 UDP。探测端口全部拒绝时，仍按服务端顺序试连，最多 3 条。
+            await _connectProbeFallback(
+              probeable,
+              engine: engine,
+              session: demo ? null : session,
+              protocol: protocol,
+              demo: demo,
+              userInitiated: userInitiated,
+              current: current,
+              validAttempt: validAttempt,
+            );
+            return;
           }
         } else if (!demo &&
             egressPlatformSupported &&
@@ -767,11 +970,8 @@ class ConnectionController extends Notifier<VpnStatus> {
             40302 => const VpnFailure('TIER', '当前套餐等级不能使用该线路'),
             40303 => const VpnFailure('QUOTA_EXHAUSTED', '流量已用完，请补充流量后重试'),
             40305 => const VpnFailure('ACCOUNT_DISABLED', '账户暂不可用，请联系客服'),
-            40902 => VpnFailure(
-                'DEVICE_LIMIT',
-                e.message.isEmpty
-                    ? '同时在线的设备已达上限，请先在其他设备断开后再试'
-                    : e.message),
+            40902 => VpnFailure('DEVICE_LIMIT',
+                e.message.isEmpty ? '同时在线的设备已达上限，请先在其他设备断开后再试' : e.message),
             50304 =>
               const VpnFailure('ADDRESS_POOL_EXHAUSTED', '线路资源暂时不足，请稍后重试'),
             _ => VpnFailure(
@@ -789,3 +989,50 @@ class ConnectionController extends Notifier<VpnStatus> {
 
 final connectionControllerProvider =
     NotifierProvider<ConnectionController, VpnStatus>(ConnectionController.new);
+
+/// 用户在这次尝试结束前改了主意（断开、换线、退出）。调用方应安静停下，不再换下一条。
+class _AttemptAborted implements Exception {
+  const _AttemptAborted();
+}
+
+/// 记下连接过程中引擎报出的失败或「已连接」，供探测失败后的换线使用。
+class _HandshakeWatch {
+  _HandshakeWatch(VpnEngine engine) {
+    _statusSub = engine.status.listen((status) {
+      if (status == VpnStatus.connected) _connected = true;
+    });
+    _failSub = engine.failures.listen((failure) {
+      _failure ??= failure;
+    });
+  }
+
+  StreamSubscription<VpnStatus>? _statusSub;
+  StreamSubscription<VpnFailure>? _failSub;
+  VpnFailure? _failure;
+  var _connected = false;
+
+  VpnFailure? get failure => _failure;
+
+  Future<VpnFailure?> untilSettled({
+    required Duration timeout,
+    required bool Function() isCurrent,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (true) {
+      if (!isCurrent()) throw const _AttemptAborted();
+      if (_failure != null) return _failure;
+      if (_connected) return null;
+      if (!DateTime.now().isBefore(deadline)) {
+        return const VpnFailure('HANDSHAKE_TIMEOUT', '线路握手超时，请重试或更换线路');
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  Future<void> close() async {
+    await _statusSub?.cancel();
+    await _failSub?.cancel();
+    _statusSub = null;
+    _failSub = null;
+  }
+}

@@ -40,6 +40,11 @@ class _AboutPageState extends ConsumerState<AboutPage> {
         setState(() => _message =
             error.code == 40401 ? '尚未发布正式版本，暂时没有可用的安装包。' : '暂时无法检查更新，请稍后重试。');
       }
+    } on FormatException catch (error) {
+      if (mounted) {
+        setState(() => _message =
+            error.message.isEmpty ? '暂时无法检查更新，请稍后重试。' : error.message);
+      }
     } catch (_) {
       if (mounted) setState(() => _message = '暂时无法检查更新，请稍后重试。');
     } finally {
@@ -93,7 +98,8 @@ class _AboutPageState extends ConsumerState<AboutPage> {
                       const Text('当前版本',
                           style: TextStyle(color: YhColors.haze)),
                       const SizedBox(height: 6),
-                      Text(appVersion, style: YhType.latin(24, weight: FontWeight.w700)),
+                      Text(appVersion,
+                          style: YhType.latin(24, weight: FontWeight.w700)),
                       const SizedBox(height: 12),
                       const Text('开发演示版 · VPN 连接为模拟模式，尚未发布正式安装包。',
                           style: TextStyle(color: YhColors.starlight)),

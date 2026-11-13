@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+func TestProbePortUsesReachableTCP(t *testing.T) {
+	if ProbePort != 443 {
+		t.Fatalf("probe port = %d, want 443", ProbePort)
+	}
+}
+
 func TestParseProductionWireGuardConfig(t *testing.T) {
 	text := "[Interface]\nPrivateKey = " + testKey(3) + "\nAddress = 10.8.0.2/24\nDNS = 1.1.1.1, 8.8.8.8\n\n[Peer]\nPublicKey = " + testKey(4) + "\nEndpoint = 203.0.113.10:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n"
 	m, err := parseWireGuardConfig(text)

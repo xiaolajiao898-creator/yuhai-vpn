@@ -358,4 +358,6 @@ var places = []struct{ needle, country, region string }{
 }
 
 // ProbePort 只给客户端做 TCP 延迟参考。listServers 不返回端口；真正的 Endpoint 以配置文件为准。
-const ProbePort = 51820
+// WireGuard 走 UDP，批发服务器的 TCP 51820 会直接拒绝连接，客户端「自动选择」因此一条都测不到。
+// 2026-11-13 实测 182 台里 178 台 TCP 443 可连，所以用 443 测延迟。
+const ProbePort = 443

@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -27,30 +28,69 @@ class UnpublishedInfo extends AppInfoApi {
   Future<AppRelease> latest() async => throw ApiException(40401, '没有正式版本');
 }
 
+const _releaseBody = {
+  'version': '1.1.0',
+  'build': 110,
+  'url': 'https://yhvpn.io/download/app',
+  'sha256': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  'size': 1024,
+  'released_at': '2026-11-13T00:00:00Z',
+  'min_supported_build': 100,
+  'notes': '已发布版本',
+};
+
 void main() {
-  test('公开版本查询不读取或附带账户令牌', () async {
+  test('公开版本查询走 /v1/app/latest 且不读取账户令牌', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
     final api = client();
     api.dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
-      expect(request.path, '/app/version');
+      expect(request.path, '/v1/app/latest');
+      expect(request.queryParameters['platform'], 'android');
+      expect(request.queryParameters.containsKey('current_code'), isFalse);
       expect(request.headers.keys.map((e) => e.toLowerCase()),
           isNot(contains('authorization')));
       expect(request.headers.keys.map((e) => e.toLowerCase()),
           isNot(contains('x-device-id')));
-      expect(request.queryParameters['current_code'], '100');
+      handler.resolve(Response(
+          requestOptions: request,
+          statusCode: 200,
+          data: {'data': _releaseBody}));
+    }));
+    final release = await AppInfoApi(api).latest();
+    expect(release.code, 110);
+    expect(release.name, '1.1.0');
+    expect(release.notes, '已发布版本');
+    expect(release.forceUpdate, isFalse);
+    expect(release.downloadUrl, 'https://yhvpn.io/download/app');
+  });
+  test('Windows 检查更新使用 platform=windows', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.windows;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final api = client();
+    api.dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
+      expect(request.path, '/v1/app/latest');
+      expect(request.queryParameters['platform'], 'windows');
       handler.resolve(Response(requestOptions: request, statusCode: 200, data: {
-        'data': {
-          'platform': 'ANDROID',
-          'latest': {
-            'version_name': '1.1.0',
-            'version_code': 110,
-            'notes': '已发布版本'
-          },
-          'min_supported_code': 100,
-          'force_update': false
-        }
+        'data': {..._releaseBody, 'min_supported_build': 200}
       }));
     }));
-    expect((await AppInfoApi(api).latest()).code, 110);
+    final release = await AppInfoApi(api).latest();
+    expect(release.forceUpdate, isTrue);
+    expect(release.code, 110);
+  });
+  test('其他系统不请求旧的版本地址', () async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    addTearDown(() => debugDefaultTargetPlatformOverride = null);
+    final api = client();
+    var called = false;
+    api.dio.interceptors.add(InterceptorsWrapper(onRequest: (request, handler) {
+      called = true;
+      handler.resolve(
+          Response(requestOptions: request, statusCode: 500, data: {}));
+    }));
+    await expectLater(AppInfoApi(api).latest(), throwsFormatException);
+    expect(called, isFalse);
   });
   test('版本与政策链接只接受没有账户凭据的HTTPS地址', () {
     expect(safeReleaseLink('https://download.example/app'), isNotNull);

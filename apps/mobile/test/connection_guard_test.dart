@@ -14,6 +14,8 @@ class RecordingEngine extends MockVpnEngine {
   final profiles = <ConnectProfile>[];
   int preparations = 0, disconnections = 0;
   Completer<bool>? permission;
+  Future<int?> Function(String host)? probeOverride;
+  Future<void> Function(ConnectProfile profile)? connectOverride;
   @override
   Future<bool> prepare() {
     preparations++;
@@ -23,6 +25,8 @@ class RecordingEngine extends MockVpnEngine {
   @override
   Future<void> connect(ConnectProfile profile) async {
     profiles.add(profile);
+    final hook = connectOverride;
+    if (hook != null) await hook(profile);
   }
 
   @override
@@ -32,8 +36,11 @@ class RecordingEngine extends MockVpnEngine {
 
   @override
   Future<int?> probe(String host, int port,
-          {Duration timeout = const Duration(seconds: 2)}) async =>
-      host.startsWith('fast') ? 10 : 50;
+      {Duration timeout = const Duration(seconds: 2)}) async {
+    final hook = probeOverride;
+    if (hook != null) return hook(host);
+    return host.startsWith('fast') ? 10 : 50;
+  }
 }
 
 NodeItem demoNode(String id,
@@ -98,6 +105,112 @@ void main() {
       container.dispose();
       engine.dispose();
     }
+  });
+  test('延迟全部失败时按服务端顺序试连，失败再试下一条，最多 3 条', () async {
+    final ok = RecordingEngine();
+    ok.probeOverride = (_) async => null;
+    final container = ProviderContainer(overrides: [
+      vpnDemoModeProvider.overrideWithValue(true),
+      vpnEngineProvider.overrideWithValue(ok),
+      nodesProvider.overrideWith((ref) async => [
+            demoNode('a'),
+            demoNode('b'),
+            demoNode('c'),
+            demoNode('d'),
+          ]),
+    ]);
+    container.read(selectedNodeProvider.notifier).state = null;
+    await container.read(connectionControllerProvider.notifier).toggle();
+    expect(ok.profiles.map((p) => p.nodeId).toList(), ['a']);
+    expect(container.read(connectionFailureProvider), isNull);
+    container.dispose();
+    ok.dispose();
+
+    final skipped = RecordingEngine();
+    skipped.probeOverride = (host) async => host.startsWith('b') ? 12 : null;
+    final picked = ProviderContainer(overrides: [
+      vpnDemoModeProvider.overrideWithValue(true),
+      vpnEngineProvider.overrideWithValue(skipped),
+      nodesProvider.overrideWith((ref) async => [
+            demoNode('a'),
+            demoNode('b'),
+            demoNode('c'),
+          ]),
+    ]);
+    picked.read(selectedNodeProvider.notifier).state = null;
+    await picked.read(connectionControllerProvider.notifier).toggle();
+    expect(skipped.profiles.map((p) => p.nodeId).toList(), ['b']);
+    picked.dispose();
+    skipped.dispose();
+
+    final retry = RecordingEngine();
+    retry.probeOverride = (_) async => null;
+    retry.connectOverride = (profile) async {
+      if (profile.nodeId == 'a' || profile.nodeId == 'b') {
+        throw const VpnFailure('CONNECT_FAILED', '这条没连上');
+      }
+    };
+    final retried = ProviderContainer(overrides: [
+      vpnDemoModeProvider.overrideWithValue(true),
+      vpnEngineProvider.overrideWithValue(retry),
+      nodesProvider.overrideWith((ref) async => [
+            demoNode('a'),
+            demoNode('b'),
+            demoNode('c'),
+            demoNode('d'),
+          ]),
+    ]);
+    retried.read(selectedNodeProvider.notifier).state = null;
+    await retried.read(connectionControllerProvider.notifier).toggle();
+    expect(retry.profiles.map((p) => p.nodeId).toList(), ['a', 'b', 'c']);
+    expect(retry.disconnections, 2);
+    expect(retried.read(connectionFailureProvider), isNull);
+    retried.dispose();
+    retry.dispose();
+
+    final exhausted = RecordingEngine();
+    exhausted.probeOverride = (_) async => null;
+    exhausted.connectOverride = (profile) async {
+      throw const VpnFailure('CONNECT_FAILED', '这条没连上');
+    };
+    final gaveUp = ProviderContainer(overrides: [
+      vpnDemoModeProvider.overrideWithValue(true),
+      vpnEngineProvider.overrideWithValue(exhausted),
+      nodesProvider.overrideWith((ref) async => [
+            demoNode('a'),
+            demoNode('b'),
+            demoNode('c'),
+            demoNode('d'),
+          ]),
+    ]);
+    gaveUp.read(selectedNodeProvider.notifier).state = null;
+    await gaveUp.read(connectionControllerProvider.notifier).toggle();
+    expect(exhausted.profiles.map((p) => p.nodeId).toList(), ['a', 'b', 'c']);
+    expect(gaveUp.read(connectionFailureProvider)?.code, 'CONNECT_FAILED');
+    expect(gaveUp.read(connectionFailureProvider)?.message, '这条没连上');
+    gaveUp.dispose();
+    exhausted.dispose();
+
+    final fatal = RecordingEngine();
+    fatal.probeOverride = (_) async => null;
+    fatal.connectOverride = (profile) async {
+      throw const VpnFailure('AUTH_REQUIRED', '请先登录账户');
+    };
+    final stopped = ProviderContainer(overrides: [
+      vpnDemoModeProvider.overrideWithValue(true),
+      vpnEngineProvider.overrideWithValue(fatal),
+      nodesProvider.overrideWith((ref) async => [
+            demoNode('a'),
+            demoNode('b'),
+            demoNode('c'),
+          ]),
+    ]);
+    stopped.read(selectedNodeProvider.notifier).state = null;
+    await stopped.read(connectionControllerProvider.notifier).toggle();
+    expect(fatal.profiles.map((p) => p.nodeId).toList(), ['a']);
+    expect(stopped.read(connectionFailureProvider)?.code, 'AUTH_REQUIRED');
+    stopped.dispose();
+    fatal.dispose();
   });
   test('第二次核对发现节点下线不能连接，真实协议也不能送入模拟引擎', () async {
     for (final realProtocol in [false, true]) {
