@@ -1,0 +1,7 @@
+{
+  "result": "success",
+  "data": {
+    "username": "sampleUsername",
+    "password": "samplePassword"
+  }
+}

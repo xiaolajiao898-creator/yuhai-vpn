@@ -28,7 +28,7 @@ func (h *Handler) lines(c *gin.Context) {
 		httpx.Fail(c, httpx.NewError(httpx.ErrMaintenance, "批发线路未配置"))
 		return
 	}
-	items, err := h.Svc.Lines(c.Request.Context(), httpx.UserID(c))
+	items, err := h.Svc.Lines(WithRequestID(c.Request.Context(), httpx.RequestID(c)), httpx.UserID(c))
 	if err != nil {
 		httpx.Fail(c, err)
 		return
@@ -51,7 +51,7 @@ func (h *Handler) connect(c *gin.Context) {
 		httpx.Fail(c, httpx.NewError(httpx.ErrBadRequest, "参数格式错误"))
 		return
 	}
-	out, err := h.Svc.Connect(c.Request.Context(), httpx.UserID(c), httpx.DeviceID(c), in.LineID)
+	out, err := h.Svc.Connect(WithRequestID(c.Request.Context(), httpx.RequestID(c)), httpx.UserID(c), httpx.DeviceID(c), in.LineID)
 	if err != nil {
 		httpx.Fail(c, err)
 		return

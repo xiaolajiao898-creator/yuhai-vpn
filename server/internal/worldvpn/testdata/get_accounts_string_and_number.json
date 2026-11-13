@@ -1,0 +1,8 @@
+{
+  "status": "success",
+  "accounts": [
+    ["1", "demotestingvpn", "2026-07-19"],
+    [2, "sampleUsername", 1784419200],
+    ["15", "later-user", "2026-08-01 00:00:00"]
+  ]
+}

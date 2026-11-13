@@ -380,10 +380,55 @@ WHERE user_id=$1 AND device_id=$2 AND released_at IS NULL`, userID, deviceID).
 }
 
 func (p *PG) InsertPeer(ctx context.Context, peer openPeer) error {
+	if peer.Releasing {
+		_, err := p.Pool.Exec(ctx, `
+INSERT INTO worldvpn_peers (user_id, device_id, server_id, wireguard_id, sandbox, release_requested_at)
+VALUES ($1,$2,$3,$4,$5, now())`, peer.UserID, peer.DeviceID, peer.ServerID, peer.WireGuardID, peer.Sandbox)
+		return err
+	}
 	_, err := p.Pool.Exec(ctx, `
 INSERT INTO worldvpn_peers (user_id, device_id, server_id, wireguard_id, sandbox)
 VALUES ($1,$2,$3,$4,$5)`, peer.UserID, peer.DeviceID, peer.ServerID, peer.WireGuardID, peer.Sandbox)
 	return err
+}
+
+func (p *PG) DeviceLimit(ctx context.Context, userID int64) (int, error) {
+	var n int
+	err := p.Pool.QueryRow(ctx, `SELECT device_limit FROM subscriptions WHERE user_id=$1`, userID).Scan(&n)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MaxActivePeersPerUser, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if n <= 0 {
+		return MaxActivePeersPerUser, nil
+	}
+	if n > 100 {
+		n = 100
+	}
+	return n, nil
+}
+
+func (p *PG) OpenPeers(ctx context.Context, userID int64) ([]openPeer, error) {
+	rows, err := p.Pool.Query(ctx, `
+SELECT id, user_id, device_id, server_id, wireguard_id, sandbox, release_requested_at IS NOT NULL
+FROM worldvpn_peers
+WHERE user_id=$1 AND released_at IS NULL
+ORDER BY id`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []openPeer
+	for rows.Next() {
+		var peer openPeer
+		if err := rows.Scan(&peer.ID, &peer.UserID, &peer.DeviceID, &peer.ServerID, &peer.WireGuardID, &peer.Sandbox, &peer.Releasing); err != nil {
+			return nil, err
+		}
+		out = append(out, peer)
+	}
+	return out, rows.Err()
 }
 
 func (p *PG) RequestRelease(ctx context.Context, userID, deviceID int64) (openPeer, bool, error) {
