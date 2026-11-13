@@ -5,16 +5,20 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yuhai_vpn/platform/vpn/egress_profile.dart';
+import 'package:yuhai_vpn/platform/vpn/tunnel_host_pins.dart';
 import 'package:yuhai_vpn/platform/vpn/vpn_engine.dart';
 import 'package:yuhai_vpn/platform/vpn/windows_job.dart';
+import 'package:yuhai_vpn/platform/vpn/windows_traffic_guard.dart';
 import 'package:yuhai_vpn/platform/vpn/windows_wireguard_engine.dart';
 import 'package:yuhai_vpn/platform/vpn/windows_xray_config.dart';
 import 'package:yuhai_vpn/platform/vpn/windows_xray_engine.dart';
 import 'package:yuhai_vpn/platform/vpn/windows_xray_process.dart';
+import 'package:yuhai_vpn/platform/vpn/wireguard_profile.dart';
 
 import 'egress_profile_test.dart'
     show egressConfig, egressResponse, parseEgressProfile;
-import 'wireguard_profile_test.dart' show parseProfile, profileResponse;
+import 'wireguard_profile_test.dart'
+    show clientPublic, parseProfile, profileNow, profileResponse, serverPublic;
 
 class _Writer implements ConfigWriter {
   final bytes = BytesBuilder();
@@ -112,15 +116,36 @@ class _RecordingWireGuard extends WindowsWireGuardEngine {
 
   var connects = 0;
   var disconnects = 0;
+  final endpoints = <String?>[];
 
   @override
   Future<void> connect(ConnectProfile profile) async {
     connects++;
+    endpoints.add(nextEndpointOverride);
+    nextEndpointOverride = null;
   }
 
   @override
   Future<void> disconnect() async {
     disconnects++;
+  }
+}
+
+class _HeldGuard extends WindowsTrafficGuard {
+  var holding = false;
+
+  @override
+  bool get held => holding;
+
+  @override
+  Future<bool> hold(List<String> permitPaths) async {
+    holding = true;
+    return true;
+  }
+
+  @override
+  void release() {
+    holding = false;
   }
 }
 
@@ -199,6 +224,8 @@ void main() {
       bool allowWireGuard = false,
       Future<bool> Function()? binariesReady,
       Future<bool> Function()? isAdmin,
+      TunnelHostMemory? tunnelHosts,
+      WindowsTrafficGuard? trafficGuard,
     }) {
       final engine = WindowsXrayEngine(
         launch: fake.launch,
@@ -217,6 +244,8 @@ void main() {
         now: () => now,
         handshakeTimeout: handshakeTimeout,
         recheckEvery: recheckEvery,
+        tunnelHosts: tunnelHosts,
+        trafficGuard: trafficGuard,
       );
       statuses = [];
       failures = [];
@@ -371,6 +400,176 @@ void main() {
       expect(await denied.prepare(), isFalse);
       expect(failures.single.code, 'PERMISSION_DENIED');
       denied.dispose();
+    });
+
+    group('断网保护拦着时用记下的服务器地址', () {
+      final pinned = InternetAddress('198.51.100.7');
+
+      EgressProfile domainProfile() {
+        final config = egressConfig();
+        final proxy = (config['outbounds'] as List).first as Map;
+        (proxy['settings'] as Map)['address'] = 'egress.example.test';
+        return parseEgressProfile(egressResponse(patch: {'config': config}));
+      }
+
+      test('没拦着时只记下服务器域名的地址，交给 xray 的配置原样不变', () async {
+        final asked = <String>[];
+        final memory = TunnelHostMemory(lookup: (host) async {
+          asked.add(host);
+          return [pinned];
+        });
+        final engine = build(tunnelHosts: memory);
+        final profile = domainProfile();
+        await engine.connect(profile);
+        await pumpEventQueue();
+        expect(fake.stdin!.text, windowsRuntimeConfig(profile.config));
+        expect(asked, ['egress.example.test']);
+        expect(memory.remembered('egress.example.test'), [pinned]);
+        engine.dispose();
+      });
+
+      test('没拦着时 WireGuard 照用资料里的 endpoint', () async {
+        final wireGuard = _RecordingWireGuard();
+        final memory = TunnelHostMemory(lookup: (host) async => [pinned]);
+        final engine = build(
+            wireGuard: wireGuard, allowWireGuard: true, tunnelHosts: memory);
+        await engine.connect(parseProfile(profileResponse()));
+        await pumpEventQueue();
+        expect(wireGuard.endpoints, [null]);
+        expect(memory.remembered('vpn.example.com'), [pinned]);
+        engine.dispose();
+      });
+
+      // 拦截规则只在 Windows 上装得上（_engageGuard 先看系统），这两条在 Windows 的 CI 上跑。
+      test('拦着、查不到域名时，Xray 配置带上记下的 IP，地址和凭据不变', () async {
+        var down = false;
+        final memory = TunnelHostMemory(lookup: (host) async {
+          if (down) throw const SocketException('Failed host lookup');
+          return [pinned];
+        });
+        final engine = build(tunnelHosts: memory, trafficGuard: _HeldGuard());
+        await engine.connect(domainProfile());
+        await pumpEventQueue();
+        down = true;
+        expect(await engine.holdTraffic(), isTrue);
+        await engine.connect(domainProfile());
+        final sent = jsonDecode(fake.stdin!.text) as Map<String, dynamic>;
+        expect((sent['dns'] as Map)['hosts'], {
+          'egress.example.test': ['198.51.100.7']
+        });
+        final proxy = (sent['outbounds'] as List).first as Map;
+        expect((proxy['settings'] as Map)['address'], 'egress.example.test');
+        expect((proxy['streamSettings'] as Map)['sockopt'],
+            {'domainStrategy': 'UseIP'});
+        expect(fake.stdin!.text, contains('HTTPPASSWORD'));
+        engine.dispose();
+      }, skip: !Platform.isWindows);
+
+      test('拦着、查不到域名时，WireGuard 的 endpoint 换成记下的 IP', () async {
+        var down = false;
+        final wireGuard = _RecordingWireGuard();
+        final memory = TunnelHostMemory(lookup: (host) async {
+          if (down) throw const SocketException('Failed host lookup');
+          return [pinned];
+        });
+        final engine = build(
+            wireGuard: wireGuard,
+            allowWireGuard: true,
+            tunnelHosts: memory,
+            trafficGuard: _HeldGuard());
+        await engine.connect(parseProfile(profileResponse()));
+        await pumpEventQueue();
+        down = true;
+        expect(await engine.holdTraffic(), isTrue);
+        await engine.connect(parseProfile(profileResponse()));
+        expect(wireGuard.endpoints, [null, '198.51.100.7:51820']);
+        engine.dispose();
+      }, skip: !Platform.isWindows);
+
+      // 批发线路：线路编号 w43，服务器编号 43，endpoint 是域名。
+      WireGuardProfile issuedProfile() {
+        final now = DateTime.utc(2026, 11, 10, 1);
+        return WireGuardProfile.parseIssued({
+          'line_id': 'w43',
+          'server_id': '43',
+          'expires_at': now.add(const Duration(minutes: 5)).toIso8601String(),
+          'endpoint': 'vpn.example.com:51820',
+          'server_public_key': serverPublic,
+          'address': '10.0.0.2/32',
+          'dns': ['1.1.1.1'],
+          'mtu': 1280,
+          'interface_private_key': base64Encode(List<int>.filled(32, 3)),
+        }, lineId: 'w43', identity: '8302571644:123', now: now);
+      }
+
+      test('刷新线路列表时只预先查域名，IP 不查；上一轮还没查完不重复查', () async {
+        final asked = <String>[];
+        final gate = Completer<void>();
+        final memory = TunnelHostMemory(lookup: (host) async {
+          asked.add(host);
+          await gate.future;
+          return [pinned];
+        });
+        final engine = build(tunnelHosts: memory);
+        engine.noteLineHosts({
+          'e2': 'egress.example.test',
+          'w43': '198.51.100.9',
+          '7': 'node.example.test',
+        });
+        engine.noteLineHosts({'e3': 'other.example.test'});
+        gate.complete();
+        await pumpEventQueue();
+        expect(asked, ['egress.example.test', 'node.example.test']);
+        expect(memory.remembered('node.example.test'), [pinned]);
+        engine.noteLineHosts({'e3': 'other.example.test'});
+        await pumpEventQueue();
+        expect(asked.last, 'other.example.test');
+        engine.dispose();
+      });
+
+      test('没连过的出口线路：列表刷新时预先查过，拦着时也能换成 IP', () async {
+        var down = false;
+        final memory = TunnelHostMemory(lookup: (host) async {
+          if (down) throw const SocketException('Failed host lookup');
+          return [pinned];
+        });
+        final engine = build(tunnelHosts: memory, trafficGuard: _HeldGuard());
+        engine.noteLineHosts({'e2': 'egress.example.test'});
+        await pumpEventQueue();
+        down = true;
+        expect(await engine.holdTraffic(), isTrue);
+        await engine.connect(domainProfile());
+        final sent = jsonDecode(fake.stdin!.text) as Map<String, dynamic>;
+        expect((sent['dns'] as Map)['hosts'], {
+          'egress.example.test': ['198.51.100.7']
+        });
+        engine.dispose();
+      }, skip: !Platform.isWindows);
+
+      test('没连过的批发线路：endpoint 查不到也没记过时，用列表里的服务器 IP', () async {
+        final wireGuard = _RecordingWireGuard();
+        final memory = TunnelHostMemory(
+            lookup: (host) async =>
+                throw const SocketException('Failed host lookup'));
+        final engine = build(
+            wireGuard: wireGuard,
+            allowWireGuard: true,
+            tunnelHosts: memory,
+            trafficGuard: _HeldGuard());
+        engine.noteLineHosts({'w43': '198.51.100.9'});
+        expect(await engine.holdTraffic(), isTrue);
+        await engine.connect(issuedProfile());
+        // 自建线路的编号也可能是 43：不能拿批发线路 w43 的 IP 去连它。
+        final selfHosted = profileResponse();
+        ((selfHosted['profiles'] as List).first as Map)['node_id'] = '43';
+        await engine.connect(WireGuardProfile.parseResponse(selfHosted,
+            nodeId: '43',
+            identity: '8302571644:123',
+            clientPublicKey: clientPublic,
+            now: profileNow));
+        expect(wireGuard.endpoints, ['198.51.100.9:51820', null]);
+        engine.dispose();
+      }, skip: !Platform.isWindows);
     });
   });
 

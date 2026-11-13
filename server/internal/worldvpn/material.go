@@ -3,8 +3,10 @@ package worldvpn
 import (
 	"bufio"
 	"encoding/base64"
+	"encoding/json"
 	"net"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -91,11 +93,12 @@ func parseWireGuardConfig(text string) (wireGuardMaterial, error) {
 	if m.PrivateKey == m.ServerPublicKey || !wgKey(m.PrivateKey) || !wgKey(m.ServerPublicKey) {
 		return wireGuardMaterial{}, errConfig
 	}
-	prefix, err := netip.ParsePrefix(m.Address)
-	if err != nil || !prefix.IsValid() || prefix.Bits() != 32 || !prefix.Addr().Is4() || !prefix.Addr().IsPrivate() {
+	// 上游把 Address 写成 10.x.x.x/24。客户端只接受 /32，这里收成 <ip>/32。
+	addr, bits, ok := parseWGAddress(m.Address)
+	if !ok || bits < 8 || bits > 32 || !addr.Is4() || !addr.IsPrivate() {
 		return wireGuardMaterial{}, errConfig
 	}
-	m.Address = prefix.String()
+	m.Address = netip.PrefixFrom(addr, 32).String()
 	host, port, err := net.SplitHostPort(m.Endpoint)
 	if err != nil || !validEndpointHost(host) {
 		return wireGuardMaterial{}, errConfig
@@ -120,6 +123,23 @@ func parseWireGuardConfig(text string) (wireGuardMaterial, error) {
 }
 
 var errConfig = &APIError{Action: "getWireGuardConfig", Message: "配置内容不完整"}
+
+func parseWGAddress(raw string) (netip.Addr, int, bool) {
+	raw = strings.TrimSpace(strings.Split(raw, ",")[0])
+	addrPart, bitsPart, ok := strings.Cut(raw, "/")
+	if !ok {
+		return netip.Addr{}, 0, false
+	}
+	addr, err := netip.ParseAddr(strings.TrimSpace(addrPart))
+	if err != nil || !addr.IsValid() {
+		return netip.Addr{}, 0, false
+	}
+	bits, err := strconv.Atoi(strings.TrimSpace(bitsPart))
+	if err != nil {
+		return netip.Addr{}, 0, false
+	}
+	return addr, bits, true
+}
 
 func splitDNS(raw string) []string {
 	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == ';' })
@@ -230,6 +250,22 @@ func asID(v any) (int64, bool) {
 			return 0, false
 		}
 		return int64(n), true
+	case json.Number:
+		if id, ok := asID(n.String()); ok {
+			return id, true
+		}
+		f, err := n.Float64()
+		if err != nil {
+			return 0, false
+		}
+		return asID(f)
+	case int:
+		return asID(int64(n))
+	case int64:
+		if n <= 0 {
+			return 0, false
+		}
+		return n, true
 	case string:
 		id, err := strconv.ParseInt(strings.TrimSpace(n), 10, 64)
 		if err != nil || id <= 0 {
@@ -238,6 +274,35 @@ func asID(v any) (int64, bool) {
 		return id, true
 	default:
 		return 0, false
+	}
+}
+
+// flexString 把文档里的字符串字段，以及同一字段改用 JSON 数字传来的值，收成一段文本。
+// 整数不带小数点，避免把账号编号或日期时间戳收成科学计数法。
+func flexString(v any) (string, bool) {
+	switch n := v.(type) {
+	case string:
+		s := strings.TrimSpace(n)
+		if s == "" {
+			return "", false
+		}
+		return s, true
+	case float64:
+		if n != n || n > 1e15 || n < -1e15 {
+			return "", false
+		}
+		if n == float64(int64(n)) {
+			return strconv.FormatInt(int64(n), 10), true
+		}
+		return strconv.FormatFloat(n, 'f', -1, 64), true
+	case json.Number:
+		return flexString(n.String())
+	case int:
+		return strconv.Itoa(n), true
+	case int64:
+		return strconv.FormatInt(n, 10), true
+	default:
+		return "", false
 	}
 }
 
@@ -291,7 +356,66 @@ var places = []struct{ needle, country, region string }{
 	{"los angeles", "US", "AMERICAS"},
 	{"canada", "CA", "AMERICAS"},
 	{"brazil", "BR", "AMERICAS"},
+	{"malaysia", "MY", "ASIA"},
+	{"thailand", "TH", "ASIA"},
+	{"vietnam", "VN", "ASIA"},
+	{"philippines", "PH", "ASIA"},
+	{"indonesia", "ID", "ASIA"},
+}
+
+// 旧客户端只探测列表前 20 条。上游经常把同一个国家排在一起，前 20 条会全是德国。
+// 这里按国家轮流抽出，并把新加坡、日本、香港等靠前，让旧客户端也能抽到亚洲线路。
+var preferredCountryRank = map[string]int{
+	"SG": 0, "HK": 1, "JP": 2, "TW": 3, "KR": 4, "MY": 5,
+	"TH": 6, "VN": 7, "PH": 8, "AU": 9, "ID": 10,
+}
+
+func countryRank(code string) int {
+	if n, ok := preferredCountryRank[code]; ok {
+		return n
+	}
+	return 100
+}
+
+func orderLines(lines []Line) []Line {
+	if len(lines) < 2 {
+		return lines
+	}
+	groups := map[string][]Line{}
+	var countries []string
+	for _, line := range lines {
+		if _, ok := groups[line.CountryCode]; !ok {
+			countries = append(countries, line.CountryCode)
+		}
+		groups[line.CountryCode] = append(groups[line.CountryCode], line)
+	}
+	sort.SliceStable(countries, func(i, j int) bool {
+		ri, rj := countryRank(countries[i]), countryRank(countries[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return countries[i] < countries[j]
+	})
+	out := make([]Line, 0, len(lines))
+	for {
+		added := false
+		for _, code := range countries {
+			group := groups[code]
+			if len(group) == 0 {
+				continue
+			}
+			out = append(out, group[0])
+			groups[code] = group[1:]
+			added = true
+		}
+		if !added {
+			break
+		}
+	}
+	return out
 }
 
 // ProbePort 只给客户端做 TCP 延迟参考。listServers 不返回端口；真正的 Endpoint 以配置文件为准。
-const ProbePort = 51820
+// WireGuard 走 UDP，批发服务器的 TCP 51820 会直接拒绝连接，客户端「自动选择」因此一条都测不到。
+// 2026-11-13 实测 182 台里 178 台 TCP 443 可连，所以用 443 测延迟。
+const ProbePort = 443

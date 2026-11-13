@@ -48,6 +48,8 @@ type Config struct {
 	// This runtime gate is independent of stored reward rules. False leaves
 	// invitation events queued and prevents release of existing frozen rewards.
 	InviteRewardsEnabled bool
+	// 只给构建流水线发布安装包。空着时发布接口拒绝所有请求。不要写进日志。
+	AppReleaseToken string
 	// 撤销执行回执对账。false 时 worker 不读不写回执表；撤销仍然照常排队，
 	// 只是没有「已在节点生效」的确认记录。打开不会改变任何节点上的实际状态。
 	RemovalReceiptsEnabled bool
@@ -76,6 +78,7 @@ func Load() (Config, error) {
 		FundAddrKeyID:      get("FUND_ADDRESS_KEY_ID", "fund-dev-1"),
 		TronGridAPIKey:     os.Getenv("TRONGRID_API_KEY"),
 		PasswordResetPayTo: strings.TrimSpace(os.Getenv("PASSWORD_RESET_PAY_TO")),
+		AppReleaseToken:    os.Getenv("APP_RELEASE_TOKEN"),
 		USDTContract:       get("USDT_TRC20_CONTRACT", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"),
 	}
 	var err error

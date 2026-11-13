@@ -1,0 +1,17 @@
+{
+  "result": "success",
+  "accounts": [
+    {
+      "id": "15",
+      "username": "demotestingvpn",
+      "expire": "2026-07-19",
+      "password": "samplePassword"
+    },
+    {
+      "id": 16,
+      "vpnUsername": "sampleUsername",
+      "expiry": "2026-08-01",
+      "password": "samplePassword"
+    }
+  ]
+}

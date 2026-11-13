@@ -134,11 +134,30 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
-  HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
-      Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
-      Scale(size.width, scale_factor), Scale(size.height, scale_factor),
-      nullptr, nullptr, GetModuleHandle(nullptr), this);
+  int x = Scale(origin.x, scale_factor);
+  int y = Scale(origin.y, scale_factor);
+  int width = Scale(size.width, scale_factor);
+  int height = Scale(size.height, scale_factor);
+  // 默认窗口 440×860 在 1366×768、或 1080p 开 125% 以上缩放的笔记本上比屏幕可用区域还高，
+  // 窗口底部会落到任务栏后面或屏幕外面，各页底部的按钮就看不见了。
+  // 这里把窗口放进所在屏幕的可用区域（不含任务栏）；屏幕够大时尺寸不变。
+  MONITORINFO monitor_info = {};
+  monitor_info.cbSize = static_cast<DWORD>(sizeof(monitor_info));
+  if (GetMonitorInfo(monitor, &monitor_info)) {
+    const RECT& work = monitor_info.rcWork;
+    if (x < work.left) x = work.left;
+    if (y < work.top) y = work.top;
+    const int available_width = static_cast<int>(work.right - x);
+    const int available_height = static_cast<int>(work.bottom - y);
+    if (available_width > 0 && width > available_width) width = available_width;
+    if (available_height > 0 && height > available_height) {
+      height = available_height;
+    }
+  }
+
+  HWND window = CreateWindow(window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+                             x, y, width, height, nullptr, nullptr,
+                             GetModuleHandle(nullptr), this);
 
   if (!window) {
     return false;

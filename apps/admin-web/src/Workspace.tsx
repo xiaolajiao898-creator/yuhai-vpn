@@ -19,12 +19,12 @@ import {EgressPage} from './pages/Egress';
 import {RedeemCodesPage} from './pages/RedeemCodes';
 import type {EgressSource} from './api/egress';
 import './workspace.css';
-const existingPages = [['admins','管理员'],['rewards','邀请奖励'],['exports','数据导出'],['scan-cursors','扫描游标'],['devices','设备'],['plans','套餐'],['orders','订单'],['chain-transfers','链上记录'],['deposit-exceptions','异常到账'],['receive-addresses','收款地址'],['traffic','流量'],['invites','邀请'],['blacklist','黑名单'],['configs','系统参数'],['redeem-codes','兑换码']];
+const existingPages = [['admins','管理员'],['rewards','邀请奖励'],['exports','数据导出'],['scan-cursors','扫描游标'],['devices','设备'],['plans','套餐'],['orders','订单'],['chain-transfers','链上记录'],['deposit-exceptions','异常到账'],['receive-addresses','收款地址'],['traffic','流量'],['invites','邀请'],['blacklist','黑名单'],['configs','系统参数'],['redeem-codes','兑换码'],['connect-diagnostics','连接诊断']];
 // 按运营任务分组（第 21 轮信息架构）：不再把大半模块藏进「其他模块」。
 const navGroups: [string, [string,string][]][] = [
   ['总览', [['/dashboard','运营总览']]],
   ['用户与设备', [['/users','用户管理'],['/devices','设备']]],
-  ['线路与质量', [['/nodes','自建节点'],['/egress','出口线路'],['/traffic','流量']]],
+  ['线路与质量', [['/nodes','自建节点'],['/egress','出口线路'],['/traffic','流量'],['/connect-diagnostics','连接诊断']]],
   ['套餐与订单', [['/plans','套餐'],['/redeem-codes','兑换码'],['/orders','订单'],['/deposit-exceptions','异常到账'],['/chain-transfers','链上记录'],['/receive-addresses','收款地址'],['/scan-cursors','扫描游标']]],
   ['推广与奖励', [['/invites','邀请'],['/rewards','邀请奖励'],['/blacklist','黑名单']]],
   ['系统与审计', [['/approvals','审批中心'],['/audit-logs','操作日志'],['/app-versions','版本管理'],['/admins','管理员'],['/exports','数据导出'],['/configs','系统参数']]],

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:yuhai_vpn/core/support_config.dart';
 import 'package:yuhai_vpn/app/router.dart';
 import 'package:yuhai_vpn/app/theme/theme.dart';
 import 'package:yuhai_vpn/core/widgets/tide_ring_button.dart';
@@ -190,11 +191,16 @@ void main() {
     await tester.pumpWidget(frame(const SettingsPage()));
     await tester.pumpAndSettle();
     await shoot('settings');
-    await tester.ensureVisible(find.text('联系客服'));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('联系客服'));
-    await tester.pumpAndSettle();
-    await shoot('support');
+    // 客服入口只在构建时注入了 YH_SUPPORT_TG 才出现。
+    if (kSupportAvailable) {
+      await tester.ensureVisible(find.text('联系客服'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('联系客服'));
+      await tester.pumpAndSettle();
+      await shoot('support');
+    } else {
+      expect(find.text('联系客服'), findsNothing);
+    }
   });
 }
 

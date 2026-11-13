@@ -2,12 +2,14 @@ package worldvpn
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 )
@@ -21,7 +23,10 @@ import (
 // 仍然采用 application/x-www-form-urlencoded，而不是 multipart。若对方用
 // parse_str(file_get_contents('php://input')) 读参数，multipart 的原始 body 在 PHP
 // 里经常是空的，就会对真实账号也返回 some options not posted；urlencoded 能被这种读法看到。
-// 单元测试锁定的是文档里的成功 JSON，以及缺字段 / result=error。没有把真实批发密码放进测试。
+// 单元测试锁定的是文档里的成功 JSON，以及线上把同一字段写成 username / password、
+// 或把数字写成字符串的成功 JSON。缺字段 / result=error 仍然失败。没有把真实批发密码放进测试。
+//
+// 读出账号之后仍走 00047：先记在开通记录上，再写本地账户。这里不改那条幂等路径。
 
 const maxBody = 2 << 20
 
@@ -86,15 +91,7 @@ func (c *Client) AddVPN(ctx context.Context, username, password string, months i
 	if err != nil {
 		return vpnAccount{}, err
 	}
-	user, err := requiredString(body, "vpnUsername")
-	if err != nil {
-		return vpnAccount{}, err
-	}
-	pass, err := requiredString(body, "vpnPassword")
-	if err != nil {
-		return vpnAccount{}, err
-	}
-	return vpnAccount{Username: user, Password: pass}, nil
+	return accountFromBody(body)
 }
 
 func (c *Client) RenewVPN(ctx context.Context, username string, months int) error {
@@ -121,15 +118,7 @@ func (c *Client) GetTrial(ctx context.Context, email string) (vpnAccount, error)
 	if err != nil {
 		return vpnAccount{}, err
 	}
-	user, err := requiredString(body, "vpnUsername")
-	if err != nil {
-		return vpnAccount{}, err
-	}
-	pass, err := requiredString(body, "vpnPassword")
-	if err != nil {
-		return vpnAccount{}, err
-	}
-	return vpnAccount{Username: user, Password: pass}, nil
+	return accountFromBody(body)
 }
 
 func (c *Client) ListServers(ctx context.Context) ([]serverLine, error) {
@@ -157,28 +146,11 @@ func (c *Client) GetAccounts(ctx context.Context) ([][3]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	raw, ok := body["accounts"].([]any)
-	if !ok {
+	raw, ok := body["accounts"]
+	if !ok || raw == nil {
 		return nil, &APIError{Action: "getAccounts", Message: "缺少 accounts"}
 	}
-	out := make([][3]string, 0, len(raw))
-	for _, item := range raw {
-		row, ok := item.([]any)
-		if !ok || len(row) < 3 {
-			return nil, &APIError{Action: "getAccounts", Message: "账号行格式不对"}
-		}
-		id, ok := asID(row[0])
-		if !ok {
-			return nil, &APIError{Action: "getAccounts", Message: "账号编号不对"}
-		}
-		name, ok := row[1].(string)
-		exp, ok2 := row[2].(string)
-		if !ok || !ok2 || name == "" || exp == "" {
-			return nil, &APIError{Action: "getAccounts", Message: "账号行缺字段"}
-		}
-		out = append(out, [3]string{itoa(id), name, exp})
-	}
-	return out, nil
+	return parseAccounts(raw)
 }
 
 func (c *Client) CheckAuth(ctx context.Context, username, password string) error {
@@ -195,23 +167,39 @@ func (c *Client) AddWireGuardPeer(ctx context.Context, username string, serverID
 	if err != nil {
 		return peerCreated{}, err
 	}
-	id, err := requiredString(body, "wireguardId")
-	if err != nil {
-		if n, ok := asID(body["wireguardId"]); ok {
-			id = itoa(n)
-		} else {
-			return peerCreated{}, err
-		}
+	id, ok := peerConfigID(body)
+	if !ok {
+		return peerCreated{}, &APIError{Action: actionOr(body, "addWireGuardPeer"), Message: "缺少 config_id"}
 	}
-	ip, err := requiredString(body, "clientIp")
-	if err != nil {
-		return peerCreated{}, err
+	ip, _ := flexString(body["clientIp"])
+	if ip == "" {
+		ip, _ = flexString(firstFolded(body, "client_ip"))
 	}
 	server, _ := body["server"].(map[string]any)
 	name, _ := server["name"].(string)
 	pub, _ := server["publicKey"].(string)
 	dns := splitDNS(stringField(body, "dns"))
 	return peerCreated{WireGuardID: id, ClientIP: ip, DNS: dns, ServerName: name, PublicKey: pub}, nil
+}
+
+// ExistingWireGuardIDs 在不知道编号时问上游这个账号现有的配置。
+// 试用号中途断开后，上游往往只剩这一条没有记到本地的配置。问不到编号时返回空列表，调用方再按小编号探测。
+func (c *Client) ExistingWireGuardIDs(ctx context.Context, username string) ([]string, error) {
+	if strings.TrimSpace(username) == "" {
+		return nil, errors.New("worldvpn: 缺少用户名")
+	}
+	body, err := c.post(ctx, "getWireGuardConfig", map[string]string{"vpnUsername": username}, c.Sandbox)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := wireGuardConfigText(body); err != nil {
+		return nil, err
+	}
+	id, ok := peerConfigID(body)
+	if !ok {
+		return nil, nil
+	}
+	return []string{id}, nil
 }
 
 func (c *Client) GetWireGuardConfig(ctx context.Context, username, wireguardID string) (wireGuardMaterial, error) {
@@ -223,7 +211,7 @@ func (c *Client) GetWireGuardConfig(ctx context.Context, username, wireguardID s
 	if err != nil {
 		return wireGuardMaterial{}, err
 	}
-	text, err := requiredString(body, "config")
+	text, err := wireGuardConfigText(body)
 	if err != nil {
 		return wireGuardMaterial{}, err
 	}
@@ -335,4 +323,310 @@ func requiredString(body map[string]any, key string) (string, error) {
 
 func itoa(n int64) string {
 	return fmt.Sprintf("%d", n)
+}
+
+func peerConfigID(body map[string]any) (string, bool) {
+	keys := []string{"config_id", "wireguardId", "wireguard_id", "id"}
+	if id, ok := idByKeys(body, keys); ok {
+		return id, true
+	}
+	folded := make(map[string]any, len(body))
+	for k, v := range body {
+		folded[strings.ToLower(k)] = v
+	}
+	return idByKeys(folded, []string{"config_id", "wireguardid", "wireguard_id", "id"})
+}
+
+func idByKeys(body map[string]any, keys []string) (string, bool) {
+	for _, key := range keys {
+		v, ok := body[key]
+		if !ok || v == nil {
+			continue
+		}
+		if id, ok := asID(v); ok {
+			return itoa(id), true
+		}
+	}
+	return "", false
+}
+
+func firstFolded(body map[string]any, key string) any {
+	want := strings.ToLower(key)
+	for k, v := range body {
+		if strings.ToLower(k) == want {
+			return v
+		}
+	}
+	return nil
+}
+
+func wireGuardConfigText(body map[string]any) (string, error) {
+	if s, ok := configTextByKeys(body, []string{"wireguard_config", "config", "configuration"}); ok {
+		return s, nil
+	}
+	if s, ok := configTextByKeys(body, []string{"wireguard_config_base64", "config_base64", "configBase64"}); ok {
+		return s, nil
+	}
+	return "", &APIError{Action: actionOr(body, "getWireGuardConfig"), Message: "缺少 wireguard_config"}
+}
+
+func configTextByKeys(body map[string]any, keys []string) (string, bool) {
+	if s := lookupScalar(body, keys); s != "" {
+		if text, ok := decodeConfigText(s); ok {
+			return text, true
+		}
+	}
+	return "", false
+}
+
+func decodeConfigText(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if strings.Contains(strings.ToLower(s), "[interface]") {
+		return s, true
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding} {
+		raw, err := enc.DecodeString(s)
+		if err != nil || len(raw) == 0 || len(raw) > 1<<20 {
+			continue
+		}
+		text := strings.TrimSpace(string(raw))
+		if strings.Contains(strings.ToLower(text), "[interface]") {
+			return text, true
+		}
+	}
+	return "", false
+}
+
+// 文档（https://www.worldvpn.net/worldvpn-api）写的是 vpnUsername / vpnPassword。
+// 线上 getTrial 成功体用的是 username / password，addVPN 同样可能只给这组。
+// 成对优先：两套都在时用文档字段，避免把文档用户名和另一套口令拼在一起。
+var vpnUserKeys = []string{"vpnUsername"}
+var vpnPassKeys = []string{"vpnPassword"}
+var plainUserKeys = []string{"username"}
+var plainPassKeys = []string{"password"}
+var accountUserKeys = []string{"vpnUsername", "username"}
+
+func accountFromBody(body map[string]any) (vpnAccount, error) {
+	user, pass := credentialPair(body)
+	if user == "" || pass == "" {
+		for _, key := range []string{"data", "account", "vpn"} {
+			child, ok := body[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			cu, cp := credentialPair(child)
+			if user == "" {
+				user = cu
+			}
+			if pass == "" {
+				pass = cp
+			}
+			if user != "" && pass != "" {
+				break
+			}
+		}
+	}
+	if user == "" {
+		return vpnAccount{}, &APIError{Action: actionOr(body, "vpnUsername"), Message: "缺少 vpnUsername"}
+	}
+	if pass == "" {
+		return vpnAccount{}, &APIError{Action: actionOr(body, "vpnPassword"), Message: "缺少 vpnPassword"}
+	}
+	return vpnAccount{Username: user, Password: pass}, nil
+}
+
+func credentialPair(body map[string]any) (string, string) {
+	user := lookupScalar(body, vpnUserKeys)
+	pass := lookupScalar(body, vpnPassKeys)
+	if user != "" && pass != "" {
+		return user, pass
+	}
+	plainUser := lookupScalar(body, plainUserKeys)
+	plainPass := lookupScalar(body, plainPassKeys)
+	if plainUser != "" && plainPass != "" {
+		return plainUser, plainPass
+	}
+	if user == "" {
+		user = plainUser
+	}
+	if pass == "" {
+		pass = plainPass
+	}
+	return user, pass
+}
+
+func lookupScalar(body map[string]any, keys []string) string {
+	if body == nil {
+		return ""
+	}
+	for _, key := range keys {
+		if s, ok := flexString(body[key]); ok {
+			return s
+		}
+	}
+	folded := make(map[string]any, len(body))
+	for k, v := range body {
+		folded[strings.ToLower(k)] = v
+	}
+	for _, key := range keys {
+		if s, ok := flexString(folded[strings.ToLower(key)]); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// parseAccounts 读取文档里的 accounts 数组：[[id, username, expiry], ...]。
+// id 和 expiry 可以是 JSON 数字或数字字符串。也接受同一行写成对象
+// （id / username|vpnUsername / expiry|expire），以及 PHP 把列表编成对象的情形。
+func parseAccounts(raw any) ([][3]string, error) {
+	switch v := raw.(type) {
+	case string:
+		var decoded any
+		if err := json.Unmarshal([]byte(strings.TrimSpace(v)), &decoded); err != nil || decoded == nil {
+			return nil, &APIError{Action: "getAccounts", Message: "缺少 accounts"}
+		}
+		if _, again := decoded.(string); again {
+			return nil, &APIError{Action: "getAccounts", Message: "缺少 accounts"}
+		}
+		return parseAccounts(decoded)
+	case []any:
+		return accountRows(v)
+	case map[string]any:
+		if len(v) == 0 {
+			return [][3]string{}, nil
+		}
+		if lookupScalar(v, accountUserKeys) != "" || positionalTriple(v) {
+			row, err := accountRow(v, "")
+			if err != nil {
+				return nil, err
+			}
+			return [][3]string{row}, nil
+		}
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			ai, aok := asID(keys[i])
+			bi, bok := asID(keys[j])
+			if aok && bok && ai != bi {
+				return ai < bi
+			}
+			if aok != bok {
+				return aok
+			}
+			return keys[i] < keys[j]
+		})
+		rows := make([]any, len(keys))
+		for i, k := range keys {
+			rows[i] = keyedAccount{key: k, val: v[k]}
+		}
+		return accountRows(rows)
+	default:
+		return nil, &APIError{Action: "getAccounts", Message: "缺少 accounts"}
+	}
+}
+
+type keyedAccount struct {
+	key string
+	val any
+}
+
+func accountRows(items []any) ([][3]string, error) {
+	if len(items) > 10000 {
+		return nil, &APIError{Action: "getAccounts", Message: "账号过多"}
+	}
+	out := make([][3]string, 0, len(items))
+	for _, item := range items {
+		fallback := ""
+		if keyed, ok := item.(keyedAccount); ok {
+			fallback = keyed.key
+			item = keyed.val
+		}
+		row, err := accountRow(item, fallback)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+func accountRow(item any, fallbackID string) ([3]string, error) {
+	switch row := item.(type) {
+	case []any:
+		return accountRowArray(row)
+	case map[string]any:
+		if positionalTriple(row) && lookupScalar(row, accountUserKeys) == "" {
+			return accountRowArray([]any{row["0"], row["1"], row["2"]})
+		}
+		return accountRowObject(row, fallbackID)
+	default:
+		return [3]string{}, &APIError{Action: "getAccounts", Message: "账号行格式不对"}
+	}
+}
+
+func positionalTriple(row map[string]any) bool {
+	for _, key := range []string{"0", "1", "2"} {
+		v, ok := row[key]
+		if !ok {
+			return false
+		}
+		switch v.(type) {
+		case []any, map[string]any:
+			return false
+		}
+	}
+	return true
+}
+
+func accountRowArray(row []any) ([3]string, error) {
+	if len(row) < 3 {
+		return [3]string{}, &APIError{Action: "getAccounts", Message: "账号行格式不对"}
+	}
+	id, ok := asID(row[0])
+	if !ok {
+		return [3]string{}, &APIError{Action: "getAccounts", Message: "账号编号不对"}
+	}
+	name, ok := flexString(row[1])
+	exp, ok2 := flexString(row[2])
+	if !ok || !ok2 {
+		return [3]string{}, &APIError{Action: "getAccounts", Message: "账号行缺字段"}
+	}
+	return [3]string{itoa(id), name, exp}, nil
+}
+
+func accountRowObject(row map[string]any, fallbackID string) ([3]string, error) {
+	id, ok := asID(firstValue(row, []string{"id", "accountId", "account_id"}))
+	if !ok {
+		id, ok = asID(fallbackID)
+	}
+	if !ok {
+		return [3]string{}, &APIError{Action: "getAccounts", Message: "账号编号不对"}
+	}
+	name := lookupScalar(row, accountUserKeys)
+	exp := lookupScalar(row, []string{"expiry", "expire", "expire_date", "expireDate", "expiration", "date"})
+	if name == "" || exp == "" {
+		return [3]string{}, &APIError{Action: "getAccounts", Message: "账号行缺字段"}
+	}
+	return [3]string{itoa(id), name, exp}, nil
+}
+
+func firstValue(body map[string]any, keys []string) any {
+	for _, key := range keys {
+		if _, ok := body[key]; ok {
+			return body[key]
+		}
+	}
+	folded := make(map[string]any, len(body))
+	for k, v := range body {
+		folded[strings.ToLower(k)] = v
+	}
+	for _, key := range keys {
+		if v, ok := folded[strings.ToLower(key)]; ok {
+			return v
+		}
+	}
+	return nil
 }

@@ -15,7 +15,7 @@ class OrdersPage extends ConsumerWidget {
     final orders = ref.watch(ordersListProvider);
     final text = Theme.of(context).textTheme;
     return Scaffold(
-      appBar: AppBar(title: const Text('订单记录'), backgroundColor: Colors.transparent),
+      appBar: AppBar(title: const Text('订单记录')),
       body: orders.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => Center(child: Text('无法加载订单', style: text.bodyMedium?.copyWith(color: YhColors.coral))),
@@ -24,14 +24,19 @@ class OrdersPage extends ConsumerWidget {
             : RefreshIndicator(
                 onRefresh: () => ref.refresh(ordersListProvider.future),
                 child: ListView.separated(
-                  padding: const EdgeInsets.symmetric(horizontal: YhSpace.page, vertical: YhSpace.unit),
+                  padding: const EdgeInsets.fromLTRB(YhSpace.page, YhSpace.unit, YhSpace.page, YhSpace.page),
                   itemCount: list.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
                   itemBuilder: (_, i) {
                     final o = list[i];
                     final (label, color) = _status(o);
                     return ListTile(
-                      contentPadding: EdgeInsets.zero,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+                      tileColor: YhColors.paper,
+                      shape: RoundedRectangleBorder(
+                        side: const BorderSide(color: YhColors.hair),
+                        borderRadius: BorderRadius.circular(YhRadius.surface),
+                      ),
                       onTap: o.status == 'PENDING' || o.status == 'CONFIRMING'
                           ? () => context.push(Routes.pay.replaceFirst(':orderNo', o.orderNo))
                           : null,
@@ -44,7 +49,7 @@ class OrdersPage extends ConsumerWidget {
                         crossAxisAlignment: CrossAxisAlignment.end,
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Text('${_trim(o.payAmount)} USDT', style: text.bodyMedium?.copyWith(fontFamily: YhFont.numeric)),
+                          Text('${_trim(o.payAmount)} USDT', style: YhType.latin(14, weight: FontWeight.w500)),
                           Text(label, style: text.labelSmall?.copyWith(color: color)),
                         ],
                       ),

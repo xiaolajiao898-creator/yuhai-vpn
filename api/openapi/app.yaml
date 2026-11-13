@@ -42,6 +42,69 @@ paths:
         '200': { $ref: '#/components/responses/AppVersion' }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/app/latest:
+    get:
+      tags: [system]
+      operationId: getLatestAppRelease
+      x-auth-level: S0
+      summary: 当前对外安装包。windows 或 android。响应可缓存 60 秒。
+      parameters:
+        - name: platform
+          in: query
+          required: true
+          schema: { type: string, enum: [windows, android] }
+      responses:
+        '200':
+          description: 当前安装包
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [version, build, url, sha256, size, released_at, min_supported_build, notes]
+                        properties:
+                          version: { type: string }
+                          build: { type: integer }
+                          url: { type: string, format: uri }
+                          sha256: { type: string }
+                          size: { type: integer }
+                          released_at: { type: string, format: date-time }
+                          min_supported_build: { type: integer }
+                          notes: { type: string }
+                          cert_sha256: { type: string }
+        default: { $ref: '#/components/responses/Error' }
+  /v1/app/download/{platform}:
+    get:
+      tags: [system]
+      operationId: redirectLatestAppRelease
+      x-auth-level: S0
+      summary: 302 到当前安装包。缓存 60 秒。
+      parameters:
+        - name: platform
+          in: path
+          required: true
+          schema: { type: string, enum: [windows, android] }
+      responses:
+        '302': { description: 跳到当前安装包 }
+        default: { $ref: '#/components/responses/Error' }
+    head:
+      tags: [system]
+      operationId: redirectLatestAppReleaseHead
+      x-auth-level: S0
+      summary: 和 GET 一样 302 到当前安装包，但不回正文。
+      parameters:
+        - name: platform
+          in: path
+          required: true
+          schema: { type: string, enum: [windows, android] }
+      responses:
+        '302': { description: 跳到当前安装包 }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/bootstrap:
     get:
       tags: [system]
@@ -1463,6 +1526,42 @@ paths:
                   - properties: { data: { $ref: '#/components/schemas/WorldVPNProfile' } }
         '403': { description: 40301 没有可用套餐, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         '409': { description: 40902 同时在线设备已达 3 台, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
+        default: { $ref: '#/components/responses/Error' }
+
+  /v1/connect/diagnostics:
+    post:
+      tags: [connect]
+      operationId: reportConnectDiagnostic
+      x-auth-level: S2
+      summary: |
+        连接失败时由客户端上报诊断：失败阶段、错误原文、WireGuard 服务状态和日志摘要。
+        服务端会去掉私钥后再入库。后台用 users.diagnostics 查看。不要求用户自己导出日志。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage]
+              properties:
+                stage: { type: string, enum: [prepare, install, service, handshake, connect] }
+                error_code: { type: string }
+                error_text: { type: string }
+                service_state: { type: string }
+                log_summary: { type: string }
+      responses:
+        '200':
+          description: 已收下
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [accepted]
+                        properties: { accepted: { type: boolean } }
         default: { $ref: '#/components/responses/Error' }
 
   /v1/connect/worldvpn/release:

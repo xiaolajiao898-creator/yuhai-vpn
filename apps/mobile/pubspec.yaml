@@ -32,6 +32,7 @@ dependencies:
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  fake_async: ^1.3.3
   flutter_lints: ^5.0.0
   build_runner: ^2.4.13
   freezed: ^2.5.7
@@ -40,6 +41,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  # 吉祥物艾丽（全身像，透明底 WebP）：首页大圆按钮旁边、电脑版最大化时的右侧。
+  assets:
+    - assets/images/aili.webp
   # Noto Sans SC（SIL OFL，见 assets/fonts/OFL.txt）。
   # 子集含 GB2312 与界面里出现的字符，真机和截图用同一套字，不依赖系统里是否装了中文。
   fonts:
@@ -51,4 +55,16 @@ flutter:
         - asset: assets/fonts/NotoSansSC-Bold.otf
           weight: 600
         - asset: assets/fonts/NotoSansSC-Bold.otf
+          weight: 700
+    # 改版的展示字体，都是 SIL OFL（许可见 assets/fonts/SmileySans-OFL.txt、Unbounded-OFL.txt）。
+    # 得意黑：大标题；按 OFL 保留字体名条款，这里用的是官方发布的原文件，没有改动。
+    - family: YhDisplay
+      fonts:
+        - asset: assets/fonts/SmileySans-Oblique.otf
+    # Unbounded：价格、计时等大号数字和英文小标签。从官方可变字体导出 500、700 两个字重，只留拉丁字符。
+    - family: YhLatin
+      fonts:
+        - asset: assets/fonts/Unbounded-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Unbounded-Bold.ttf
           weight: 700

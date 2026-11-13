@@ -31,6 +31,24 @@ class MockVpnEngine implements VpnEngine {
   @override
   bool get canProbe => !_disposed;
 
+  @override
+  bool get canRecover => false;
+
+  @override
+  Future<void> applyPolicy({required bool leakProtect}) async {}
+
+  @override
+  Future<int?> probeTunnel() async => null;
+
+  @override
+  Future<bool> holdTraffic() async => false;
+
+  @override
+  Future<void> releaseTraffic() async {}
+
+  @override
+  Future<int> networkEpoch() async => 0;
+
   VpnStatus get current => _current;
 
   void _set(VpnStatus s) {

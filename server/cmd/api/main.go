@@ -16,7 +16,9 @@ import (
 
 	"github.com/yuhai-vpn/server/internal/account"
 	"github.com/yuhai-vpn/server/internal/appinfo"
+	"github.com/yuhai-vpn/server/internal/apprelease"
 	"github.com/yuhai-vpn/server/internal/auth"
+	"github.com/yuhai-vpn/server/internal/clientdiag"
 	"github.com/yuhai-vpn/server/internal/clock"
 	"github.com/yuhai-vpn/server/internal/config"
 	"github.com/yuhai-vpn/server/internal/connect"
@@ -134,7 +136,12 @@ func buildRouter(d routerDeps) *gin.Engine {
 
 	// S0
 	r.GET("/app/version", (&appinfo.Handler{Svc: &appinfo.Service{Pool: d.Pool, Clock: d.Clock}}).GetVersion)
+	releases := &apprelease.Handler{Svc: &apprelease.Service{Pool: d.Pool, Clock: d.Clock}, Token: d.Config.AppReleaseToken}
 	v1 := r.Group("/v1")
+	v1.GET("/app/latest", releases.Latest)
+	// HEAD 和 GET 都 302。官网对 /download/latest 发 HEAD 时不能再落到 404。
+	v1.GET("/app/download/:platform", releases.Redirect)
+	v1.HEAD("/app/download/:platform", releases.Redirect)
 	v1.GET("/bootstrap", notImplemented)
 	trialSvc := &trial.Service{Pool: d.Pool, Clock: d.Clock}
 	redeemSvc := &redeem.Service{Pool: d.Pool, Clock: d.Clock}
@@ -150,5 +157,6 @@ func buildRouter(d routerDeps) *gin.Engine {
 	(&redeem.Handler{Svc: redeemSvc, MW: d.MW}).Mount(v1)
 	(&trial.Handler{Svc: trialSvc, MW: d.MW}).Mount(v1)
 	(&worldvpn.Handler{Svc: d.WorldVPN, MW: d.MW}).Mount(v1)
+	(&clientdiag.Handler{Pool: d.Pool, MW: d.MW}).Mount(v1)
 	return r
 }

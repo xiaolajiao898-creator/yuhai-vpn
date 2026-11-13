@@ -1,0 +1,44 @@
+# 贴进现有的 yhvpn.io 站点块，原来的 file_server 不用挪进 handle。
+# 反代到本机 API，不要写成公网域名。启动 Caddy 前设置：
+#   YUHAI_API_UPSTREAM=127.0.0.1:18080
+# 值是 host:port。不要带 https://，本机接口是明文。
+
+@latest_windows path /download/latest/windows
+@latest_android path /download/latest/android
+@latest_head {
+	method HEAD
+	path /download/latest/windows /download/latest/android
+}
+
+# 上游按 GET 处理。改写只发生在反代之前，客户端收到的仍是自己发出的 HEAD 的 302。
+method @latest_head GET
+
+header @latest_windows {
+	defer
+	Cache-Control "public, max-age=60"
+}
+header @latest_android {
+	defer
+	Cache-Control "public, max-age=60"
+}
+
+reverse_proxy @latest_windows {$YUHAI_API_UPSTREAM} {
+	rewrite /v1/app/download/windows
+}
+reverse_proxy @latest_android {$YUHAI_API_UPSTREAM} {
+	rewrite /v1/app/download/android
+}
+
+# 旧文件名。redir 对 GET 和 HEAD 都是 302，不经过 API。
+@old_windows path_regexp old_windows ^/download/YuhaiVPN-Windows-.*\.exe$
+redir @old_windows /download/latest/windows 302
+
+@old_apk path /download/yuhai-vpn-candidate-0928.apk
+redir @old_apk /download/latest/android 302
+
+# 版本化文件仍由站点原来的 file_server 提供，这里只加缓存。
+@download_builds path /download/builds/*
+header @download_builds {
+	defer
+	Cache-Control "public, max-age=31536000, immutable"
+}

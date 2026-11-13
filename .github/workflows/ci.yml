@@ -159,7 +159,16 @@ jobs:
             fi
           fi
           flutter pub get
+          # 已发布的安卓包是 1.1.0 构建号 110。110 + run_number 至少是 111。
+          build=$((110 + ${GITHUB_RUN_NUMBER:-0}))
+          if [ "$build" -le 110 ]; then
+            echo "build number must be greater than 110 (got $build)"
+            exit 1
+          fi
+          echo "YH_CLIENT_BUILD=$build" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "YH_CLIENT_BUILD=$build" >> "$GITHUB_ENV"
           flutter build apk --debug --target-platform android-x64 \
+            --build-name=1.1.0 --build-number="$build" \
             --dart-define=YH_API_BASE=https://api.yhvpn.io
       - name: 安装包只含 x86_64 的 Xray 与 WireGuard
         run: |
@@ -191,7 +200,13 @@ jobs:
               -keyalg RSA -keysize 2048 -validity 10000 \
               -dname "CN=Android Debug,O=Android,C=US"
           fi
+          build="${YH_CLIENT_BUILD:-}"
+          if [ -z "$build" ] || [ "$build" -le 110 ]; then
+            echo "installer is missing a build number greater than 110"
+            exit 1
+          fi
           flutter build apk --release --split-per-abi --target-platform android-x64 \
+            --build-name=1.1.0 --build-number="$build" \
             --dart-define=YH_API_BASE=https://api.yhvpn.io
       - name: 核对 release 包名、调试签名和体积
         run: |

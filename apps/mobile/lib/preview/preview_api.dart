@@ -152,7 +152,7 @@ class PreviewApi extends ApiClient {
       Map<String, List<String>> query = const {},
       bool sign = false,
       String? idempotencyKey,
-      bool retrying = false, Session? expectedSession}) async {
+      bool retrying = false, Session? expectedSession, Duration? timeout}) async {
     if (await store.session() == null) {
       throw ApiException(40101, '请重置演示以返回示例账户');
     }

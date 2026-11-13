@@ -1,11 +1,14 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 
 import '../security/device_key.dart';
 import '../storage/session_store.dart';
+import 'api_address_memory.dart';
 import 'request_signer.dart';
 
 /// 统一 API 客户端（方案 11.1–11.2）：
@@ -19,7 +22,8 @@ class ApiClient {
       required this.deviceKey,
       required this.store,
       required this.appVersion,
-      required this.platform})
+      required this.platform,
+      ApiAddressMemory? addressMemory})
       : dio = Dio(BaseOptions(
           baseUrl: baseUrl,
           followRedirects: false,
@@ -32,7 +36,17 @@ class ApiClient {
             'Accept-Language': 'zh-CN'
           },
           validateStatus: (_) => true,
-        ));
+        )) {
+    // 只有 Windows 传入（见 providers.dart）：断网保护拦着时系统查不了域名，
+    // 用上次查到的地址直连 API。其余和 dio 默认的 HttpClient 一样（空闲连接 3 秒后关闭）。
+    if (addressMemory != null) {
+      dio.httpClientAdapter = IOHttpClientAdapter(
+        createHttpClient: () => HttpClient()
+          ..idleTimeout = const Duration(seconds: 3)
+          ..connectionFactory = addressMemory.connect,
+      );
+    }
+  }
 
   final Dio dio;
   final DeviceKey deviceKey;
@@ -135,7 +149,8 @@ class ApiClient {
       bool sign = false,
       String? idempotencyKey,
       bool retrying = false,
-      Session? expectedSession}) async {
+      Session? expectedSession,
+      Duration? timeout}) async {
     final session = expectedSession ?? await store.session();
     if (session == null) {
       throw ApiException(40101, '未登录');
@@ -145,7 +160,8 @@ class ApiClient {
         query: query,
         sign: sign,
         idempotencyKey: idempotencyKey,
-        retrying: retrying);
+        retrying: retrying,
+        timeout: timeout);
   }
 
   Future<Map<String, dynamic>> _callForSession(
@@ -154,7 +170,8 @@ class ApiClient {
       Map<String, List<String>> query = const {},
       bool sign = false,
       String? idempotencyKey,
-      required bool retrying}) async {
+      required bool retrying,
+      Duration? timeout}) async {
     final session = await _sessionFor(expected);
     final deviceUid = await store.deviceUid();
     final body = json == null
@@ -174,7 +191,11 @@ class ApiClient {
         queryParameters:
             query.map((k, v) => MapEntry(k, v.length == 1 ? v.first : v)),
         options: Options(
-            method: method, headers: headers, responseType: ResponseType.json));
+            method: method,
+            headers: headers,
+            responseType: ResponseType.json,
+            sendTimeout: timeout,
+            receiveTimeout: timeout));
     await _sessionFor(expected);
     try {
       return _unwrap(res);
@@ -188,7 +209,8 @@ class ApiClient {
             query: query,
             sign: sign,
             idempotencyKey: idempotencyKey,
-            retrying: true);
+            retrying: true,
+            timeout: timeout);
       }
       if (e.code == 40105 && !retrying) {
         await _sessionFor(expected);
@@ -201,7 +223,8 @@ class ApiClient {
             query: query,
             sign: sign,
             idempotencyKey: idempotencyKey,
-            retrying: true);
+            retrying: true,
+            timeout: timeout);
       }
       if (e.code == 40103 || e.code == 40107 || e.code == 40108) {
         await _sessionLost(session, e.code);

@@ -8,8 +8,10 @@ import '../../../app/router.dart';
 
 import '../../../app/theme/tokens.dart';
 import '../../../core/network/api_client.dart';
+import '../../../core/widgets/brand.dart';
 import '../../../core/widgets/tide_ring_button.dart';
 import '../../account/data/trial_api.dart';
+import '../../../core/support_config.dart';
 import '../../account/presentation/support_sheet.dart';
 import '../../../platform/vpn/egress_profile.dart';
 import '../../../platform/vpn/vpn_engine.dart';
@@ -171,7 +173,8 @@ class _HomePageState extends ConsumerState<HomePage> {
                   },
                   child: const Text('兑换码'),
                 ),
-              TextButton(onPressed: () => showSupportSheet(sheetContext), child: const Text('联系客服')),
+              if (kSupportAvailable)
+                TextButton(onPressed: () => showSupportSheet(sheetContext), child: const Text('联系客服')),
             ]),
           ),
         );
@@ -196,6 +199,7 @@ class _HomePageState extends ConsumerState<HomePage> {
     final demo = ref.watch(vpnDemoModeProvider);
     final failure = ref.watch(connectionFailureProvider);
     final notice = ref.watch(connectionNoticeProvider);
+    final held = ref.watch(trafficHeldProvider);
     final me = ref.watch(meProvider);
     final selectedNode = ref.watch(selectedNodeProvider);
     final nodeState = ref.watch(nodesProvider);
@@ -216,150 +220,166 @@ class _HomePageState extends ConsumerState<HomePage> {
         : status;
     _syncTicker(visual == VpnStatus.connected && stats != null);
     _maybeAutoConnect();
+    final deviceLimit = visual == VpnStatus.error &&
+            failure?.code == 'DEVICE_LIMIT' &&
+            (failure?.message.isNotEmpty ?? false)
+        ? failure!.message
+        : null;
     final (label, color) = switch (visual) {
       VpnStatus.connected => (demo ? '模拟已连接' : '已连接', YhColors.good),
-      VpnStatus.connecting => ('正在连接', YhColors.accent),
-      VpnStatus.reconnecting => ('正在重连', YhColors.warn),
+      VpnStatus.connecting => ('正在连接…', YhColors.flow),
+      VpnStatus.reconnecting => ('重连中', YhColors.warn),
       VpnStatus.disconnecting => ('正在断开', YhColors.sub),
-      VpnStatus.error => ('连接失败', YhColors.danger),
-      VpnStatus.disconnected => ('未连接', YhColors.sub),
+      VpnStatus.error => (deviceLimit ?? '连接失败', YhColors.danger),
+      VpnStatus.disconnected => ('未连接', YhColors.ink),
     };
-    final wash = switch (visual) {
-      VpnStatus.connected => const Color(0xFF16301C),
-      VpnStatus.connecting || VpnStatus.reconnecting => const Color(0xFF1A2414),
-      VpnStatus.error => YhColors.bg,
-      _ => YhColors.bg,
+    final eyebrow = switch (visual) {
+      VpnStatus.connected => 'PROTECTED · 已加密',
+      VpnStatus.connecting || VpnStatus.reconnecting => 'LINKING · 建立隧道',
+      VpnStatus.error => 'ATTENTION · 需要处理',
+      _ => 'STATUS · 连接状态',
     };
     return Scaffold(
-      backgroundColor: wash,
-      appBar: AppBar(title: const Text('宇海VPN'), backgroundColor: Colors.transparent, actions: [
-        TextButton(
-            onPressed: () => context.push(Routes.balance),
-            child: const Text('账单')),
-        IconButton(
-            tooltip: '设置',
-            onPressed: () => context.push(Routes.settings),
-            icon: const Icon(Icons.settings_outlined))
-      ]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: 0,
-        onDestinationSelected: (index) {
+      backgroundColor: YhColors.bg,
+      extendBody: true,
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        titleSpacing: YhSpace.page,
+        title: Row(mainAxisSize: MainAxisSize.min, children: [
+          const BrandMark(size: 30),
+          const SizedBox(width: 12),
+          Text('宇海VPN', style: YhType.display(24)),
+        ]),
+        actions: [
+          TextButton(
+              onPressed: () => context.push(Routes.balance),
+              child: const Text('账单')),
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: IconButton(
+                tooltip: '设置',
+                onPressed: () => context.push(Routes.settings),
+                style: IconButton.styleFrom(
+                    side: const BorderSide(color: YhColors.hairStrong)),
+                icon: const Icon(Icons.tune_rounded, size: 20)),
+          ),
+        ],
+      ),
+      bottomNavigationBar: YhTabBar(
+        index: 0,
+        onSelect: (index) {
           if (index == 1) context.push(Routes.plans);
           if (index == 2) context.push(Routes.invite);
           if (index == 3) context.push(Routes.settings);
         },
-        destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.shield_outlined),
-              selectedIcon: Icon(Icons.shield),
-              label: '连接'),
-          NavigationDestination(
-              icon: Icon(Icons.workspace_premium_outlined), label: '套餐'),
-          NavigationDestination(
-              icon: Icon(Icons.card_giftcard_outlined), label: '邀请'),
-          NavigationDestination(icon: Icon(Icons.person_outline), label: '我的'),
-        ],
       ),
-      body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.symmetric(horizontal: YhSpace.page),
-          children: [
-            if (demo)
-              Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text('演示模式 · 示例数据，不会建立真实 VPN 连接',
-                      textAlign: TextAlign.center,
-                      style: text.labelSmall?.copyWith(color: YhColors.warn))),
-            const SizedBox(height: 16),
-            Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Container(
-                  width: 8,
-                  height: 8,
-                  decoration:
-                      BoxDecoration(color: color, shape: BoxShape.circle)),
-              const SizedBox(width: 8),
-              Text(label, style: text.titleLarge?.copyWith(color: color)),
-            ]),
-            if (stats != null) ...[
-              const SizedBox(height: 4),
-              Text(_duration(DateTime.now().toUtc().difference(stats.since)),
+      body: TideBackdrop(
+        linesTop: 0.30,
+        glow: visual == VpnStatus.connected ? 1.4 : 1,
+        child: SafeArea(
+          bottom: false,
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(YhSpace.page, 0, YhSpace.page, 120),
+            children: [
+              if (demo)
+                Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text('演示模式 · 示例数据，不会建立真实 VPN 连接',
+                        textAlign: TextAlign.center,
+                        style: text.labelSmall?.copyWith(color: YhColors.warn))),
+              const SizedBox(height: 14),
+              Center(child: Eyebrow(eyebrow, color: color == YhColors.ink ? YhColors.accentInk : color)),
+              const SizedBox(height: 10),
+              Text(label,
                   textAlign: TextAlign.center,
-                  style: text.bodyLarge?.copyWith(
-                      fontFamily: YhFont.numeric,
-                      fontFeatures: const [FontFeature.tabularFigures()])),
-            ],
-            const SizedBox(height: 24),
-            MediaQuery(
-              data: MediaQuery.of(context).copyWith(
-                  disableAnimations:
-                      MediaQuery.of(context).disableAnimations || reduceMotion),
-              child: Center(
-                child: TideRingButton(
-                  status: visual,
-                  onTap: _onPower,
-                ),
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (stats != null) ...[
-              Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                _Rate(icon: Icons.arrow_downward, value: stats.downSpeed),
-                const SizedBox(width: 24),
-                _Rate(icon: Icons.arrow_upward, value: stats.upSpeed),
-              ]),
-              const SizedBox(height: 4),
-              Text('本次流量 ${_bytes(stats.downBytes + stats.upBytes)}',
-                  textAlign: TextAlign.center,
-                  style: text.labelSmall?.copyWith(fontFamily: YhFont.numeric)),
-            ],
-            if (blocked == 'NO_PLAN')
-              Padding(
-                padding: const EdgeInsets.only(top: 16),
-                child: _AccessBanner(
-                  title: '还没开通',
-                  body: '新用户可免费试用 24 小时，或选一个套餐继续使用。',
-                  action: '免费试用 24 小时',
-                  busy: _claiming,
-                  onAction: _claimTrial,
-                  onPlans: () => context.push(Routes.plans),
-                ),
-              ),
-            if (failure != null && status == VpnStatus.error && !accessBlock)
-              _FailureCard(
-                failure: failure,
-                onRetry: () =>
-                    ref.read(connectionControllerProvider.notifier).toggle(),
-                onSwitch: () => context.push(Routes.nodes),
-                onSupport: () => showSupportSheet(context),
-              ),
-            if (notice != null &&
-                (status == VpnStatus.connected ||
-                    status == VpnStatus.connecting))
-              Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: Text(notice,
+                  style: YhType.display(44, color: color, height: 1.05)),
+              if (stats != null) ...[
+                const SizedBox(height: 6),
+                Text(_duration(DateTime.now().toUtc().difference(stats.since)),
                     textAlign: TextAlign.center,
-                    style: text.labelSmall?.copyWith(color: YhColors.warn)),
+                    style: YhType.latin(26, color: YhColors.accentInk, weight: FontWeight.w500, spacing: 1.5)),
+              ],
+              const SizedBox(height: 10),
+              MediaQuery(
+                data: MediaQuery.of(context).copyWith(
+                    disableAnimations:
+                        MediaQuery.of(context).disableAnimations || reduceMotion),
+                child: _Stage(
+                  ring: (size) => TideRingButton(
+                    status: visual,
+                    onTap: _onPower,
+                    size: size,
+                  ),
+                ),
               ),
-            const SizedBox(height: 24),
-            _LineCard(
-                selectedId: selectedNode,
-                chosen: chosen,
-                loading: nodeState.isLoading,
-                autoHint: _autoHint(nodeState.asData?.value),
-                onTap: () => context.push(Routes.nodes)),
-            const SizedBox(height: 12),
-            _AccountCard(me: me),
-            const SizedBox(height: 8),
-            Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  onPressed: () => context.push(Routes.traffic),
-                  icon: const Icon(Icons.bar_chart_rounded, size: 18),
-                  label: const Text('查看流量明细'),
-                )),
-            const SizedBox(height: 16),
-          ],
+              const SizedBox(height: 16),
+              if (stats != null) ...[
+                Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  _Rate(icon: Icons.south_rounded, value: stats.downSpeed),
+                  const SizedBox(width: 12),
+                  _Rate(icon: Icons.north_rounded, value: stats.upSpeed),
+                ]),
+                const SizedBox(height: 8),
+                Text('本次流量 ${_bytes(stats.downBytes + stats.upBytes)}',
+                    textAlign: TextAlign.center,
+                    style: text.labelSmall?.copyWith(fontFamily: YhFont.numeric)),
+              ],
+              if (blocked == 'NO_PLAN')
+                Padding(
+                  padding: const EdgeInsets.only(top: 16),
+                  child: _AccessBanner(
+                    title: '还没开通',
+                    body: '新用户可免费试用 24 小时，或选一个套餐继续使用。',
+                    action: '免费试用 24 小时',
+                    busy: _claiming,
+                    onAction: _claimTrial,
+                    onPlans: () => context.push(Routes.plans),
+                  ),
+                ),
+              if (failure != null && status == VpnStatus.error && !accessBlock)
+                _FailureCard(
+                  failure: failure,
+                  onRetry: () =>
+                      ref.read(connectionControllerProvider.notifier).toggle(),
+                  onSwitch: () => context.push(Routes.nodes),
+                  onSupport: kSupportAvailable ? () => showSupportSheet(context) : null,
+                ),
+              if (notice != null &&
+                  (status == VpnStatus.connected ||
+                      status == VpnStatus.connecting ||
+                      status == VpnStatus.reconnecting ||
+                      (held && status == VpnStatus.error)))
+                Padding(
+                  padding: const EdgeInsets.only(top: 12),
+                  child: Text(notice,
+                      textAlign: TextAlign.center,
+                      style: text.labelSmall?.copyWith(color: YhColors.warn)),
+                ),
+              if (held && status != VpnStatus.disconnected)
+                TextButton(
+                  onPressed: () =>
+                      ref.read(connectionControllerProvider.notifier).release(),
+                  child: const Text('断开并恢复本地网络'),
+                ),
+              const SizedBox(height: 22),
+              _LineCard(
+                  selectedId: selectedNode,
+                  chosen: chosen,
+                  loading: nodeState.isLoading,
+                  autoHint: _autoHint(nodeState.asData?.value),
+                  onTap: () => context.push(Routes.nodes)),
+              const SizedBox(height: 12),
+              _AccountCard(me: me),
+              const SizedBox(height: 6),
+              Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => context.push(Routes.traffic),
+                    icon: const Icon(Icons.bar_chart_rounded, size: 18),
+                    label: const Text('查看流量明细'),
+                  )),
+            ],
+          ),
         ),
       ),
     );
@@ -411,15 +431,19 @@ class _Rate extends StatelessWidget {
   }
 
   @override
-  Widget build(BuildContext context) => Row(children: [
-        Icon(icon, size: 14, color: YhColors.sub),
-        const SizedBox(width: 4),
-        Text(format(value),
-            style: Theme.of(context)
-                .textTheme
-                .labelSmall
-                ?.copyWith(fontFamily: YhFont.numeric)),
-      ]);
+  Widget build(BuildContext context) => Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: YhColors.paper,
+          borderRadius: BorderRadius.circular(YhRadius.tag),
+          border: Border.all(color: YhColors.hair),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 14, color: YhColors.accentInk),
+          const SizedBox(width: 6),
+          Text(format(value), style: YhType.latin(12, color: YhColors.ink, weight: FontWeight.w500, spacing: 0.4)),
+        ]),
+      );
 }
 
 class _AccessBanner extends StatelessWidget {
@@ -440,19 +464,33 @@ class _AccessBanner extends StatelessWidget {
     final text = Theme.of(context).textTheme;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(22, 22, 22, 14),
       decoration: BoxDecoration(
-        color: YhColors.paper,
+        color: YhColors.lime,
         borderRadius: BorderRadius.circular(YhRadius.surface),
-        border: Border.all(color: YhColors.accent.withValues(alpha: .5)),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        Text(title, style: text.titleLarge),
-        const SizedBox(height: 4),
-        Text(body, style: text.bodyMedium?.copyWith(color: YhColors.sub)),
-        const SizedBox(height: 12),
-        FilledButton(onPressed: busy ? null : onAction, child: Text(busy ? '正在开通…' : action)),
-        TextButton(onPressed: onPlans, child: const Text('查看套餐')),
+        Row(children: [
+          Expanded(child: Text(title, style: YhType.display(28, color: YhColors.buttonInk))),
+          Text('24H', style: YhType.latin(22, color: YhColors.buttonInk)),
+        ]),
+        const SizedBox(height: 6),
+        Text(body, style: text.bodyMedium?.copyWith(color: YhColors.buttonInk.withValues(alpha: 0.8))),
+        const SizedBox(height: 16),
+        FilledButton(
+          style: FilledButton.styleFrom(
+              backgroundColor: YhColors.buttonInk,
+              foregroundColor: YhColors.lime,
+              disabledBackgroundColor: YhColors.buttonInk.withValues(alpha: 0.6),
+              disabledForegroundColor: YhColors.lime.withValues(alpha: 0.7)),
+          onPressed: busy ? null : onAction,
+          child: Text(busy ? '正在开通…' : action),
+        ),
+        TextButton(
+          style: TextButton.styleFrom(foregroundColor: YhColors.buttonInk),
+          onPressed: onPlans,
+          child: const Text('查看套餐'),
+        ),
       ]),
     );
   }
@@ -465,16 +503,17 @@ class _FailureCard extends StatelessWidget {
       required this.onSwitch,
       required this.onSupport});
   final VpnFailure failure;
-  final VoidCallback onRetry, onSwitch, onSupport;
+  final VoidCallback onRetry, onSwitch;
+  final VoidCallback? onSupport;
 
   @override
   Widget build(BuildContext context) => Container(
-        margin: const EdgeInsets.only(top: 12),
-        padding: const EdgeInsets.all(16),
+        margin: const EdgeInsets.only(top: 14),
+        padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: YhColors.paper,
+          color: YhColors.danger.withValues(alpha: 0.08),
           borderRadius: BorderRadius.circular(YhRadius.surface),
-          border: Border.all(color: YhColors.danger.withValues(alpha: .4)),
+          border: Border.all(color: YhColors.danger.withValues(alpha: .45)),
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
           Text(failure.message,
@@ -482,7 +521,7 @@ class _FailureCard extends StatelessWidget {
                   .textTheme
                   .bodyMedium
                   ?.copyWith(color: YhColors.danger)),
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
           Row(children: [
             Expanded(
                 child: OutlinedButton(
@@ -492,7 +531,7 @@ class _FailureCard extends StatelessWidget {
                 child: OutlinedButton(
                     onPressed: onSwitch, child: const Text('换线路'))),
           ]),
-          TextButton(onPressed: onSupport, child: const Text('联系客服')),
+          if (onSupport != null) TextButton(onPressed: onSupport, child: const Text('联系客服')),
         ]),
       );
 }
@@ -532,40 +571,40 @@ class _LineCard extends StatelessWidget {
                           ].join(' · ')
                         : n.unavailableLabel
                   );
-    return Material(
-      color: YhColors.paper,
-      shape: RoundedRectangleBorder(
-          side: const BorderSide(color: YhColors.line),
-          borderRadius: BorderRadius.circular(YhRadius.surface)),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(children: [
-            Container(
-              width: 40,
-              height: 40,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                  color: YhColors.soft,
-                  borderRadius: BorderRadius.circular(12)),
-              child: flag.isEmpty
-                  ? const Icon(Icons.bolt, color: YhColors.accent)
-                  : Text(flag, style: const TextStyle(fontSize: 22)),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  Text(title, style: text.bodyLarge),
-                  Text(subtitle, style: text.labelSmall),
-                ])),
-            const Icon(Icons.chevron_right, color: YhColors.sub),
-          ]),
+    return YhPanel(
+      onTap: onTap,
+      padding: const EdgeInsets.fromLTRB(16, 16, 14, 16),
+      child: Row(children: [
+        Container(
+          width: 48,
+          height: 48,
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+              color: flag.isEmpty ? YhColors.lime : YhColors.soft,
+              borderRadius: BorderRadius.circular(YhRadius.listSelected)),
+          child: flag.isEmpty
+              ? const Icon(Icons.bolt_rounded, color: YhColors.buttonInk)
+              : Text(flag, style: const TextStyle(fontSize: 24)),
         ),
-      ),
+        const SizedBox(width: 14),
+        Expanded(
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+              Text('ROUTE · 线路', style: YhType.eyebrow(color: YhColors.faint)),
+              const SizedBox(height: 4),
+              Text(title, style: YhType.display(21)),
+              const SizedBox(height: 2),
+              Text(subtitle, style: text.labelSmall),
+            ])),
+        const SizedBox(width: 8),
+        Container(
+          width: 34,
+          height: 34,
+          decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: YhColors.hairStrong)),
+          child: const Icon(Icons.arrow_forward_rounded, size: 17, color: YhColors.ink),
+        ),
+      ]),
     );
   }
 }
@@ -577,14 +616,8 @@ class _AccountCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: YhColors.paper,
-        borderRadius: BorderRadius.circular(YhRadius.surface),
-        border: Border.all(color: YhColors.line),
-      ),
+    return YhPanel(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 16),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         if (me.valueOrNull?['pending_order'] != null)
           Padding(
@@ -605,11 +638,24 @@ class _AccountCard extends StatelessWidget {
             return Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                Row(children: [
+                  Text('ACCOUNT · 账户', style: YhType.eyebrow(color: YhColors.faint)),
+                  const Spacer(),
+                  if (reason == null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                          color: YhColors.lime,
+                          borderRadius: BorderRadius.circular(YhRadius.tag)),
+                      child: Text(planLabel(ent), style: text.labelSmall?.copyWith(color: YhColors.buttonInk, fontWeight: FontWeight.w700)),
+                    ),
+                ]),
+                const SizedBox(height: 8),
                 InkWell(
                   onTap: reason == null ? null : () => context.push(Routes.plans),
                   child: Text('账户 ${m['account_no']} · $hint',
                       style: text.labelSmall?.copyWith(
-                          color: reason == null ? YhColors.sub : YhColors.warn)),
+                          color: reason == null ? YhColors.sub : YhColors.warn, height: 1.6)),
                 ),
                 if (noPlan)
                   Align(
@@ -629,4 +675,21 @@ class _AccountCard extends StatelessWidget {
       ]),
     );
   }
+}
+
+/// 首页舞台：连接环居中。艾丽站在圆环里面，不再单独站在环的左边。
+/// 窄电脑窗口（栏宽大约 480）和手机都把环放到中间，左右留一点空。
+class _Stage extends StatelessWidget {
+  const _Stage({required this.ring});
+  final Widget Function(double size) ring;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final size = (width * 0.92).clamp(228.0, 340.0);
+        return SizedBox(
+          height: size + 22,
+          child: Center(child: ring(size)),
+        );
+      });
 }

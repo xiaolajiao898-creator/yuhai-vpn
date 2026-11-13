@@ -8,10 +8,12 @@ import '../../account/data/account_api.dart';
 import '../../settings/presentation/settings_widgets.dart';
 import '../data/traffic_api.dart';
 
+// 数字用品牌英文字体（Unbounded），中文单位落到界面字体。
 const _numberStyle = TextStyle(
-  fontFamily: 'Arial Rounded MT Bold',
-  fontFamilyFallback: ['SF Pro Rounded', YhFont.numeric, 'sans-serif'],
-  fontWeight: FontWeight.w800,
+  fontFamily: YhFont.latin,
+  fontFamilyFallback: YhFont.fallback,
+  fontWeight: FontWeight.w700,
+  fontFeatures: [FontFeature.tabularFigures()],
   color: YhColors.moonlight,
 );
 
@@ -215,7 +217,7 @@ class _TrafficPageState extends ConsumerState<TrafficPage> {
             const SizedBox(height: 4),
             Text(formatTrafficBytes(day.totalBytes),
                 key: const ValueKey('traffic-selected-total'),
-                style: _numberStyle.copyWith(fontSize: 24)),
+                style: _numberStyle.copyWith(fontSize: 21)),
           ])),
           IconButton(
               tooltip: '后一天',
@@ -255,7 +257,7 @@ class _SummaryCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(formatTrafficBytes(total),
               key: const ValueKey('traffic-total'),
-              style: _numberStyle.copyWith(fontSize: 36)),
+              style: _numberStyle.copyWith(fontSize: 32)),
           const SizedBox(height: 20),
           Row(children: [
             Expanded(
@@ -289,7 +291,7 @@ class _DirectionValue extends StatelessWidget {
         ]),
         const SizedBox(height: 4),
         Text(formatTrafficBytes(value),
-            style: _numberStyle.copyWith(fontSize: 19)),
+            style: _numberStyle.copyWith(fontSize: 17)),
       ]);
 }
 
@@ -313,7 +315,7 @@ class _DeviceUsage extends StatelessWidget {
                     maxLines: 2, overflow: TextOverflow.ellipsis)),
             const SizedBox(width: 8),
             Text(formatTrafficBytes(usage.bytes),
-                style: _numberStyle.copyWith(fontSize: 16)),
+                style: _numberStyle.copyWith(fontSize: 15)),
           ]),
           if (name == null)
             Padding(
@@ -390,7 +392,7 @@ class _TrafficPainter extends CustomPainter {
           maximum == 0 ? 0.0 : day.totalBytes / maximum * (size.height - 8);
       final rect = Rect.fromLTWH(
           x, size.height - math.max(height, 2), width, math.max(height, 2));
-      final color = index == selected ? YhColors.starlight : YhColors.haze;
+      final color = index == selected ? YhColors.accent : YhColors.haze.withValues(alpha: 0.55);
       canvas.drawRRect(RRect.fromRectAndRadius(rect, const Radius.circular(5)),
           Paint()..color = day.totalBytes == 0 ? YhColors.reef : color);
     }

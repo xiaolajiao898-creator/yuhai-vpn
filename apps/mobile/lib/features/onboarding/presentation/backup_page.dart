@@ -4,8 +4,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
+import '../../../core/widgets/brand.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
+import '../../../platform/secure_window.dart';
 import 'onboarding_controller.dart';
 
 class BackupArgs {
@@ -27,6 +29,19 @@ class _BackupPageState extends ConsumerState<BackupPage> {
   bool _confirmed = false;
   bool _busy = false;
 
+  @override
+  void initState() {
+    super.initState();
+    // 账户密钥页：禁止截屏/录屏，最近任务里也不显示内容（Android FLAG_SECURE）。
+    SecureWindow.acquire();
+  }
+
+  @override
+  void dispose() {
+    SecureWindow.release();
+    super.dispose();
+  }
+
   String get _grouped => widget.args.accountNo.replaceAllMapped(RegExp(r'(\d{4})(?=\d)'), (m) => '${m[1]} ');
 
   Future<void> _done() async {
@@ -45,13 +60,18 @@ class _BackupPageState extends ConsumerState<BackupPage> {
     final secret = widget.args.accountSecret;
     return Scaffold(
       appBar: AppBar(title: const Text('备份账户密钥'), backgroundColor: Colors.transparent, automaticallyImplyLeading: false),
-      body: SafeArea(
+      body: TideBackdrop(
+        linesTop: 0.9,
+        glow: 0.6,
+        child: SafeArea(
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: YhSpace.page),
           children: [
-            Text('这是恢复账户的唯一凭证', style: text.headlineMedium),
+            const Eyebrow('BACKUP · 账户密钥'),
+            const SizedBox(height: 12),
+            Text('这是恢复账户的唯一凭证', style: text.headlineMedium?.copyWith(fontSize: 34)),
             const SizedBox(height: YhSpace.unit),
-            Text('我们不保存你的手机号或邮箱，因此无法帮你找回密钥。请立即保存到密码管理器或截图保管。',
+            Text('我们不保存你的手机号或邮箱，因此无法帮你找回密钥。请立即复制到密码管理器，或抄写在纸上妥善保管。',
                 style: text.bodyMedium?.copyWith(color: YhColors.haze)),
             const SizedBox(height: YhSpace.page),
             Container(
@@ -74,8 +94,12 @@ class _BackupPageState extends ConsumerState<BackupPage> {
                   Center(
                     child: Container(
                       padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(color: YhColors.moonlight, borderRadius: BorderRadius.circular(YhRadius.listSelected)),
-                      child: QrImageView(data: 'YHSECRET:$secret', size: 160, backgroundColor: YhColors.moonlight),
+                      // 二维码一律白底黑点，扫码最稳。
+                      decoration: BoxDecoration(
+                          color: Colors.white,
+                          border: Border.all(color: YhColors.hair),
+                          borderRadius: BorderRadius.circular(YhRadius.listSelected)),
+                      child: QrImageView(data: 'YHSECRET:$secret', size: 160, backgroundColor: Colors.white),
                     ),
                   ),
                   const SizedBox(height: YhSpace.unit * 2),
@@ -111,6 +135,7 @@ class _BackupPageState extends ConsumerState<BackupPage> {
             const SizedBox(height: YhSpace.page),
           ],
         ),
+      ),
       ),
     );
   }

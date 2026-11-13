@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/brand.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../core/network/api_client.dart';
@@ -148,14 +149,20 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
     final c = _challenge;
     return Scaffold(
       appBar: AppBar(title: const Text('找回密码'), backgroundColor: Colors.transparent),
-      body: AuthLayout(child: c == null ? _stepAddress(context) : _stepTransfer(context, c)),
+      // 转账这一步内容长，电脑默认窗口里放不下。按钮固定在底部，上面的内容滚动。
+      body: AuthLayout(
+        footer: c == null ? null : _transferActions(context),
+        child: c == null ? _stepAddress(context) : _stepTransfer(context, c),
+      ),
     );
   }
 
   Widget _stepAddress(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Text('输入注册地址', style: text.headlineMedium),
+      const Eyebrow('RECOVER · 找回密码'),
+      const SizedBox(height: 12),
+      Text('输入注册地址', style: text.headlineMedium?.copyWith(fontSize: 38)),
       const SizedBox(height: YhSpace.unit),
       Text('下一步会告诉你要转多少 TRX、转到哪里。从注册地址转出，用来证明是你本人。',
           style: text.bodyMedium?.copyWith(color: YhColors.haze)),
@@ -185,7 +192,9 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
     final expires = c.expiresAt;
     String two(int n) => n.toString().padLeft(2, '0');
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Text('转账验证', style: text.headlineMedium),
+      const Eyebrow('VERIFY · 链上验证'),
+      const SizedBox(height: 12),
+      Text('转账验证', style: text.headlineMedium?.copyWith(fontSize: 38)),
       const SizedBox(height: YhSpace.unit),
       Text('请用注册地址所在的钱包，转出下面这个金额。金额要完全一样，多一位少一位都查不到。',
           style: text.bodyMedium?.copyWith(color: YhColors.haze, height: 1.6)),
@@ -210,19 +219,25 @@ class _ResetPasswordPageState extends ConsumerState<ResetPasswordPage> {
         enabled: !_waiting,
         decoration: const InputDecoration(labelText: '再输一次新密码'),
       ),
+    ]);
+  }
+
+  /// 转账这一步的底部操作区：等待状态、错误、主按钮、重新发起。
+  Widget _transferActions(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
       if (_status != null) ...[
-        const SizedBox(height: YhSpace.unit * 2),
         Row(children: [
           const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
           const SizedBox(width: YhSpace.unit),
           Expanded(child: Text(_status!, style: text.bodyMedium)),
         ]),
+        const SizedBox(height: YhSpace.unit),
       ],
       if (_error != null) ...[
-        const SizedBox(height: YhSpace.unit * 2),
         Text(_error!, style: const TextStyle(color: YhColors.coral)),
+        const SizedBox(height: YhSpace.unit),
       ],
-      const SizedBox(height: YhSpace.page),
       if (!_waiting)
         FilledButton(onPressed: _beginWaiting, child: const Text('我已转账，重设密码'))
       else

@@ -3,6 +3,7 @@ package worldvpn
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,16 @@ type fakeAPI struct {
 	servers                                           []serverLine
 	material                                          wireGuardMaterial
 	addErr                                            error
+	getErr                                            error
+	delErr                                            error
+	peerErrs                                          []error
+	existingIDs                                       []string
+	existingErr                                       error
+	rejectCanceled                                    bool
+	listErr                                           error
+	listFailAfter                                     int
+	listCalls                                         int
+	foundIDs                                          map[string]bool
 }
 
 func (f *fakeAPI) AddVPN(_ context.Context, user, _ string, _ int) (vpnAccount, error) {
@@ -46,32 +57,70 @@ func (f *fakeAPI) GetTrial(context.Context, string) (vpnAccount, error) {
 	}
 	return vpnAccount{Username: user, Password: pass}, nil
 }
-func (f *fakeAPI) ListServers(context.Context) ([]serverLine, error) { return f.servers, nil }
-func (f *fakeAPI) AddWireGuardPeer(context.Context, string, int64) (peerCreated, error) {
+func (f *fakeAPI) ListServers(context.Context) ([]serverLine, error) {
+	f.listCalls++
+	if f.listErr != nil && (f.listFailAfter == 0 || f.listCalls > f.listFailAfter) {
+		return nil, f.listErr
+	}
+	return f.servers, nil
+}
+func (f *fakeAPI) AddWireGuardPeer(ctx context.Context, _ string, _ int64) (peerCreated, error) {
+	if f.rejectCanceled && ctx.Err() != nil {
+		return peerCreated{}, ctx.Err()
+	}
 	f.peerAdds++
+	if len(f.peerErrs) > 0 {
+		err := f.peerErrs[0]
+		f.peerErrs = f.peerErrs[1:]
+		if err != nil {
+			return peerCreated{}, err
+		}
+	}
 	return peerCreated{WireGuardID: "123", ClientIP: "10.0.0.2/32"}, nil
 }
-func (f *fakeAPI) GetWireGuardConfig(context.Context, string, string) (wireGuardMaterial, error) {
+func (f *fakeAPI) ExistingWireGuardIDs(context.Context, string) ([]string, error) {
+	if f.existingErr != nil {
+		return nil, f.existingErr
+	}
+	if len(f.existingIDs) == 0 {
+		return nil, &APIError{Action: "getWireGuardConfig", Message: "not found"}
+	}
+	return append([]string(nil), f.existingIDs...), nil
+}
+func (f *fakeAPI) GetWireGuardConfig(ctx context.Context, _, id string) (wireGuardMaterial, error) {
+	if f.rejectCanceled && ctx.Err() != nil {
+		return wireGuardMaterial{}, ctx.Err()
+	}
+	if f.foundIDs != nil && !f.foundIDs[id] {
+		return wireGuardMaterial{}, &APIError{Action: "getWireGuardConfig", Message: "not found"}
+	}
+	if f.getErr != nil {
+		return wireGuardMaterial{}, f.getErr
+	}
 	return f.material, nil
 }
 func (f *fakeAPI) DeleteWireGuardPeer(_ context.Context, _, id string, _ bool) error {
 	f.peerDels++
 	f.deletedPeers = append(f.deletedPeers, id)
+	if f.delErr != nil {
+		return f.delErr
+	}
 	return nil
 }
 
 type memStore struct {
-	grants    []grant
-	done      map[int64]string
-	accounts  map[int64]account
-	peers     []openPeer
-	nextID    int64
-	users     map[int64]string
-	banned    map[int64]bool
-	trials    map[int64]string
-	sub       map[int64]time.Time
-	subKnown  map[int64]bool
-	saveFails int
+	grants      []grant
+	done        map[int64]string
+	accounts    map[int64]account
+	peers       []openPeer
+	nextID      int64
+	users       map[int64]string
+	banned      map[int64]bool
+	trials      map[int64]string
+	sub         map[int64]time.Time
+	subKnown    map[int64]bool
+	saveFails   int
+	deviceLimit int
 }
 
 func newMem() *memStore {
@@ -200,7 +249,7 @@ func (m *memStore) DeviceOK(context.Context, int64, int64) error { return nil }
 func (m *memStore) ActivePeers(_ context.Context, userID, except int64) (int, error) {
 	n := 0
 	for _, p := range m.peers {
-		if p.ID > 0 && p.UserID == userID && p.DeviceID != except {
+		if p.ID > 0 && !p.Releasing && p.UserID == userID && p.DeviceID != except {
 			n++
 		}
 	}
@@ -219,6 +268,21 @@ func (m *memStore) InsertPeer(_ context.Context, p openPeer) error {
 	p.ID = m.nextID
 	m.peers = append(m.peers, p)
 	return nil
+}
+func (m *memStore) DeviceLimit(context.Context, int64) (int, error) {
+	if m.deviceLimit > 0 {
+		return m.deviceLimit, nil
+	}
+	return MaxActivePeersPerUser, nil
+}
+func (m *memStore) OpenPeers(_ context.Context, userID int64) ([]openPeer, error) {
+	var out []openPeer
+	for _, p := range m.peers {
+		if p.ID > 0 && p.UserID == userID {
+			out = append(out, p)
+		}
+	}
+	return out, nil
 }
 func (m *memStore) RequestRelease(ctx context.Context, userID, deviceID int64) (openPeer, bool, error) {
 	p, ok, err := m.DevicePeer(ctx, userID, deviceID)
@@ -297,6 +361,98 @@ func TestConnectPeerLimitAndRelease(t *testing.T) {
 	}
 	if api.peerDels != 2 {
 		t.Fatalf("release dels=%d", api.peerDels)
+	}
+}
+
+func TestConnectDropsUpstreamPeerWhenConfigFails(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Password: "local-secret", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	api := &fakeAPI{getErr: &APIError{Action: "getWireGuardConfig", Message: "配置内容不完整"}}
+	svc := &Service{Settings: Settings{Username: "reseller", Password: "reseller-secret", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if _, err := svc.Connect(context.Background(), 7, 9, "w43"); codeOf(err) != httpx.ErrNodeUnavailable {
+		t.Fatalf("connect: %v", err)
+	}
+	if api.peerAdds != 1 || api.peerDels != 1 || len(api.deletedPeers) != 1 || api.deletedPeers[0] != "123" {
+		t.Fatalf("cleanup adds=%d dels=%v", api.peerAdds, api.deletedPeers)
+	}
+	if peers, _ := mem.OpenPeers(context.Background(), 7); len(peers) != 0 {
+		t.Fatalf("peer left in db: %+v", peers)
+	}
+}
+
+func TestConnectRecordsReleaseWhenDeleteFails(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Password: "local-secret", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	api := &fakeAPI{
+		getErr: &APIError{Action: "getWireGuardConfig", Message: "配置内容不完整"},
+		delErr: &APIError{Action: "deleteWireGuardPeer", Message: "temporary"},
+	}
+	svc := &Service{Settings: Settings{Username: "reseller", Password: "reseller-secret", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if _, err := svc.Connect(context.Background(), 7, 9, "w43"); codeOf(err) != httpx.ErrNodeUnavailable {
+		t.Fatalf("connect: %v", err)
+	}
+	peers, _ := mem.OpenPeers(context.Background(), 7)
+	if len(peers) != 1 || !peers[0].Releasing || peers[0].WireGuardID != "123" {
+		t.Fatalf("expected RELEASE_REQUESTED peer, got %+v", peers)
+	}
+}
+
+func TestTrialSecondDeviceGetsLimitMessage(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	mem.peers = []openPeer{{ID: 1, UserID: 7, DeviceID: 8, ServerID: 43, WireGuardID: "9", Sandbox: true}}
+	api := &fakeAPI{material: wireGuardMaterial{PrivateKey: testKey(1), Address: "10.8.0.2/32", DNS: []string{"1.1.1.1"}, ServerPublicKey: testKey(2), Endpoint: "203.0.113.10:51820", MTU: 1280}}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	_, err := svc.Connect(context.Background(), 7, 9, "w43")
+	if codeOf(err) != httpx.ErrDeviceLimit || err.Error() == "" || !strings.Contains(err.Error(), "试用仅支持 1 台设备同时在线，请先在另一台设备断开") {
+		t.Fatalf("second device: %v", err)
+	}
+	if api.peerAdds != 0 {
+		t.Fatal("second device must not call addWireGuardPeer")
+	}
+}
+
+func TestUpstreamLimitRetriesStuckPeerOnce(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	mem.peers = []openPeer{{ID: 4, UserID: 7, DeviceID: 8, ServerID: 1, WireGuardID: "9", Sandbox: true, Releasing: true}}
+	api := &fakeAPI{
+		peerErrs: []error{&APIError{Action: "addWireGuardPeer", Message: "You have reached the maximum limit of 1 WireGuard configurations for your account type (dialup)."}},
+		material: wireGuardMaterial{PrivateKey: testKey(1), Address: "10.8.0.2/32", DNS: []string{"1.1.1.1"}, ServerPublicKey: testKey(2), Endpoint: "203.0.113.10:51820", MTU: 1280},
+	}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	issued, err := svc.Connect(context.Background(), 7, 9, "w43")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if api.peerAdds != 2 || issued.Address != "10.8.0.2/32" {
+		t.Fatalf("retry adds=%d issued=%+v", api.peerAdds, issued)
+	}
+	if len(api.deletedPeers) != 1 || api.deletedPeers[0] != "9" {
+		t.Fatalf("stuck peer not deleted: %+v", api.deletedPeers)
+	}
+}
+
+func TestLinesKeepLastListWhenUpstreamFails(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	api := &fakeAPI{
+		servers:       []serverLine{{ID: 43, Name: "Example S1", IP: "203.0.113.10"}},
+		listErr:       &APIError{Action: "listServers", Message: "temporary"},
+		listFailAfter: 1,
+	}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	first, err := svc.Lines(context.Background(), 7)
+	if err != nil || len(first) != 1 {
+		t.Fatal(err)
+	}
+	second, err := svc.Lines(context.Background(), 7)
+	if err != nil || len(second) != 1 || second[0].ID != "w43" {
+		t.Fatalf("stale list: %+v %v", second, err)
 	}
 }
 
@@ -455,6 +611,99 @@ func TestShortenedButStillValidSubscriptionPullsExpiryForward(t *testing.T) {
 	}
 	if api.deletes != 0 || !mem.accounts[7].ExpireAt.Equal(mem.sub[7]) || mem.accounts[7].Status != "ACTIVE" {
 		t.Fatalf("expiry not aligned: deletes=%d %+v", api.deletes, mem.accounts[7])
+	}
+}
+
+func TestLinesSpreadCountries(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	api := &fakeAPI{servers: []serverLine{
+		{ID: 1, Name: "Germany S1", IP: "203.0.113.10"},
+		{ID: 2, Name: "Germany S2", IP: "203.0.113.10"},
+		{ID: 3, Name: "Singapore S2", IP: "203.0.113.10"},
+		{ID: 4, Name: "Japan S1", IP: "203.0.113.10"},
+	}}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	lines, err := svc.Lines(context.Background(), 7)
+	if err != nil || len(lines) != 4 {
+		t.Fatal(err, len(lines))
+	}
+	if lines[0].CountryCode != "SG" || lines[1].CountryCode != "JP" || lines[2].CountryCode != "DE" || lines[3].CountryCode != "DE" {
+		t.Fatalf("order %+v %+v %+v %+v", lines[0].CountryCode, lines[1].CountryCode, lines[2].CountryCode, lines[3].CountryCode)
+	}
+	if lines[0].ID != "w3" || lines[2].ID != "w1" {
+		t.Fatalf("ids %s %s", lines[0].ID, lines[2].ID)
+	}
+}
+
+func TestConnectFinishesAfterClientHangsUp(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	api := &fakeAPI{
+		rejectCanceled: true,
+		material:       wireGuardMaterial{PrivateKey: testKey(1), Address: "10.8.0.2/32", DNS: []string{"1.1.1.1"}, ServerPublicKey: testKey(2), Endpoint: "203.0.113.10:51820", MTU: 1280},
+	}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	issued, err := svc.Connect(ctx, 7, 9, "w43")
+	if err != nil || issued.LineID != "w43" {
+		t.Fatalf("cancelled request should still record the peer: %v %+v", err, issued)
+	}
+	peers, _ := mem.OpenPeers(context.Background(), 7)
+	if len(peers) != 1 || peers[0].WireGuardID != "123" {
+		t.Fatalf("peer not stored: %+v", peers)
+	}
+}
+
+func TestUpstreamLimitDeletesUntrackedConfig(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	api := &fakeAPI{
+		peerErrs:    []error{&APIError{Action: "addWireGuardPeer", Message: "You have reached the maximum limit of 1 WireGuard configurations for your account type (dialup)."}},
+		existingIDs: []string{"77"},
+		material:    wireGuardMaterial{PrivateKey: testKey(1), Address: "10.8.0.2/32", DNS: []string{"1.1.1.1"}, ServerPublicKey: testKey(2), Endpoint: "203.0.113.10:51820", MTU: 1280},
+	}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if _, err := svc.Connect(context.Background(), 7, 9, "w43"); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.deletedPeers) != 1 || api.deletedPeers[0] != "77" || api.peerAdds != 2 {
+		t.Fatalf("deleted=%v adds=%d", api.deletedPeers, api.peerAdds)
+	}
+}
+
+func TestReclaimKeepsKnownConfig(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	mem.peers = []openPeer{{ID: 4, UserID: 7, DeviceID: 8, ServerID: 1, WireGuardID: "9", Sandbox: true}}
+	api := &fakeAPI{existingIDs: []string{"9", "77"}}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if !svc.reclaimUntracked(context.Background(), mem.accounts[7]) {
+		t.Fatal("expected the untracked config to be removed")
+	}
+	if len(api.deletedPeers) != 1 || api.deletedPeers[0] != "77" {
+		t.Fatalf("deleted=%v", api.deletedPeers)
+	}
+}
+
+func TestReclaimDoesNotGuessWhenLookupFails(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	api := &fakeAPI{
+		existingErr: &APIError{Action: "getWireGuardConfig", Message: "temporary"},
+		foundIDs:    map[string]bool{"5": true},
+	}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if svc.reclaimUntracked(context.Background(), mem.accounts[7]) {
+		t.Fatal("must not delete guessed config ids")
+	}
+	if len(api.deletedPeers) != 0 {
+		t.Fatalf("deleted=%v", api.deletedPeers)
 	}
 }
 
