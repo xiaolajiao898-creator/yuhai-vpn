@@ -220,12 +220,17 @@ class _HomePageState extends ConsumerState<HomePage> {
         : status;
     _syncTicker(visual == VpnStatus.connected && stats != null);
     _maybeAutoConnect();
+    final deviceLimit = visual == VpnStatus.error &&
+            failure?.code == 'DEVICE_LIMIT' &&
+            (failure?.message.isNotEmpty ?? false)
+        ? failure!.message
+        : null;
     final (label, color) = switch (visual) {
       VpnStatus.connected => (demo ? '模拟已连接' : '已连接', YhColors.good),
-      VpnStatus.connecting => ('正在连接', YhColors.flow),
+      VpnStatus.connecting => ('正在连接…', YhColors.flow),
       VpnStatus.reconnecting => ('重连中', YhColors.warn),
       VpnStatus.disconnecting => ('正在断开', YhColors.sub),
-      VpnStatus.error => ('连接失败', YhColors.danger),
+      VpnStatus.error => (deviceLimit ?? '连接失败', YhColors.danger),
       VpnStatus.disconnected => ('未连接', YhColors.ink),
     };
     final eyebrow = switch (visual) {
@@ -672,8 +677,8 @@ class _AccountCard extends StatelessWidget {
   }
 }
 
-/// 首页舞台：吉祥物艾丽站在大圆按钮左边，身体挡住一点圆环的左沿，脚下一道影子。
-/// 艾丽只是图，点击会穿过去落到按钮上。宽度不够时按钮和艾丽一起缩小，按钮最小 200。
+/// 首页舞台：连接环居中。艾丽站在圆环里面，不再单独站在环的左边。
+/// 窄电脑窗口（栏宽大约 480）和手机都把环放到中间，左右留一点空。
 class _Stage extends StatelessWidget {
   const _Stage({required this.ring});
   final Widget Function(double size) ring;
@@ -681,30 +686,10 @@ class _Stage extends StatelessWidget {
   @override
   Widget build(BuildContext context) => LayoutBuilder(builder: (context, constraints) {
         final width = constraints.maxWidth;
-        final size = (width / 1.23).clamp(200.0, 300.0);
-        final figureHeight = size * 1.2;
-        final figureWidth = figureHeight * AiliFigure.aspect;
-        final overlap = figureWidth * 0.3;
-        final total = figureWidth - overlap + size;
-        final left = ((width - total) / 2).clamp(0.0, double.infinity);
+        final size = (width * 0.92).clamp(228.0, 340.0);
         return SizedBox(
-          height: figureHeight + 8,
-          child: Stack(clipBehavior: Clip.none, children: [
-            // 艾丽脚下的影子
-            Positioned(
-              left: left - figureWidth * 0.1,
-              width: figureWidth * 1.2,
-              bottom: 0,
-              height: 18,
-              child: const DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: RadialGradient(colors: [Color(0x335A4A2A), Color(0x005A4A2A)]),
-                ),
-              ),
-            ),
-            Positioned(left: left + figureWidth - overlap, bottom: 6, child: ring(size)),
-            Positioned(left: left, bottom: 6, child: AiliFigure(height: figureHeight)),
-          ]),
+          height: size + 22,
+          child: Center(child: ring(size)),
         );
       });
 }

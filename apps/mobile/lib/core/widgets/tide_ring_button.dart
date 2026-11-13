@@ -6,17 +6,16 @@ import '../../app/theme/tokens.dart';
 import '../../platform/vpn/vpn_engine.dart';
 import 'brand.dart';
 
-/// 首页的大圆连接按钮（「米白」改版）。
+/// 首页的大圆连接按钮。
 ///
-/// 一个很大的圆：外圈是有体积的圆柱形环（截面是圆的，像一只救生圈，不是细线），圆心是按下去的
-/// 白色圆面和品牌三道波。
-/// - 未连接：米灰色的环、白色圆面，静止。
-/// - 连接中：环变成青柠，一道高光绕着环跑（全 App 唯一的循环动画）。
-/// - 已连接：青柠色的环带一圈柔光，圆面泛青柠，静止。
-/// - 出错：珊瑚色的环，静止。
-/// 系统开启「减少动态效果」时连接中也不跑高光，只保留状态色。
+/// 暖米白底上的圆：细焦糖描边、一圈象牙色环、再一圈细描边。圆心里是全身的艾丽，
+/// 脚落在一条很淡的绿波浪上。顶部有一枚播放键，点一下她轻轻跳一下（素材里没有现成的
+/// 打招呼动画）。底部「轻触连接」胶囊压在圆环下沿。点圆环或胶囊都会连接。
+///
+/// 未连接是焦糖描边，连接中描边转绿并有一道光绕圈，已连接保持绿色，失败转红。
+/// 系统开启「减少动态效果」时不跳动、也不跑高光。
 class TideRingButton extends StatefulWidget {
-  const TideRingButton({super.key, required this.status, required this.onTap, this.size = 268});
+  const TideRingButton({super.key, required this.status, required this.onTap, this.size = 300});
   final VpnStatus status;
   final VoidCallback onTap;
   final double size;
@@ -25,62 +24,111 @@ class TideRingButton extends StatefulWidget {
   State<TideRingButton> createState() => _TideRingButtonState();
 }
 
-class _TideRingButtonState extends State<TideRingButton> with SingleTickerProviderStateMixin {
-  late final AnimationController _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
+class _TideRingButtonState extends State<TideRingButton> with TickerProviderStateMixin {
+  late final AnimationController _spin = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600));
+  late final AnimationController _idle = AnimationController(vsync: this, duration: const Duration(milliseconds: 2400));
+  late final AnimationController _greet = AnimationController(vsync: this, duration: const Duration(milliseconds: 980));
   bool _pressed = false;
+
+  /// 循环的待机浮动会让 `pumpAndSettle` 永远等不完。组件测试里只在按下播放键时跳一下。
+  bool get _loopIdle => !WidgetsBinding.instance.runtimeType.toString().contains('Test');
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final reduce = MediaQuery.disableAnimationsOf(context);
+    if (!reduce && _loopIdle && !_idle.isAnimating) _idle.repeat();
+    if ((reduce || !_loopIdle) && _idle.isAnimating) _idle.stop();
+  }
 
   @override
   void dispose() {
-    _c.dispose();
+    _spin.dispose();
+    _idle.dispose();
+    _greet.dispose();
     super.dispose();
+  }
+
+  void _greetNow() {
+    if (MediaQuery.disableAnimationsOf(context)) return;
+    _greet.forward(from: 0);
+  }
+
+  double _bob(bool reduce) {
+    if (reduce) return 0;
+    if (_greet.isAnimating) {
+      final t = _greet.value;
+      return -sin(t * pi * 2) * (1 - t) * 11;
+    }
+    if (!_idle.isAnimating) return 0;
+    return sin(_idle.value * pi * 2) * 2.8;
   }
 
   @override
   Widget build(BuildContext context) {
-    final reduce = MediaQuery.of(context).disableAnimations;
+    final reduce = MediaQuery.disableAnimationsOf(context);
     final busy = widget.status == VpnStatus.connecting || widget.status == VpnStatus.reconnecting;
     final animate = !reduce && busy;
-    if (!animate && _c.isAnimating) _c.stop();
-    if (animate && !_c.isAnimating) _c.repeat();
+    if (!animate && _spin.isAnimating) _spin.stop();
+    if (animate && !_spin.isAnimating) _spin.repeat();
     final active = widget.status == VpnStatus.connected;
-    final hintColor = switch (widget.status) {
-      VpnStatus.connected => YhColors.accentInk,
-      VpnStatus.connecting || VpnStatus.reconnecting => YhColors.flow,
-      VpnStatus.error => YhColors.danger,
-      _ => YhColors.sub,
-    };
+    final tone = _tone(widget.status);
+    final label = active ? '轻触断开' : '轻触连接';
     final size = widget.size;
+    final g = _RingGeom.of(size);
+    final overhang = 20.0;
     return Semantics(
       button: true,
       label: '连接开关',
+      explicitChildNodes: true,
       child: GestureDetector(
         onTap: widget.onTap,
         onTapDown: (_) => setState(() => _pressed = true),
         onTapUp: (_) => setState(() => _pressed = false),
         onTapCancel: () => setState(() => _pressed = false),
         child: AnimatedScale(
-          scale: _pressed ? 0.965 : 1,
+          scale: _pressed ? 0.985 : 1,
           duration: const Duration(milliseconds: 120),
           curve: Curves.easeOut,
           child: AnimatedBuilder(
-            animation: _c,
-            builder: (_, __) => CustomPaint(
-              size: Size.square(size),
-              painter: _TorusPainter(t: _c.value, status: widget.status, running: animate),
-              child: SizedBox.square(
-                dimension: size,
-                child: Align(
-                  alignment: const Alignment(0, 0.40),
-                  child: Text(active ? '轻触断开' : '轻触连接',
-                      style: TextStyle(
-                          fontFamily: YhFont.ui,
-                          fontSize: (size * 0.05).clamp(12.0, 15.0),
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 2.4,
-                          color: hintColor)),
-                ),
-              ),
-            ),
+            animation: Listenable.merge([_spin, _idle, _greet]),
+            builder: (_, __) {
+              final bob = _bob(reduce);
+              return SizedBox(
+                width: size,
+                height: size + overhang,
+                child: Stack(clipBehavior: Clip.none, children: [
+                  CustomPaint(
+                    size: Size.square(size),
+                    painter: _RingPainter(t: _spin.value, status: widget.status, running: animate, geom: g),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: g.figureTop + bob,
+                    child: Center(
+                      child: Transform.scale(
+                        scale: _greet.isAnimating ? 1 + sin(_greet.value * pi) * 0.03 : 1,
+                        child: AiliFigure(height: g.figureHeight),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: (size - g.play) / 2,
+                    top: g.playTop,
+                    width: g.play,
+                    height: g.play,
+                    child: _PlayButton(diameter: g.play, onPressed: _greetNow),
+                  ),
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    top: size - 16,
+                    child: Center(child: _ConnectPill(label: label, tone: tone, scale: g.scale)),
+                  ),
+                ]),
+              );
+            },
           ),
         ),
       ),
@@ -88,187 +136,249 @@ class _TideRingButtonState extends State<TideRingButton> with SingleTickerProvid
   }
 }
 
-/// 环和圆面的颜色：亮面、本色、暗面。
-typedef _Tone = ({Color light, Color base, Color dark});
+class _PlayButton extends StatelessWidget {
+  const _PlayButton({required this.diameter, required this.onPressed});
+  final double diameter;
+  final VoidCallback onPressed;
 
-class _TorusPainter extends CustomPainter {
-  _TorusPainter({required this.t, required this.status, required this.running});
+  @override
+  Widget build(BuildContext context) => Semantics(
+        button: true,
+        label: '打招呼',
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: onPressed,
+          child: DecoratedBox(
+            decoration: const BoxDecoration(color: Color(0xFF4A4742), shape: BoxShape.circle),
+            child: CustomPaint(painter: const _PlayTrianglePainter(), child: SizedBox.square(dimension: diameter)),
+          ),
+        ),
+      );
+}
+
+class _PlayTrianglePainter extends CustomPainter {
+  const _PlayTrianglePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final s = size.shortestSide;
+    final paint = Paint()..color = const Color(0xFFFFFBF5);
+    final path = Path()
+      ..moveTo(s * 0.40, s * 0.30)
+      ..lineTo(s * 0.40, s * 0.70)
+      ..lineTo(s * 0.72, s * 0.50)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(_PlayTrianglePainter oldDelegate) => false;
+}
+
+class _ConnectPill extends StatelessWidget {
+  const _ConnectPill({required this.label, required this.tone, required this.scale});
+  final String label;
+  final Color tone;
+  final double scale;
+
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFFBF3),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: tone, width: 1.6),
+        ),
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16 * scale, vertical: 6 * scale),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontFamily: YhFont.ui,
+              fontSize: (15 * scale).clamp(13.0, 16.0),
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.6,
+              color: tone,
+              height: 1.1,
+            ),
+          ),
+        ),
+      );
+}
+
+Color _tone(VpnStatus status) => switch (status) {
+      VpnStatus.connected || VpnStatus.connecting || VpnStatus.reconnecting => const Color(0xFF3F6B10),
+      VpnStatus.error => YhColors.danger,
+      _ => const Color(0xFF8B5A2B),
+    };
+
+class _RingGeom {
+  _RingGeom({
+    required this.scale,
+    required this.outerStroke,
+    required this.band,
+    required this.innerStroke,
+    required this.outerR,
+    required this.innerR,
+    required this.faceR,
+    required this.waveY,
+    required this.figureHeight,
+    required this.figureTop,
+    required this.play,
+    required this.playTop,
+  });
+
+  final double scale;
+  final double outerStroke;
+  final double band;
+  final double innerStroke;
+  final double outerR;
+  final double innerR;
+  final double faceR;
+  final double waveY;
+  final double figureHeight;
+  final double figureTop;
+  final double play;
+  final double playTop;
+
+  static _RingGeom of(double size) {
+    final scale = (size / 300).clamp(0.78, 1.16);
+    final outerStroke = 3.0 * scale;
+    final band = 24.0 * scale;
+    final innerStroke = 2.6 * scale;
+    final outerR = size / 2 - outerStroke / 2 - 1;
+    final innerR = outerR - outerStroke / 2 - band - innerStroke / 2;
+    final faceR = innerR - innerStroke / 2;
+    final center = size / 2;
+    // 脚落在靠近内圆底部的波浪上；身高约是内圆直径的四分之三，头顶仍留出播放键。
+    final waveY = center + faceR * 0.80;
+    final figureHeight = faceR * 2 * 0.75;
+    final figureTop = waveY - figureHeight * 0.985;
+    final play = (40.0 * scale).clamp(32.0, 44.0);
+    final playTop = center - faceR + 3 * scale;
+    return _RingGeom(
+      scale: scale,
+      outerStroke: outerStroke,
+      band: band,
+      innerStroke: innerStroke,
+      outerR: outerR,
+      innerR: innerR,
+      faceR: faceR,
+      waveY: waveY,
+      figureHeight: figureHeight,
+      figureTop: figureTop,
+      play: play,
+      playTop: playTop,
+    );
+  }
+}
+
+class _RingPainter extends CustomPainter {
+  _RingPainter({required this.t, required this.status, required this.running, required this.geom});
   final double t;
   final VpnStatus status;
   final bool running;
-
-  static const _idle = (light: Color(0xFFFFFDF8), base: Color(0xFFDFD6C4), dark: Color(0xFFA2957A));
-  static const _lime = (light: Color(0xFFF2FFD2), base: YhColors.lime, dark: Color(0xFF6E9C2B));
-  static const _error = (light: Color(0xFFFFEDE8), base: Color(0xFFF0B2A6), dark: Color(0xFFC26F62));
+  final _RingGeom geom;
 
   @override
   void paint(Canvas canvas, Size size) {
     final c = size.center(Offset.zero);
-    final outer = size.width / 2 - size.width * 0.045; // 留出阴影和柔光的位置
-    final tube = outer * 0.25; // 圆柱环的粗细（截面直径）
-    final mid = outer - tube / 2;
-    final inner = outer - tube;
-    final busy = status == VpnStatus.connecting || status == VpnStatus.reconnecting;
+    final g = geom;
+    final tone = _tone(status);
     final on = status == VpnStatus.connected;
-    final _Tone ring = switch (status) {
-      VpnStatus.connected || VpnStatus.connecting || VpnStatus.reconnecting => _lime,
-      VpnStatus.error => _error,
-      _ => _idle,
-    };
+    final busy = status == VpnStatus.connecting || status == VpnStatus.reconnecting;
+    final face = Rect.fromCircle(center: c, radius: g.faceR);
 
-    // 1. 已连接：环外一圈青柠柔光
+    canvas.drawCircle(
+      c.translate(0, 7 * g.scale),
+      g.outerR,
+      Paint()
+        ..color = const Color(0x1A8B5A2B)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, 12 * g.scale),
+    );
+
+    canvas.drawCircle(
+      c,
+      g.faceR,
+      Paint()
+        ..shader = const RadialGradient(
+          colors: [Color(0xFFFFFBF5), Color(0xFFF6EFE4), Color(0xFFF5EFE6)],
+          stops: [0.0, 0.55, 1.0],
+        ).createShader(face),
+    );
+
+    canvas.drawCircle(
+      c,
+      (g.outerR + g.innerR) / 2,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = g.band
+        ..color = const Color(0xFFFFFDF8),
+    );
+
+    final stroke = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = g.outerStroke
+      ..color = tone;
+    final inner = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = g.innerStroke
+      ..color = tone;
     if (on) {
       canvas.drawCircle(
         c,
-        mid,
+        g.outerR,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = tube * 1.9
-          ..color = YhColors.lime.withValues(alpha: 0.55)
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, tube * 0.9),
+          ..strokeWidth = g.outerStroke * 2.4
+          ..color = tone.withValues(alpha: 0.22)
+          ..maskFilter = MaskFilter.blur(BlurStyle.normal, 6 * g.scale),
       );
     }
+    canvas.drawCircle(c, g.outerR, stroke);
+    canvas.drawCircle(c, g.innerR, inner);
 
-    // 2. 落在米白底上的投影（向下偏一点），让环「立」起来
-    canvas.drawCircle(
-      c.translate(0, tube * 0.42),
-      mid,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = tube * 0.95
-        ..color = const Color(0xFF5A4A2A).withValues(alpha: on ? 0.16 : 0.20)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, tube * 0.42),
-    );
-
-    // 3. 圆柱环本体：沿半径方向「暗-本色-亮-本色-暗」，截面看起来是圆的
-    final ringRect = Rect.fromCircle(center: c, radius: outer);
-    canvas.saveLayer(ringRect.inflate(4), Paint());
-    final across = RadialGradient(
-      radius: 0.5,
-      colors: [ring.dark, ring.base, ring.light, ring.base, ring.dark],
-      stops: [
-        inner / outer,
-        (inner + tube * 0.16) / outer,
-        (inner + tube * 0.40) / outer,
-        (inner + tube * 0.74) / outer,
-        1.0,
-      ],
-    ).createShader(ringRect);
-    canvas.drawCircle(
-      c,
-      mid,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = tube
-        ..shader = across,
-    );
-    // 光从左上方来：左上亮、右下暗，只画在环上（srcATop）
-    canvas.drawRect(
-      ringRect,
-      Paint()
-        ..blendMode = BlendMode.srcATop
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            Colors.white.withValues(alpha: 0.38),
-            Colors.white.withValues(alpha: 0.0),
-            const Color(0xFF3A2F18).withValues(alpha: 0.22),
-          ],
-          stops: const [0.0, 0.5, 1.0],
-        ).createShader(ringRect),
-    );
-    canvas.restore();
-
-    // 4. 镜面高光：左上方一小段亮弧
-    canvas.drawArc(
-      Rect.fromCircle(center: c, radius: mid - tube * 0.10),
-      pi * 1.06,
-      pi * 0.40,
-      false,
-      Paint()
+    if (busy) {
+      final start = (running ? t : 0.12) * pi * 2 - pi / 2;
+      final sweep = Paint()
         ..style = PaintingStyle.stroke
         ..strokeCap = StrokeCap.round
-        ..strokeWidth = tube * 0.17
-        ..color = Colors.white.withValues(alpha: 0.75)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, tube * 0.05),
-    );
-
-    // 5. 连接中：一道高光绕着环跑
-    if (busy) {
-      final start = (running ? t : 0.0) * 2 * pi - pi / 2;
+        ..strokeWidth = g.outerStroke + 1.2
+        ..color = const Color(0xFFBBEF68);
+      canvas.drawArc(Rect.fromCircle(center: c, radius: g.outerR), start, pi * 0.55, false, sweep);
       canvas.drawArc(
-        Rect.fromCircle(center: c, radius: mid),
-        start,
-        pi * 0.55,
+        Rect.fromCircle(center: c, radius: g.innerR),
+        start + pi * 0.15,
+        pi * 0.4,
         false,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeCap = StrokeCap.round
-          ..strokeWidth = tube * 0.42
-          ..shader = SweepGradient(
-            endAngle: pi * 0.55,
-            colors: [Colors.white.withValues(alpha: 0), Colors.white.withValues(alpha: 0.85)],
-            transform: GradientRotation(start),
-          ).createShader(Rect.fromCircle(center: c, radius: mid))
-          ..maskFilter = MaskFilter.blur(BlurStyle.normal, tube * 0.08),
+        sweep,
       );
     }
 
-    // 6. 圆面：比环低一点的白色按钮面，上沿有一圈内阴影
-    final face = inner - tube * 0.16;
-    final faceRect = Rect.fromCircle(center: c, radius: face);
-    final _Tone faceTone = on
-        ? (light: const Color(0xFFF8FFE8), base: const Color(0xFFE6F6C6), dark: const Color(0xFFCFE6A4))
-        : busy
-            ? (light: const Color(0xFFFBFFF2), base: const Color(0xFFEEF6DE), dark: const Color(0xFFDCE8C4))
-            : status == VpnStatus.error
-                ? (light: const Color(0xFFFFF7F5), base: const Color(0xFFF9E6E1), dark: const Color(0xFFEBCFC8))
-                : (light: const Color(0xFFFFFEFB), base: const Color(0xFFF7F2E8), dark: const Color(0xFFE8E0D0));
-    canvas.drawCircle(
-      c,
-      face,
-      Paint()
-        ..shader = RadialGradient(
-          center: const Alignment(-0.35, -0.45),
-          radius: 1.05,
-          colors: [faceTone.light, faceTone.base, faceTone.dark],
-          stops: const [0.0, 0.62, 1.0],
-        ).createShader(faceRect),
-    );
-    // 内阴影：上沿暗一圈，像按进去的面
-    canvas.save();
-    canvas.clipPath(Path()..addOval(faceRect));
-    canvas.drawCircle(
-      c.translate(0, -tube * 0.22),
-      face + tube * 0.10,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = tube * 0.36
-        ..color = const Color(0xFF5A4A2A).withValues(alpha: 0.12)
-        ..maskFilter = MaskFilter.blur(BlurStyle.normal, tube * 0.16),
-    );
-    canvas.restore();
-    canvas.drawCircle(
-      c,
-      face,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1
-        ..color = YhColors.hair,
-    );
+    _wave(canvas, c.dx, g.waveY, g.faceR * 1.15, 3.2 * g.scale, const Color(0x998DBF3F), 2.2 * g.scale);
+    _wave(canvas, c.dx, g.waveY + 5 * g.scale, g.faceR * 0.92, 2.2 * g.scale, const Color(0x558DBF3F), 1.6 * g.scale);
+  }
 
-    // 7. 圆心的品牌三道波
-    final waveColor = switch (status) {
-      VpnStatus.connected => YhColors.accentInk,
-      VpnStatus.connecting || VpnStatus.reconnecting => YhColors.flow,
-      VpnStatus.error => YhColors.danger,
-      _ => YhColors.ink,
-    };
-    final s = face * 0.024;
-    paintBrandWaves(canvas, s, waveColor, offsetX: c.dx - 32 * s, offsetY: c.dy - 32 * s - face * 0.16);
+  void _wave(Canvas canvas, double cx, double y, double width, double amp, Color color, double thickness) {
+    final path = Path();
+    final left = cx - width / 2;
+    path.moveTo(left, y);
+    const steps = 28;
+    for (var i = 1; i <= steps; i++) {
+      final x = left + width * i / steps;
+      final yy = y + sin(i / steps * pi * 2) * amp;
+      path.lineTo(x, yy);
+    }
+    canvas.drawPath(
+      path,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = thickness
+        ..strokeCap = StrokeCap.round,
+    );
   }
 
   @override
-  bool shouldRepaint(_TorusPainter old) => old.t != t || old.status != status || old.running != running;
+  bool shouldRepaint(_RingPainter old) =>
+      old.t != t || old.status != status || old.running != running || old.geom.faceR != geom.faceR;
 }

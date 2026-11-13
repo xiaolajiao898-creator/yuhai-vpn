@@ -149,7 +149,8 @@ class ApiClient {
       bool sign = false,
       String? idempotencyKey,
       bool retrying = false,
-      Session? expectedSession}) async {
+      Session? expectedSession,
+      Duration? timeout}) async {
     final session = expectedSession ?? await store.session();
     if (session == null) {
       throw ApiException(40101, '未登录');
@@ -159,7 +160,8 @@ class ApiClient {
         query: query,
         sign: sign,
         idempotencyKey: idempotencyKey,
-        retrying: retrying);
+        retrying: retrying,
+        timeout: timeout);
   }
 
   Future<Map<String, dynamic>> _callForSession(
@@ -168,7 +170,8 @@ class ApiClient {
       Map<String, List<String>> query = const {},
       bool sign = false,
       String? idempotencyKey,
-      required bool retrying}) async {
+      required bool retrying,
+      Duration? timeout}) async {
     final session = await _sessionFor(expected);
     final deviceUid = await store.deviceUid();
     final body = json == null
@@ -188,7 +191,11 @@ class ApiClient {
         queryParameters:
             query.map((k, v) => MapEntry(k, v.length == 1 ? v.first : v)),
         options: Options(
-            method: method, headers: headers, responseType: ResponseType.json));
+            method: method,
+            headers: headers,
+            responseType: ResponseType.json,
+            sendTimeout: timeout,
+            receiveTimeout: timeout));
     await _sessionFor(expected);
     try {
       return _unwrap(res);
@@ -202,7 +209,8 @@ class ApiClient {
             query: query,
             sign: sign,
             idempotencyKey: idempotencyKey,
-            retrying: true);
+            retrying: true,
+            timeout: timeout);
       }
       if (e.code == 40105 && !retrying) {
         await _sessionFor(expected);
@@ -215,7 +223,8 @@ class ApiClient {
             query: query,
             sign: sign,
             idempotencyKey: idempotencyKey,
-            retrying: true);
+            retrying: true,
+            timeout: timeout);
       }
       if (e.code == 40103 || e.code == 40107 || e.code == 40108) {
         await _sessionLost(session, e.code);

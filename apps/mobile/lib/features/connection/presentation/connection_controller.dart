@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/network/api_client.dart';
@@ -778,6 +779,8 @@ class ConnectionController extends Notifier<VpnStatus> {
           },
         FormatException e => VpnFailure('NODE_UNAVAILABLE',
             e.message.isEmpty ? '线路暂不可用，请刷新后重新选择' : e.message),
+        DioException e when isConnectTimeout(e) =>
+          const VpnFailure('CONNECT_TIMEOUT', '连接超时，请重试'),
         _ => const VpnFailure('CONNECT_FAILED', '连接失败，请重试'),
       };
     }
