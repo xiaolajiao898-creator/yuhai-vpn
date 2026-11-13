@@ -91,6 +91,19 @@ paths:
       responses:
         '302': { description: 跳到当前安装包 }
         default: { $ref: '#/components/responses/Error' }
+    head:
+      tags: [system]
+      operationId: redirectLatestAppReleaseHead
+      x-auth-level: S0
+      summary: 和 GET 一样 302 到当前安装包，但不回正文。
+      parameters:
+        - name: platform
+          in: path
+          required: true
+          schema: { type: string, enum: [windows, android] }
+      responses:
+        '302': { description: 跳到当前安装包 }
+        default: { $ref: '#/components/responses/Error' }
 
   /v1/bootstrap:
     get:

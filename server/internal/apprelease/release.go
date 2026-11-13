@@ -236,8 +236,16 @@ func scanRelease(row scanner) (Release, error) {
 	return item, err
 }
 
+// releaseSource 是发布表的读写。用接口是为了不连数据库也能测 HEAD 跳转。
+type releaseSource interface {
+	Current(ctx context.Context, platform string) (Release, error)
+	List(ctx context.Context, platform string) ([]Release, error)
+	Publish(ctx context.Context, in Input) (Release, error)
+	Rollback(ctx context.Context, id int64) (Release, error)
+}
+
 type Handler struct {
-	Svc   *Service
+	Svc   releaseSource
 	Token string
 }
 

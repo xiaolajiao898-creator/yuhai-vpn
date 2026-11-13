@@ -138,7 +138,9 @@ func buildRouter(d routerDeps) *gin.Engine {
 	releases := &apprelease.Handler{Svc: &apprelease.Service{Pool: d.Pool, Clock: d.Clock}, Token: d.Config.AppReleaseToken}
 	v1 := r.Group("/v1")
 	v1.GET("/app/latest", releases.Latest)
+	// HEAD 和 GET 都 302。官网对 /download/latest 发 HEAD 时不能再落到 404。
 	v1.GET("/app/download/:platform", releases.Redirect)
+	v1.HEAD("/app/download/:platform", releases.Redirect)
 	v1.GET("/bootstrap", notImplemented)
 	trialSvc := &trial.Service{Pool: d.Pool, Clock: d.Clock}
 	redeemSvc := &redeem.Service{Pool: d.Pool, Clock: d.Clock}
