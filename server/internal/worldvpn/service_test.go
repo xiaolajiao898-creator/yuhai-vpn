@@ -690,7 +690,7 @@ func TestReclaimKeepsKnownConfig(t *testing.T) {
 	}
 }
 
-func TestReclaimSweepsWhenLookupFails(t *testing.T) {
+func TestReclaimDoesNotGuessWhenLookupFails(t *testing.T) {
 	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
 	mem := newMem()
 	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
@@ -699,10 +699,10 @@ func TestReclaimSweepsWhenLookupFails(t *testing.T) {
 		foundIDs:    map[string]bool{"5": true},
 	}
 	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
-	if !svc.reclaimUntracked(context.Background(), mem.accounts[7]) {
-		t.Fatal("sweep should delete the untracked config")
+	if svc.reclaimUntracked(context.Background(), mem.accounts[7]) {
+		t.Fatal("must not delete guessed config ids")
 	}
-	if len(api.deletedPeers) != 1 || api.deletedPeers[0] != "5" {
+	if len(api.deletedPeers) != 0 {
 		t.Fatalf("deleted=%v", api.deletedPeers)
 	}
 }

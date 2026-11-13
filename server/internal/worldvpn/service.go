@@ -591,46 +591,31 @@ func (s *Service) lockUser(userID int64) func() {
 // reclaimUntracked 删掉上游有、本地账本没有的配置。客户端中途断开时会出现这种残留，
 // 试用号随后每次连接都被上游拒绝。只删账本里没有的编号，不碰其他设备还在用的配置。
 func (s *Service) reclaimUntracked(ctx context.Context, acc account) bool {
+	// 读不到账本就什么都不删：否则 known 为空，会把这个账号其他设备正在用的配置当成残留删掉。
+	peers, err := s.Store.OpenPeers(ctx, acc.UserID)
+	if err != nil {
+		return false
+	}
 	known := map[string]bool{}
-	if peers, err := s.Store.OpenPeers(ctx, acc.UserID); err == nil {
-		for _, p := range peers {
-			if p.WireGuardID != "" {
-				known[p.WireGuardID] = true
-			}
+	for _, p := range peers {
+		if p.WireGuardID != "" {
+			known[p.WireGuardID] = true
 		}
 	}
-	if finder, ok := s.API.(interface {
+	finder, ok := s.API.(interface {
 		ExistingWireGuardIDs(context.Context, string) ([]string, error)
-	}); ok {
-		ids, err := finder.ExistingWireGuardIDs(ctx, acc.Username)
-		if err == nil {
-			if s.deleteUnknown(ctx, acc, known, ids) {
-				return true
-			}
-			// 上游已经列出全部编号，里面没有账本外的配置，就不要再按小编号乱探。
-			if len(ids) > 0 {
-				return false
-			}
-		} else if alreadyGone(err) {
-			return false
-		}
+	})
+	if !ok {
+		return false
 	}
-	for n := 1; n <= 8; n++ {
-		id := itoa(int64(n))
-		if known[id] {
-			continue
-		}
-		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
-		_, err := s.API.GetWireGuardConfig(probe, acc.Username, id)
-		cancel()
-		if err != nil {
-			continue
-		}
-		if s.deleteUnknown(ctx, acc, known, []string{id}) {
-			return true
-		}
+	// 只删上游明确报出、属于这个账号、账本里又没有的编号。
+	// 不按 1–8 这类小编号盲探：WorldVPN 的配置编号是全局递增的（实测 1 万以上），
+	// 盲探既找不到自己的残留，上游若不校验归属还可能删到别人的配置。
+	ids, err := finder.ExistingWireGuardIDs(ctx, acc.Username)
+	if err != nil {
+		return false
 	}
-	return false
+	return s.deleteUnknown(ctx, acc, known, ids)
 }
 
 func (s *Service) deleteUnknown(ctx context.Context, acc account, known map[string]bool, ids []string) bool {
