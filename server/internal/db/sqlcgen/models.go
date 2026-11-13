@@ -408,6 +408,20 @@ type ChainTransfer struct {
 	ProcessedAt      *time.Time
 }
 
+type ClientConnectDiagnostic struct {
+	ID           int64
+	UserID       int64
+	DeviceID     int64
+	AppVersion   string
+	Platform     string
+	Stage        string
+	ErrorCode    string
+	ErrorText    string
+	ServiceState string
+	LogSummary   string
+	CreatedAt    time.Time
+}
+
 type DepositException struct {
 	ID               int64
 	ChainTransferID  int64
