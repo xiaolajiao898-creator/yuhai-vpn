@@ -150,7 +150,7 @@ class _NodesPageState extends ConsumerState<NodesPage>
               icon: const Icon(Icons.network_ping),
               tooltip: !canProbe
                   ? '延迟检测暂不可用'
-                  : (_probing ? '正在检测延迟' : '延迟检测（最多20条）'),
+                  : (_probing ? '正在检测延迟' : '延迟检测（按地区抽样）'),
               onPressed: listReady && canProbe && !_probing
                   ? () => _probeAll(nodes.asData!.value)
                   : null),

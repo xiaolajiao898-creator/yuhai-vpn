@@ -1528,6 +1528,42 @@ paths:
         '409': { description: 40902 同时在线设备已达 3 台, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } } }
         default: { $ref: '#/components/responses/Error' }
 
+  /v1/connect/diagnostics:
+    post:
+      tags: [connect]
+      operationId: reportConnectDiagnostic
+      x-auth-level: S2
+      summary: |
+        连接失败时由客户端上报诊断：失败阶段、错误原文、WireGuard 服务状态和日志摘要。
+        服务端会去掉私钥后再入库。后台用 users.diagnostics 查看。不要求用户自己导出日志。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stage]
+              properties:
+                stage: { type: string, enum: [prepare, install, service, handshake, connect] }
+                error_code: { type: string }
+                error_text: { type: string }
+                service_state: { type: string }
+                log_summary: { type: string }
+      responses:
+        '200':
+          description: 已收下
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - properties:
+                      data:
+                        type: object
+                        required: [accepted]
+                        properties: { accepted: { type: boolean } }
+        default: { $ref: '#/components/responses/Error' }
+
   /v1/connect/worldvpn/release:
     post:
       tags: [connect]

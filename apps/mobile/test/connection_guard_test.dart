@@ -8,6 +8,7 @@ import 'package:yuhai_vpn/features/nodes/data/nodes_api.dart';
 import 'package:yuhai_vpn/features/nodes/data/node_selection.dart';
 import 'package:yuhai_vpn/platform/vpn/mock_vpn_engine.dart';
 import 'package:yuhai_vpn/platform/vpn/unavailable_vpn_engine.dart';
+import 'package:yuhai_vpn/platform/vpn/tunnel_diagnostic.dart';
 import 'package:yuhai_vpn/platform/vpn/vpn_engine.dart';
 
 class RecordingEngine extends MockVpnEngine {
@@ -43,12 +44,60 @@ class RecordingEngine extends MockVpnEngine {
   }
 }
 
+class _SwitchingEngine extends MockVpnEngine implements HandshakeReporter {
+  _SwitchingEngine() : super(random: Random(1));
+
+  final profiles = <ConnectProfile>[];
+  final _statusSync = StreamController<VpnStatus>.broadcast(sync: true);
+  final _failSync = StreamController<VpnFailure>.broadcast(sync: true);
+  var failIds = <String>{};
+
+  @override
+  bool get reportsHandshake => true;
+
+  @override
+  TunnelDiagnostic? get tunnelDiagnostic => null;
+
+  @override
+  Stream<VpnStatus> get status => _statusSync.stream;
+
+  @override
+  Stream<VpnFailure> get failures => _failSync.stream;
+
+  @override
+  Future<void> connect(ConnectProfile profile) async {
+    profiles.add(profile);
+    if (failIds.contains(profile.nodeId)) {
+      _failSync.add(const VpnFailure('HANDSHAKE_TIMEOUT', '线路握手超时，请重试或更换线路'));
+      _statusSync.add(VpnStatus.error);
+      return;
+    }
+    _statusSync.add(VpnStatus.connected);
+  }
+
+  @override
+  Future<void> disconnect() async {}
+
+  @override
+  Future<int?> probe(String host, int port,
+      {Duration timeout = const Duration(seconds: 2)}) async {
+    return host.startsWith('a') ? 10 : 40;
+  }
+
+  @override
+  void dispose() {
+    _statusSync.close();
+    _failSync.close();
+    super.dispose();
+  }
+}
+
 NodeItem demoNode(String id,
-        {bool available = true, String protocol = 'MOCK'}) =>
+        {bool available = true, String protocol = 'MOCK', String countryCode = 'HK'}) =>
     NodeItem(
       id: id,
       name: id,
-      countryCode: 'HK',
+      countryCode: countryCode,
       city: '香港',
       region: 'ASIA',
       available: available,
@@ -308,6 +357,37 @@ void main() {
     engine.dispose();
     await tester.pump(const Duration(seconds: 3));
     expect(tester.takeException(), isNull);
+  });
+  test('握手超时换同一地区的下一条，不跨地区', () async {
+    final same = _SwitchingEngine()..failIds = {'a'};
+    final container = ProviderContainer(overrides: [
+      vpnDemoModeProvider.overrideWithValue(true),
+      vpnEngineProvider.overrideWithValue(same),
+      nodesProvider.overrideWith((ref) async => [demoNode('a'), demoNode('b')]),
+    ]);
+    addTearDown(same.dispose);
+    addTearDown(container.dispose);
+    container.read(selectedNodeProvider.notifier).state = null;
+    await container.read(connectionControllerProvider.notifier).toggle();
+    expect(same.profiles.map((p) => p.nodeId).toList(), ['a', 'b']);
+    expect(container.read(connectionControllerProvider), VpnStatus.connected);
+    expect(container.read(connectionNoticeProvider), '已改连 b');
+    expect(container.read(selectedNodeProvider), 'b');
+
+    final other = _SwitchingEngine()..failIds = {'a'};
+    final blocked = ProviderContainer(overrides: [
+      vpnEngineProvider.overrideWithValue(other),
+      vpnDemoModeProvider.overrideWithValue(true),
+      nodesProvider.overrideWith((ref) async =>
+          [demoNode('a'), demoNode('b', countryCode: 'JP')]),
+    ]);
+    addTearDown(other.dispose);
+    addTearDown(blocked.dispose);
+    blocked.read(selectedNodeProvider.notifier).state = null;
+    await blocked.read(connectionControllerProvider.notifier).toggle();
+    expect(other.profiles.map((p) => p.nodeId).toList(), ['a']);
+    expect(blocked.read(connectionControllerProvider), VpnStatus.error);
+    expect(blocked.read(connectionFailureProvider)!.code, 'HANDSHAKE_TIMEOUT');
   });
   test('模拟引擎明确拒绝真实协议', () async {
     final engine = MockVpnEngine();

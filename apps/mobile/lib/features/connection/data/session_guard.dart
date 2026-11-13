@@ -76,6 +76,12 @@ bool sameLineArea(NodeItem a, NodeItem b) {
   return left != null && left == right;
 }
 
+/// 握手超时后换同一国家/地区的下一条。未知地区不跨地区换。
+NodeItem? nextLineInArea(
+    NodeItem current, List<NodeItem> lines, Set<String> avoid) {
+  return _replacement(current, lines, avoid);
+}
+
 /// 同一国家/地区里挑下一条：先挑这轮还没失败过的，再挑同种线路（批发换批发、出口换出口，
 /// Windows 上不必在 Xray 和 WireGuard 之间来回切），然后是推荐的，最后按名字和编号。
 /// [avoid] 里都是这轮已经换走过的线路；全部试过一遍后才回头。

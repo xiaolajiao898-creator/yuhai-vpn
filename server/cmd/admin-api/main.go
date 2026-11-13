@@ -18,6 +18,7 @@ import (
 	"github.com/yuhai-vpn/server/internal/admin"
 	"github.com/yuhai-vpn/server/internal/apprelease"
 	"github.com/yuhai-vpn/server/internal/audit"
+	"github.com/yuhai-vpn/server/internal/clientdiag"
 	"github.com/yuhai-vpn/server/internal/clock"
 	"github.com/yuhai-vpn/server/internal/config"
 	"github.com/yuhai-vpn/server/internal/db"
@@ -99,6 +100,7 @@ func buildAdminRouter(cfg config.Config, pool *pgxpool.Pool) (*gin.Engine, error
 	r.POST("/admin/v1/app/releases", releaseHandler.Publish)
 	releaseHandler.RegisterAdmin(adminGroup, adminHandler)
 	(&admin.UserReadHandler{Auth: adminHandler, Service: &admin.UserReadService{Auth: adminSvc}}).Register(adminGroup)
+	(&admin.DiagnosticsHandler{Auth: adminHandler, Store: &clientdiag.PG{Pool: pool}}).Register(adminGroup)
 	(&admin.UserDevicesHandler{Auth: adminHandler, Service: &admin.UserReadService{Auth: adminSvc}}).Register(adminGroup)
 	(&admin.NodeReadHandler{Auth: adminHandler, Service: &admin.NodeReadService{Auth: adminSvc}}).Register(adminGroup)
 	(&admin.DeviceRevokeHandler{Auth: adminHandler, Service: &admin.DeviceRevokeService{Security: approvalSvc}}).Register(adminGroup)

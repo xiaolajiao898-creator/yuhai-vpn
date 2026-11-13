@@ -6,6 +6,7 @@ import '../../../core/network/api_client.dart';
 import '../../../core/storage/session_store.dart';
 import '../../../platform/vpn/egress_profile.dart';
 import '../../../platform/vpn/native_vpn_engine.dart';
+import '../../../platform/vpn/tunnel_diagnostic.dart';
 import '../../../platform/vpn/tunnel_host_pins.dart';
 import '../../../platform/vpn/unavailable_vpn_engine.dart';
 import '../../../platform/vpn/vpn_engine.dart';
@@ -302,6 +303,8 @@ class ConnectionController extends Notifier<VpnStatus> {
         state = userInitiated ? VpnStatus.disconnected : VpnStatus.error;
         ref.read(connectionFailureProvider.notifier).state =
             const VpnFailure('PERMISSION_DENIED', '未获得连接权限');
+        unawaited(_reportConnectFailure(
+            const VpnFailure('PERMISSION_DENIED', '未获得连接权限')));
       }
       return;
     }
@@ -412,7 +415,7 @@ class ConnectionController extends Notifier<VpnStatus> {
       if (!engine.canRecover) _acceptEngineEvents = true;
       await engine.connect(profile);
       if (!current()) throw const _AttemptAborted();
-      if (engine.canRecover) {
+      if (_waitsForHandshake(engine)) {
         final failure = await watch.untilSettled(
           timeout: const Duration(seconds: 32),
           isCurrent: current,
@@ -424,7 +427,7 @@ class ConnectionController extends Notifier<VpnStatus> {
         _triedLines.clear();
         _epochSeen = null;
         state = VpnStatus.connected;
-        if (!_userStop) _arm(engine);
+        if (!_userStop && engine.canRecover) _arm(engine);
         return;
       }
       await Future<void>.delayed(Duration.zero);
@@ -463,6 +466,8 @@ class ConnectionController extends Notifier<VpnStatus> {
         state = userInitiated ? VpnStatus.disconnected : VpnStatus.error;
         ref.read(connectionFailureProvider.notifier).state =
             const VpnFailure('PERMISSION_DENIED', '未获得连接权限');
+        unawaited(_reportConnectFailure(
+            const VpnFailure('PERMISSION_DENIED', '未获得连接权限')));
       }
       return;
     }
@@ -756,6 +761,189 @@ class ConnectionController extends Notifier<VpnStatus> {
     }
   }
 
+  HandshakeReporter? _reporter(VpnEngine engine) =>
+      engine is HandshakeReporter ? engine as HandshakeReporter : null;
+
+  bool _waitsForHandshake(VpnEngine engine) =>
+      engine.canRecover || (_reporter(engine)?.reportsHandshake ?? false);
+
+  Future<ConnectProfile> _reopenLine({
+    required VpnEngine engine,
+    required Session? session,
+    required NodeItem line,
+    required String protocol,
+    required bool demo,
+    required bool Function() current,
+    required bool Function() validAttempt,
+  }) async {
+    if (!current()) throw const _AttemptAborted();
+    if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+    final confirmed = _lastLines
+        .where((n) =>
+            n.id == line.id && n.available && n.protocols.contains(protocol))
+        .firstOrNull;
+    if (confirmed == null || confirmed.probeHost == null) {
+      throw const FormatException('线路状态已变化');
+    }
+    if (!demo && confirmed.id.startsWith('w')) {
+      final profile = await ref
+          .read(connectionApiProvider)
+          .worldvpnProfile(session!, confirmed.id);
+      if (!current()) throw const _AttemptAborted();
+      if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+      _wholesaleLine = confirmed.id;
+      _wholesaleUnknown = false;
+      return profile;
+    }
+    if (demo) {
+      return ConnectProfile(
+          nodeId: confirmed.id, protocol: 'MOCK', server: confirmed.probeHost!);
+    }
+    await _leaveWholesale();
+    if (!current()) throw const _AttemptAborted();
+    final native = engine as WireGuardVpnEngine;
+    final key = await native.publicKey(vpnIdentity(session!));
+    if (!current()) throw const _AttemptAborted();
+    if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+    final api = ref.read(connectionApiProvider);
+    await api.uploadPublicKey(session, key);
+    if (!current()) throw const _AttemptAborted();
+    if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+    final profile = await api.profile(session, confirmed.id, key);
+    if (!current()) throw const _AttemptAborted();
+    if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
+    return profile;
+  }
+
+  /// 配置收下之后还要等握手。超时就换同一地区的下一条，最多再试两条。
+  Future<void> _commitConnect({
+    required VpnEngine engine,
+    required ConnectProfile profile,
+    required NodeItem line,
+    required bool Function() current,
+    required bool Function() validAttempt,
+    required Future<ConnectProfile> Function(NodeItem next) reopen,
+  }) async {
+    var currentProfile = profile;
+    var currentLine = line;
+    for (var hop = 0; hop < 3; hop++) {
+      // 只有明确会上报握手结果的引擎才在这里等。安卓的自动重连仍走原来的状态流，
+      // 避免第一次失败时少拦住流量。
+      final reporter = _reporter(engine);
+      if (reporter == null || !reporter.reportsHandshake) {
+        _acceptEngineEvents = true;
+        await engine.connect(currentProfile);
+        _remember(currentLine.id);
+        return;
+      }
+      final watch = _HandshakeWatch(engine);
+      _connectInFlight = true;
+      try {
+        _acceptEngineEvents = false;
+        await engine.connect(currentProfile);
+        if (!current()) throw const _AttemptAborted();
+        final failure = await watch.untilSettled(
+          timeout: const Duration(seconds: 32),
+          isCurrent: current,
+        );
+        if (!current()) throw const _AttemptAborted();
+        if (failure != null) throw failure;
+        _acceptEngineEvents = true;
+        _failuresOnLine = 0;
+        _badStreak = 0;
+        _triedLines.clear();
+        state = VpnStatus.connected;
+        if (!_userStop && engine.canRecover) _arm(engine);
+        _remember(currentLine.id);
+        if (ref.read(selectedNodeProvider) != currentLine.id) {
+          _suppressSelect = true;
+          ref.read(selectedNodeProvider.notifier).state = currentLine.id;
+          _suppressSelect = false;
+        }
+        ref.read(connectionFailureProvider.notifier).state = null;
+        ref.read(connectionNoticeProvider.notifier).state =
+            hop == 0 ? null : '已改连 ${currentLine.name}';
+        return;
+      } on _AttemptAborted {
+        rethrow;
+      } catch (error) {
+        if (!current() || error is _AttemptAborted) rethrow;
+        final diagnostic = reporter.tunnelDiagnostic;
+        final next = error is VpnFailure &&
+                error.code == 'HANDSHAKE_TIMEOUT' &&
+                hop < 2
+            ? nextLineInArea(currentLine, _lastLines, {..._triedLines, currentLine.id})
+            : null;
+        if (next == null) rethrow;
+        unawaited(_reportConnectFailure(error, diagnostic: diagnostic));
+        _triedLines.add(currentLine.id);
+        try {
+          await engine.disconnect();
+        } catch (_) {}
+        if (!current()) throw const _AttemptAborted();
+        await _releaseWholesale();
+        if (!current()) throw const _AttemptAborted();
+        state = VpnStatus.connecting;
+        ref.read(connectionFailureProvider.notifier).state = null;
+        ref.read(connectionNoticeProvider.notifier).state =
+            '这条线路握手超时，正在换同一地区的${next.name}';
+        currentProfile = await reopen(next);
+        currentLine = next;
+      } finally {
+        _connectInFlight = false;
+        await watch.close();
+      }
+    }
+  }
+
+  String _stageFor(VpnFailure failure) {
+    return switch (failure.code) {
+      'HANDSHAKE_TIMEOUT' => 'handshake',
+      'TUNNEL_SERVICE_STOPPED' => 'service',
+      'PERMISSION_DENIED' || 'XRAY_MISSING' || 'WIREGUARD_MISSING' => 'prepare',
+      'CONNECT_FAILED' => 'install',
+      _ => 'connect',
+    };
+  }
+
+  Future<void> _reportConnectFailure(Object error, {TunnelDiagnostic? diagnostic}) async {
+    if (error is _AttemptAborted) return;
+    final session = ref.read(sessionProvider).valueOrNull;
+    if (session == null) return;
+    final engine = ref.read(vpnEngineProvider);
+    final fromEngine = diagnostic ?? _reporter(engine)?.tunnelDiagnostic;
+    String stage = 'connect';
+    String code = '';
+    String text = '';
+    if (error is VpnFailure) {
+      stage = fromEngine?.stage.isNotEmpty == true ? fromEngine!.stage : _stageFor(error);
+      code = fromEngine != null && fromEngine.errorCode.isNotEmpty
+          ? fromEngine.errorCode
+          : error.code;
+      text = fromEngine != null && fromEngine.errorText.isNotEmpty
+          ? fromEngine.errorText
+          : error.message;
+    } else if (error is ApiException) {
+      code = 'HTTP_${error.code}';
+      text = error.message;
+    } else if (error is FormatException) {
+      code = 'NODE_UNAVAILABLE';
+      text = error.message;
+    } else {
+      return;
+    }
+    try {
+      await ref.read(connectionApiProvider).reportTunnelDiagnostic(
+            session,
+            stage: stage,
+            errorCode: code,
+            errorText: redactTunnelText(text),
+            serviceState: redactTunnelText(fromEngine?.serviceState ?? ''),
+            logSummary: redactTunnelText(fromEngine?.logSummary ?? ''),
+          );
+    } catch (_) {}
+  }
+
   Future<void> toggle() => _drive(userInitiated: true);
 
   Future<void> _drive({required bool userInitiated}) async {
@@ -894,6 +1082,8 @@ class ConnectionController extends Notifier<VpnStatus> {
           state = userInitiated ? VpnStatus.disconnected : VpnStatus.error;
           ref.read(connectionFailureProvider.notifier).state =
               const VpnFailure('PERMISSION_DENIED', '未获得连接权限');
+          unawaited(_reportConnectFailure(
+              const VpnFailure('PERMISSION_DENIED', '未获得连接权限')));
         }
         return;
       }
@@ -921,9 +1111,22 @@ class ConnectionController extends Notifier<VpnStatus> {
         if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
         _wholesaleLine = confirmed.id;
         _wholesaleUnknown = false;
-        _acceptEngineEvents = true;
-        await engine.connect(profile);
-        _remember(confirmed.id);
+        await _commitConnect(
+          engine: engine,
+          profile: profile,
+          line: confirmed,
+          current: current,
+          validAttempt: validAttempt,
+          reopen: (next) => _reopenLine(
+            engine: engine,
+            session: session,
+            line: next,
+            protocol: protocol,
+            demo: demo,
+            current: current,
+            validAttempt: validAttempt,
+          ),
+        );
         return;
       }
       ConnectProfile profile;
@@ -947,11 +1150,25 @@ class ConnectionController extends Notifier<VpnStatus> {
         if (!current()) return;
         if (!validAttempt()) throw const FormatException('连接选择或账户已变化');
       }
-      _acceptEngineEvents = true;
-      await engine.connect(profile);
-      _remember(confirmed.id);
+      await _commitConnect(
+        engine: engine,
+        profile: profile,
+        line: confirmed,
+        current: current,
+        validAttempt: validAttempt,
+        reopen: (next) => _reopenLine(
+          engine: engine,
+          session: session,
+          line: next,
+          protocol: protocol,
+          demo: demo,
+          current: current,
+          validAttempt: validAttempt,
+        ),
+      );
     } catch (error) {
-      if (!current()) return;
+      if (!current() || error is _AttemptAborted) return;
+      unawaited(_reportConnectFailure(error));
       _acceptEngineEvents = false;
       // 用户这次连接没成：还掉刚建的批发 peer。自动重连途中不还——下一次重连时服务端会替
       // 这台设备先删旧 peer；在这里异步释放反而可能和下一次连接撞上，删掉刚建好的那条。

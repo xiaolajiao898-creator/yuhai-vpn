@@ -103,6 +103,9 @@ type Service struct {
 	cachedServers []serverLine
 	cachedSandbox bool
 	hasCache      bool
+
+	connectMu sync.Mutex
+	userLocks map[int64]*sync.Mutex
 }
 
 const trialPeerLimitMessage = "试用仅支持 1 台设备同时在线，请先在另一台设备断开"
@@ -380,7 +383,7 @@ func (s *Service) Lines(ctx context.Context, userID int64) ([]Line, error) {
 		}
 		out = append(out, line)
 	}
-	return out, nil
+	return orderLines(out), nil
 }
 
 // Issued 是交给现有 WireGuard 引擎的一份配置。私钥只出现在这次响应里，不入库。
@@ -405,6 +408,13 @@ func (s *Service) Connect(ctx context.Context, userID, deviceID int64, lineID st
 	if err != nil {
 		return out, err
 	}
+	// 客户端超时会取消请求上下文。上游那时可能已经建好配置，响应却到不了，
+	// 编号也没入库。试用账号只能有 1 条，下一次就会一直 409。
+	// 从这里起不再跟随取消，单独给 40 秒把删除、创建和入库做完。
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 40*time.Second)
+	defer cancel()
+	unlock := s.lockUser(userID)
+	defer unlock()
 	if err := s.Store.DeviceOK(ctx, userID, deviceID); err != nil {
 		return out, err
 	}
@@ -517,7 +527,11 @@ func (s *Service) openPeer(ctx context.Context, acc account, userID, deviceID, s
 	if err != nil {
 		if n, ok := upstreamPeerLimit(err); ok {
 			s.warnUpstream(ctx, "worldvpn connect upstream", "addWireGuardPeer", err, acc.Username, acc.Password)
-			if !retried && s.releaseStuck(ctx, acc) {
+			freed := s.releaseStuck(ctx, acc)
+			if s.reclaimUntracked(ctx, acc) {
+				freed = true
+			}
+			if !retried && freed {
 				return s.openPeer(ctx, acc, userID, deviceID, serverID, true)
 			}
 			return wireGuardMaterial{}, peerLimitError(acc.Source, n)
@@ -557,6 +571,83 @@ func (s *Service) abandonUpstreamPeer(ctx context.Context, acc account, userID, 
 			s.warnUpstream(ctx, "worldvpn connect upstream", "insertPeer", insErr)
 		}
 	}
+}
+
+func (s *Service) lockUser(userID int64) func() {
+	s.connectMu.Lock()
+	if s.userLocks == nil {
+		s.userLocks = map[int64]*sync.Mutex{}
+	}
+	mu := s.userLocks[userID]
+	if mu == nil {
+		mu = &sync.Mutex{}
+		s.userLocks[userID] = mu
+	}
+	s.connectMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+// reclaimUntracked 删掉上游有、本地账本没有的配置。客户端中途断开时会出现这种残留，
+// 试用号随后每次连接都被上游拒绝。只删账本里没有的编号，不碰其他设备还在用的配置。
+func (s *Service) reclaimUntracked(ctx context.Context, acc account) bool {
+	known := map[string]bool{}
+	if peers, err := s.Store.OpenPeers(ctx, acc.UserID); err == nil {
+		for _, p := range peers {
+			if p.WireGuardID != "" {
+				known[p.WireGuardID] = true
+			}
+		}
+	}
+	if finder, ok := s.API.(interface {
+		ExistingWireGuardIDs(context.Context, string) ([]string, error)
+	}); ok {
+		ids, err := finder.ExistingWireGuardIDs(ctx, acc.Username)
+		if err == nil {
+			if s.deleteUnknown(ctx, acc, known, ids) {
+				return true
+			}
+			// 上游已经列出全部编号，里面没有账本外的配置，就不要再按小编号乱探。
+			if len(ids) > 0 {
+				return false
+			}
+		} else if alreadyGone(err) {
+			return false
+		}
+	}
+	for n := 1; n <= 8; n++ {
+		id := itoa(int64(n))
+		if known[id] {
+			continue
+		}
+		probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_, err := s.API.GetWireGuardConfig(probe, acc.Username, id)
+		cancel()
+		if err != nil {
+			continue
+		}
+		if s.deleteUnknown(ctx, acc, known, []string{id}) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) deleteUnknown(ctx context.Context, acc account, known map[string]bool, ids []string) bool {
+	deleted := false
+	for _, id := range ids {
+		if id == "" || known[id] {
+			continue
+		}
+		if err := s.API.DeleteWireGuardPeer(ctx, acc.Username, id, s.Settings.Sandbox); err != nil && !alreadyGone(err) {
+			s.warnUpstream(ctx, "worldvpn connect upstream", "deleteWireGuardPeer", err, acc.Username, acc.Password)
+			continue
+		}
+		known[id] = true
+		deleted = true
+		slog.WarnContext(ctx, "worldvpn reclaimed untracked peer", "user_id", acc.UserID, "wireguard_id", id, "request_id", requestIDFrom(ctx))
+	}
+	return deleted
 }
 
 func (s *Service) releaseStuck(ctx context.Context, acc account) bool {

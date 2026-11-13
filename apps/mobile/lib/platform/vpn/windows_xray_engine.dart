@@ -5,6 +5,7 @@ import 'dart:io';
 import 'egress_profile.dart';
 import 'network_epoch.dart';
 import 'tunnel_host_pins.dart';
+import 'tunnel_diagnostic.dart';
 import 'vpn_engine.dart';
 import 'windows_job.dart';
 import 'windows_traffic_guard.dart';
@@ -47,7 +48,7 @@ enum _TunnelMode { idle, xray, wireGuard }
 ///
 /// WireGuard 引擎仍可在确实存在 WireGuard 节点时被调用；没有这类节点时连接控制器
 /// 不会走到它，界面也不会提示去安装 WireGuard。
-class WindowsXrayEngine implements WireGuardVpnEngine {
+class WindowsXrayEngine implements WireGuardVpnEngine, HandshakeReporter {
   WindowsXrayEngine({
     XrayLauncher? launch,
     Future<bool> Function()? probe,
@@ -166,6 +167,14 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   @override
   bool get canRecover => !_disposed && Platform.isWindows;
+
+  @override
+  bool get reportsHandshake => !_disposed;
+
+  TunnelDiagnostic? _ownDiagnostic;
+
+  @override
+  TunnelDiagnostic? get tunnelDiagnostic => _ownDiagnostic ?? _wireGuard?.tunnelDiagnostic;
 
   @override
   Future<void> applyPolicy({required bool leakProtect}) async {
@@ -358,11 +367,27 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   @override
   Future<bool> prepare() async {
+    _ownDiagnostic = null;
+    _wireGuard?.tunnelDiagnostic = null;
     if (_disposed) return false;
     if (!await _binariesReady()) {
+      _ownDiagnostic = const TunnelDiagnostic(
+        stage: 'prepare',
+        errorCode: 'XRAY_MISSING',
+        errorText: '安装不完整：缺少 Xray 组件，请重新安装',
+        serviceState: '',
+        logSummary: '',
+      );
       throw const VpnFailure('XRAY_MISSING', '安装不完整：缺少 Xray 组件，请重新安装');
     }
     if (!await _isAdmin()) {
+      _ownDiagnostic = const TunnelDiagnostic(
+        stage: 'prepare',
+        errorCode: 'PERMISSION_DENIED',
+        errorText: '请右键宇海VPN图标，选择「以管理员身份运行」',
+        serviceState: '',
+        logSummary: '',
+      );
       _emitFailure(const VpnFailure('PERMISSION_DENIED', '请右键宇海VPN图标，选择「以管理员身份运行」'));
       return false;
     }
@@ -371,6 +396,7 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
 
   @override
   Future<void> connect(ConnectProfile profile) async {
+    _ownDiagnostic = null;
     if (profile is WireGuardProfile && profile.protocol == 'WIREGUARD') {
       if (!_allowWireGuard) {
         throw const FormatException('当前版本的 Windows 客户端请选择出口线路');
@@ -538,6 +564,13 @@ class WindowsXrayEngine implements WireGuardVpnEngine {
     _ticker.stop();
     _process?.kill();
     _process = null;
+    _ownDiagnostic = const TunnelDiagnostic(
+      stage: 'handshake',
+      errorCode: 'HANDSHAKE_TIMEOUT',
+      errorText: '线路握手超时，请重试或更换线路',
+      serviceState: '',
+      logSummary: '',
+    );
     _emitFailure(const VpnFailure('HANDSHAKE_TIMEOUT', '线路握手超时，请重试或更换线路'));
   }
 

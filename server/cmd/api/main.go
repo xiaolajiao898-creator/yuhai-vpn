@@ -18,6 +18,7 @@ import (
 	"github.com/yuhai-vpn/server/internal/appinfo"
 	"github.com/yuhai-vpn/server/internal/apprelease"
 	"github.com/yuhai-vpn/server/internal/auth"
+	"github.com/yuhai-vpn/server/internal/clientdiag"
 	"github.com/yuhai-vpn/server/internal/clock"
 	"github.com/yuhai-vpn/server/internal/config"
 	"github.com/yuhai-vpn/server/internal/connect"
@@ -156,5 +157,6 @@ func buildRouter(d routerDeps) *gin.Engine {
 	(&redeem.Handler{Svc: redeemSvc, MW: d.MW}).Mount(v1)
 	(&trial.Handler{Svc: trialSvc, MW: d.MW}).Mount(v1)
 	(&worldvpn.Handler{Svc: d.WorldVPN, MW: d.MW}).Mount(v1)
+	(&clientdiag.Handler{Pool: d.Pool, MW: d.MW}).Mount(v1)
 	return r
 }

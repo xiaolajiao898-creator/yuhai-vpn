@@ -189,6 +189,29 @@ func TestClientWireGuardRoundTrip(t *testing.T) {
 	if err := c.DeleteWireGuardPeer(context.Background(), "yh1", "123", true); err != nil {
 		t.Fatal(err)
 	}
+	ids, err := c.ExistingWireGuardIDs(context.Background(), "yh1")
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("config without an id should not invent one: %v %v", ids, err)
+	}
+}
+
+func TestExistingWireGuardIDFromLookup(t *testing.T) {
+	cfg := "[Interface]\nPrivateKey = " + testKey(3) + "\nAddress = 10.8.0.2/32\nDNS = 1.1.1.1\n\n[Peer]\nPublicKey = " + testKey(4) + "\nEndpoint = vpn.example.com:51820\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(b), "wireguardId=") {
+			t.Errorf("lookup must not send a wireguard id: %s", b)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "success", "config_id": 17, "wireguard_config": cfg,
+		})
+	}))
+	defer srv.Close()
+	c := NewClient(Settings{BaseURL: srv.URL, Username: "u", Password: "p", Sandbox: true})
+	ids, err := c.ExistingWireGuardIDs(context.Background(), "yh1")
+	if err != nil || len(ids) != 1 || ids[0] != "17" {
+		t.Fatalf("%v %v", ids, err)
+	}
 }
 
 func TestResponseFixtures(t *testing.T) {

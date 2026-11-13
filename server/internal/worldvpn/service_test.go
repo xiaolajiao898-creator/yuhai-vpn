@@ -23,6 +23,9 @@ type fakeAPI struct {
 	getErr                                            error
 	delErr                                            error
 	peerErrs                                          []error
+	existingIDs                                       []string
+	existingErr                                       error
+	rejectCanceled                                    bool
 	listErr                                           error
 	listFailAfter                                     int
 	listCalls                                         int
@@ -61,7 +64,10 @@ func (f *fakeAPI) ListServers(context.Context) ([]serverLine, error) {
 	}
 	return f.servers, nil
 }
-func (f *fakeAPI) AddWireGuardPeer(context.Context, string, int64) (peerCreated, error) {
+func (f *fakeAPI) AddWireGuardPeer(ctx context.Context, _ string, _ int64) (peerCreated, error) {
+	if f.rejectCanceled && ctx.Err() != nil {
+		return peerCreated{}, ctx.Err()
+	}
 	f.peerAdds++
 	if len(f.peerErrs) > 0 {
 		err := f.peerErrs[0]
@@ -72,7 +78,19 @@ func (f *fakeAPI) AddWireGuardPeer(context.Context, string, int64) (peerCreated,
 	}
 	return peerCreated{WireGuardID: "123", ClientIP: "10.0.0.2/32"}, nil
 }
-func (f *fakeAPI) GetWireGuardConfig(_ context.Context, _, id string) (wireGuardMaterial, error) {
+func (f *fakeAPI) ExistingWireGuardIDs(context.Context, string) ([]string, error) {
+	if f.existingErr != nil {
+		return nil, f.existingErr
+	}
+	if len(f.existingIDs) == 0 {
+		return nil, &APIError{Action: "getWireGuardConfig", Message: "not found"}
+	}
+	return append([]string(nil), f.existingIDs...), nil
+}
+func (f *fakeAPI) GetWireGuardConfig(ctx context.Context, _, id string) (wireGuardMaterial, error) {
+	if f.rejectCanceled && ctx.Err() != nil {
+		return wireGuardMaterial{}, ctx.Err()
+	}
 	if f.foundIDs != nil && !f.foundIDs[id] {
 		return wireGuardMaterial{}, &APIError{Action: "getWireGuardConfig", Message: "not found"}
 	}
@@ -593,6 +611,99 @@ func TestShortenedButStillValidSubscriptionPullsExpiryForward(t *testing.T) {
 	}
 	if api.deletes != 0 || !mem.accounts[7].ExpireAt.Equal(mem.sub[7]) || mem.accounts[7].Status != "ACTIVE" {
 		t.Fatalf("expiry not aligned: deletes=%d %+v", api.deletes, mem.accounts[7])
+	}
+}
+
+func TestLinesSpreadCountries(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	api := &fakeAPI{servers: []serverLine{
+		{ID: 1, Name: "Germany S1", IP: "203.0.113.10"},
+		{ID: 2, Name: "Germany S2", IP: "203.0.113.10"},
+		{ID: 3, Name: "Singapore S2", IP: "203.0.113.10"},
+		{ID: 4, Name: "Japan S1", IP: "203.0.113.10"},
+	}}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	lines, err := svc.Lines(context.Background(), 7)
+	if err != nil || len(lines) != 4 {
+		t.Fatal(err, len(lines))
+	}
+	if lines[0].CountryCode != "SG" || lines[1].CountryCode != "JP" || lines[2].CountryCode != "DE" || lines[3].CountryCode != "DE" {
+		t.Fatalf("order %+v %+v %+v %+v", lines[0].CountryCode, lines[1].CountryCode, lines[2].CountryCode, lines[3].CountryCode)
+	}
+	if lines[0].ID != "w3" || lines[2].ID != "w1" {
+		t.Fatalf("ids %s %s", lines[0].ID, lines[2].ID)
+	}
+}
+
+func TestConnectFinishesAfterClientHangsUp(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	api := &fakeAPI{
+		rejectCanceled: true,
+		material:       wireGuardMaterial{PrivateKey: testKey(1), Address: "10.8.0.2/32", DNS: []string{"1.1.1.1"}, ServerPublicKey: testKey(2), Endpoint: "203.0.113.10:51820", MTU: 1280},
+	}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	issued, err := svc.Connect(ctx, 7, 9, "w43")
+	if err != nil || issued.LineID != "w43" {
+		t.Fatalf("cancelled request should still record the peer: %v %+v", err, issued)
+	}
+	peers, _ := mem.OpenPeers(context.Background(), 7)
+	if len(peers) != 1 || peers[0].WireGuardID != "123" {
+		t.Fatalf("peer not stored: %+v", peers)
+	}
+}
+
+func TestUpstreamLimitDeletesUntrackedConfig(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	api := &fakeAPI{
+		peerErrs:    []error{&APIError{Action: "addWireGuardPeer", Message: "You have reached the maximum limit of 1 WireGuard configurations for your account type (dialup)."}},
+		existingIDs: []string{"77"},
+		material:    wireGuardMaterial{PrivateKey: testKey(1), Address: "10.8.0.2/32", DNS: []string{"1.1.1.1"}, ServerPublicKey: testKey(2), Endpoint: "203.0.113.10:51820", MTU: 1280},
+	}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if _, err := svc.Connect(context.Background(), 7, 9, "w43"); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.deletedPeers) != 1 || api.deletedPeers[0] != "77" || api.peerAdds != 2 {
+		t.Fatalf("deleted=%v adds=%d", api.deletedPeers, api.peerAdds)
+	}
+}
+
+func TestReclaimKeepsKnownConfig(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	mem.peers = []openPeer{{ID: 4, UserID: 7, DeviceID: 8, ServerID: 1, WireGuardID: "9", Sandbox: true}}
+	api := &fakeAPI{existingIDs: []string{"9", "77"}}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if !svc.reclaimUntracked(context.Background(), mem.accounts[7]) {
+		t.Fatal("expected the untracked config to be removed")
+	}
+	if len(api.deletedPeers) != 1 || api.deletedPeers[0] != "77" {
+		t.Fatalf("deleted=%v", api.deletedPeers)
+	}
+}
+
+func TestReclaimSweepsWhenLookupFails(t *testing.T) {
+	now := time.Date(2026, 11, 13, 0, 0, 0, 0, time.UTC)
+	mem := newMem()
+	mem.accounts[7] = account{UserID: 7, Username: "trial-user", Status: "ACTIVE", ExpireAt: now.Add(24 * time.Hour), Source: "TRIAL", Sandbox: true}
+	api := &fakeAPI{
+		existingErr: &APIError{Action: "getWireGuardConfig", Message: "temporary"},
+		foundIDs:    map[string]bool{"5": true},
+	}
+	svc := &Service{Settings: Settings{Username: "u", Password: "p", Sandbox: true}, API: api, Store: mem, Clock: clockAt(now)}
+	if !svc.reclaimUntracked(context.Background(), mem.accounts[7]) {
+		t.Fatal("sweep should delete the untracked config")
+	}
+	if len(api.deletedPeers) != 1 || api.deletedPeers[0] != "5" {
+		t.Fatalf("deleted=%v", api.deletedPeers)
 	}
 }
 

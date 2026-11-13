@@ -182,6 +182,26 @@ func (c *Client) AddWireGuardPeer(ctx context.Context, username string, serverID
 	return peerCreated{WireGuardID: id, ClientIP: ip, DNS: dns, ServerName: name, PublicKey: pub}, nil
 }
 
+// ExistingWireGuardIDs 在不知道编号时问上游这个账号现有的配置。
+// 试用号中途断开后，上游往往只剩这一条没有记到本地的配置。问不到编号时返回空列表，调用方再按小编号探测。
+func (c *Client) ExistingWireGuardIDs(ctx context.Context, username string) ([]string, error) {
+	if strings.TrimSpace(username) == "" {
+		return nil, errors.New("worldvpn: 缺少用户名")
+	}
+	body, err := c.post(ctx, "getWireGuardConfig", map[string]string{"vpnUsername": username}, c.Sandbox)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := wireGuardConfigText(body); err != nil {
+		return nil, err
+	}
+	id, ok := peerConfigID(body)
+	if !ok {
+		return nil, nil
+	}
+	return []string{id}, nil
+}
+
 func (c *Client) GetWireGuardConfig(ctx context.Context, username, wireguardID string) (wireGuardMaterial, error) {
 	fields := map[string]string{"vpnUsername": username}
 	if wireguardID != "" {

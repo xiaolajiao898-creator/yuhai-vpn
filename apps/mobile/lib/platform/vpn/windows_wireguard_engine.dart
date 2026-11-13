@@ -6,6 +6,7 @@ import 'package:cryptography/cryptography.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../../core/storage/app_secure_storage.dart';
+import 'tunnel_diagnostic.dart';
 import 'tunnel_host_pins.dart';
 import 'vpn_engine.dart';
 import 'windows_system_tools.dart';
@@ -39,7 +40,8 @@ class SecureKeyStore implements WireGuardKeyStore {
 ///   再调用 `wireguard.exe /installtunnelservice`；断开时卸载服务并抹掉配置文件。
 /// - 只有看到「本次连接之后」的真实握手才报告已连接，统计取自 `wg.exe show yuhai dump`。
 /// - 需要以管理员身份运行（安装包的程序清单已声明）。
-class WindowsWireGuardEngine implements WireGuardVpnEngine {
+class WindowsWireGuardEngine
+    implements WireGuardVpnEngine, HandshakeReporter {
   WindowsWireGuardEngine({
     ProcessRunner? run,
     WireGuardKeyStore? keys,
@@ -48,6 +50,8 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
     DateTime Function()? now,
     Duration pollInterval = const Duration(seconds: 1),
     Duration handshakeTimeout = const Duration(seconds: 30),
+    Future<bool> Function()? ipv6Enabled,
+    Future<List<InternetAddress>> Function(String host)? resolveHost,
   })  : _run = run ?? Process.run,
         _keys = keys ?? SecureKeyStore(),
         _dataDir = programDataDir ??
@@ -55,7 +59,9 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
         _wgDir = wireGuardDir,
         _now = now ?? DateTime.now,
         _pollInterval = pollInterval,
-        _handshakeTimeout = handshakeTimeout;
+        _handshakeTimeout = handshakeTimeout,
+        _ipv6Enabled = ipv6Enabled,
+        _resolveHost = resolveHost;
 
   static const tunnelName = 'yuhai';
   final ProcessRunner _run;
@@ -65,6 +71,8 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
   final DateTime Function() _now;
   final Duration _pollInterval;
   final Duration _handshakeTimeout;
+  final Future<bool> Function()? _ipv6Enabled;
+  final Future<List<InternetAddress>> Function(String host)? _resolveHost;
 
   final _status = StreamController<VpnStatus>.broadcast();
   final _stats = StreamController<VpnStats>.broadcast();
@@ -72,6 +80,7 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
   int _generation = 0;
   bool _disposed = false;
   Timer? _poll;
+  bool _sampling = false;
   DateTime? _startedAt;
   DateTime? _connectedAt;
   int _lastRx = 0, _lastTx = 0;
@@ -81,6 +90,12 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
 
   /// 隧道服务的程序路径（断网保护的放行名单要用它：握手包由这个进程发出）。
   String get wireguardExePath => _wireguardExe;
+
+  @override
+  bool get reportsHandshake => !_disposed;
+
+  @override
+  TunnelDiagnostic? tunnelDiagnostic;
 
   /// 握手超时、即将卸载隧道服务之前调用。WireGuard 服务自带的防火墙会随服务一起消失，
   /// 断网保护要在这之前先把自己的拦截规则装好，中间不能留空档。
@@ -164,24 +179,35 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
   static String buildConfig(
       {required String privateKey,
       required WireGuardProfile profile,
-      String? endpoint}) {
+      String? endpoint,
+      bool ipv6 = true}) {
     final host = endpoint == null ? null : wireGuardEndpointHost(endpoint);
     final peer = host != null && InternetAddress.tryParse(host) != null
         ? endpoint!
         : profile.endpoint;
+    final dns = _windowsDns(profile.dns);
+    // 1280 能过 PPPoE 和手机网络。握手包很小，MTU 不决定能不能握手，但过高时隧道起来后仍像没连上。
+    // 没有 IPv6 时写 ::/0 会让隧道服务直接退出。
+    final allowed = ipv6 ? '0.0.0.0/0, ::/0' : '0.0.0.0/0';
     final b = StringBuffer()
       ..writeln('[Interface]')
       ..writeln('PrivateKey = $privateKey')
       ..writeln('Address = ${profile.address}')
-      ..writeln('DNS = ${profile.dns.join(', ')}')
-      ..writeln('MTU = ${profile.mtu}')
+      ..writeln('DNS = ${dns.join(', ')}')
+      ..writeln('MTU = 1280')
       ..writeln()
       ..writeln('[Peer]')
       ..writeln('PublicKey = ${profile.serverPublicKey}')
-      ..writeln('AllowedIPs = 0.0.0.0/0, ::/0')
+      ..writeln('AllowedIPs = $allowed')
       ..writeln('Endpoint = $peer')
       ..writeln('PersistentKeepalive = 25');
     return b.toString();
+  }
+
+  static List<String> _windowsDns(List<String> dns) {
+    final v4 = dns.where((item) => InternetAddress.tryParse(item)?.type == InternetAddressType.IPv4).toList();
+    final chosen = v4.isNotEmpty ? v4 : dns;
+    return chosen.take(4).toList();
   }
 
   /// 只信任 SYSTEM（S-1-5-18）与本机 Administrators 组（S-1-5-32-544）。
@@ -249,7 +275,18 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
     }
     final file = File(_configPath);
     if (await FileSystemEntity.isLink(_configPath)) throw _untrustedDir;
-    await file.writeAsString(text, flush: true);
+    // WireGuard for Windows 按 UTF-8 读配置。写成 CRLF、不带 BOM，避免服务把配置判坏后马上退出。
+    final bytes = utf8.encode(text.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'));
+    await file.writeAsBytes(bytes, flush: true);
+    final fileAcl = await _run(icacls, [
+      _configPath,
+      '/inheritance:r',
+      '/grant:r',
+      '*S-1-5-18:F',
+      '/grant:r',
+      '*S-1-5-32-544:F',
+    ]);
+    if (fileAcl.exitCode != 0) throw _untrustedDir;
   }
 
   Future<void> _wipeConfig() async {
@@ -297,6 +334,7 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
     _startedAt = _now();
     _connectedAt = null;
     _lastSample = null;
+    tunnelDiagnostic = null;
     _set(VpnStatus.connecting);
     try {
       final String privateKey;
@@ -308,18 +346,50 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
         final seed = await pair.extractPrivateKeyBytes();
         privateKey = base64Encode(seed);
       }
-      if (await _serviceInstalled()) {
-        await _run(_wireguardExe, ['/uninstalltunnelservice', tunnelName]);
-      }
+      await _quietUninstall();
+      await _waitUntilGone();
+      await _allowWireGuardFirewall();
+      final ipv6 = await (_ipv6Enabled ?? _defaultIPv6)();
+      final endpoint = await _preferIPv4Endpoint(endpointOverride ?? profile.endpoint);
       await _writeConfig(buildConfig(
-          privateKey: privateKey,
-          profile: profile,
-          endpoint: endpointOverride));
-      final r = await _run(_wireguardExe, ['/installtunnelservice', _configPath]);
+          privateKey: privateKey, profile: profile, endpoint: endpoint, ipv6: ipv6));
+      var r = await _run(_wireguardExe, ['/installtunnelservice', _configPath]);
+      if (generation != _generation) return;
+      if (r.exitCode != 0 && _installAlreadyExists(r)) {
+        await _quietUninstall();
+        await _waitUntilGone();
+        r = await _run(_wireguardExe, ['/installtunnelservice', _configPath]);
+      }
       if (generation != _generation) return;
       if (r.exitCode != 0) {
+        final detail = '${r.stdout}\n${r.stderr}';
+        await _quietUninstall();
         await _wipeConfig();
-        _fail('CONNECT_FAILED', '无法启动 WireGuard 隧道服务，请确认以管理员身份运行');
+        final logs = await _collectLogs();
+        tunnelDiagnostic = TunnelDiagnostic(
+          stage: 'install',
+          errorCode: 'CONNECT_FAILED',
+          errorText: _installFailureMessage(r.exitCode, detail),
+          serviceState: logs.service,
+          logSummary: redactTunnelText('install_exit=${r.exitCode}\n$detail\n${logs.log}'),
+        );
+        _fail('CONNECT_FAILED', tunnelDiagnostic!.errorText);
+        return;
+      }
+      final stopped = await _waitUntilRunning();
+      if (generation != _generation) return;
+      if (stopped != null) {
+        final logs = await _collectLogs();
+        await _quietUninstall();
+        await _wipeConfig();
+        tunnelDiagnostic = TunnelDiagnostic(
+          stage: 'service',
+          errorCode: 'TUNNEL_SERVICE_STOPPED',
+          errorText: _serviceStoppedMessage(stopped),
+          serviceState: logs.service,
+          logSummary: logs.log,
+        );
+        _fail('TUNNEL_SERVICE_STOPPED', tunnelDiagnostic!.errorText);
         return;
       }
     } on VpnFailure catch (e) {
@@ -329,14 +399,156 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
         _fail(e.code, e.message);
       }
       return;
-    } catch (_) {
+    } catch (error) {
       if (generation == _generation) {
         await _wipeConfig();
+        final detail = redactTunnelText('$error');
+        tunnelDiagnostic = TunnelDiagnostic(
+          stage: 'install',
+          errorCode: 'CONNECT_FAILED',
+          errorText: 'VPN 连接失败，请重试',
+          serviceState: '',
+          logSummary: detail,
+        );
         _fail('CONNECT_FAILED', 'VPN 连接失败，请重试');
       }
       return;
     }
     _poll = Timer.periodic(_pollInterval, (_) => unawaited(_sample(generation)));
+    unawaited(_sample(generation));
+  }
+
+  bool _installAlreadyExists(ProcessResult result) {
+    final text = '${result.stdout}\n${result.stderr}'.toLowerCase();
+    return text.contains('already exists') || text.contains('already installed');
+  }
+
+  String _installFailureMessage(int exitCode, String detail) {
+    final lower = detail.toLowerCase();
+    if (lower.contains('access is denied') || detail.contains('拒绝访问')) {
+      return '无法启动 WireGuard 隧道服务（退出码 $exitCode）：没有管理员权限。请右键宇海VPN，选择「以管理员身份运行」';
+    }
+    if (lower.contains('wintun') || lower.contains('adapter') || detail.contains('网卡')) {
+      return '无法启动 WireGuard 隧道服务（退出码 $exitCode）：系统拒绝创建网卡。请把 WireGuard 加入杀毒软件和防火墙白名单后重试';
+    }
+    final clip = redactTunnelText(detail).replaceAll(RegExp(r'\s+'), ' ').trim();
+    final extra = clip.isEmpty ? '' : ' ${clip.length > 120 ? clip.substring(0, 120) : clip}';
+    return '无法启动 WireGuard 隧道服务（退出码 $exitCode）。请确认以管理员身份运行，并把 WireGuard 加入杀毒软件和防火墙白名单。$extra'
+        .trim();
+  }
+
+  String _serviceStoppedMessage(String state) =>
+      'WireGuard 隧道服务已停止（$state）。杀毒软件或防火墙可能拦截了网卡驱动，请把 WireGuard 加入白名单后重试';
+
+  Future<void> _allowWireGuardFirewall() async {
+    const name = 'YuhaiVPN WireGuard';
+    final netsh = windowsSystem32Tool('netsh.exe');
+    try {
+      await _run(netsh, ['advfirewall', 'firewall', 'delete', 'rule', 'name=$name']);
+      await _run(netsh, [
+        'advfirewall',
+        'firewall',
+        'add',
+        'rule',
+        'name=$name',
+        'dir=out',
+        'action=allow',
+        'program=$_wireguardExe',
+        'enable=yes',
+        'profile=any',
+        'protocol=UDP',
+      ]);
+    } catch (_) {}
+  }
+
+  Future<void> _quietUninstall() async {
+    try {
+      if (await _serviceInstalled()) {
+        await _run(_wireguardExe, ['/uninstalltunnelservice', tunnelName]);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _waitUntilGone() async {
+    for (var i = 0; i < 20; i++) {
+      if (!await _serviceInstalled()) return;
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    }
+  }
+
+  Future<bool> _serviceDied() async => await _serviceState() == 'STOPPED';
+
+  Future<String> _serviceState() async {
+    final r = await _run(windowsSystem32Tool('sc.exe'), ['query', 'WireGuardTunnel\$$tunnelName']);
+    final text = '${r.stdout}\n${r.stderr}';
+    final match = RegExp(r'STATE\s+:\s+\d+\s+([A-Z_]+)').firstMatch(text);
+    if (match != null) return match.group(1)!;
+    if (r.exitCode != 0) return 'ABSENT';
+    return 'UNKNOWN';
+  }
+
+  /// 返回非 null 表示服务没有进入 RUNNING。START_PENDING 会再等一会儿。
+  Future<String?> _waitUntilRunning() async {
+    for (var i = 0; i < 10; i++) {
+      final state = await _serviceState();
+      if (state == 'RUNNING') return null;
+      if (state == 'STOPPED') return state;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
+    final state = await _serviceState();
+    return state == 'RUNNING' ? null : state;
+  }
+
+  Future<bool> _defaultIPv6() async {
+    try {
+      final ifaces = await NetworkInterface.list(includeLinkLocal: false, includeLoopback: false);
+      for (final iface in ifaces) {
+        for (final addr in iface.addresses) {
+          if (addr.type == InternetAddressType.IPv6) return true;
+        }
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  Future<String> _preferIPv4Endpoint(String endpoint) async {
+    final host = wireGuardEndpointHost(endpoint);
+    if (host == null || InternetAddress.tryParse(host) != null) return endpoint;
+    try {
+      final found = await (_resolveHost ?? InternetAddress.lookup)(host).timeout(const Duration(seconds: 3));
+      for (final addr in found) {
+        if (addr.type == InternetAddressType.IPv4) return pinWireGuardEndpoint(endpoint, addr);
+      }
+    } catch (_) {}
+    return endpoint;
+  }
+
+  Future<({String service, String log})> _collectLogs() async {
+    try {
+      final state = await _serviceState();
+      final dump = await _run(_wgExe, ['show', tunnelName, 'dump']);
+      final dumplog = await _run(_wireguardExe, ['/dumplog']);
+      final summary = StringBuffer()
+        ..writeln('service=$state')
+        ..writeln('wg_exit=${dump.exitCode}')
+        ..writeln(dump.stdout)
+        ..writeln(dump.stderr)
+        ..writeln('dumplog_exit=${dumplog.exitCode}')
+        ..writeln(dumplog.stdout)
+        ..writeln(dumplog.stderr);
+      return (service: state, log: redactTunnelText(summary.toString()));
+    } catch (_) {
+      return (service: '', log: '');
+    }
+  }
+
+  Future<void> _teardownQuiet() async {
+    ++_generation;
+    _poll?.cancel();
+    _poll = null;
+    await _quietUninstall();
+    await _wipeConfig();
+    _connectedAt = null;
   }
 
   /// 解析 `wg show <iface> dump` 的 peer 行：
@@ -359,6 +571,16 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
   }
 
   Future<void> _sample(int generation) async {
+    if (_disposed || generation != _generation || _sampling) return;
+    _sampling = true;
+    try {
+      await _sampleOnce(generation);
+    } finally {
+      _sampling = false;
+    }
+  }
+
+  Future<void> _sampleOnce(int generation) async {
     if (_disposed || generation != _generation) return;
     final r = await _run(_wgExe, ['show', tunnelName, 'dump']);
     if (generation != _generation) return;
@@ -376,7 +598,9 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
         _lastTx = d.tx;
         _lastSample = now;
         _set(VpnStatus.connected);
-      } else if (now.difference(started) > _handshakeTimeout) {
+      } else if (await _serviceDied()) {
+        if (generation != _generation) return;
+        final logs = await _collectLogs();
         final guard = beforeTimeoutTeardown;
         if (guard != null) {
           try {
@@ -384,7 +608,34 @@ class WindowsWireGuardEngine implements WireGuardVpnEngine {
           } catch (_) {}
           if (generation != _generation) return;
         }
-        await disconnect();
+        await _teardownQuiet();
+        if (generation + 1 == _generation) {
+          tunnelDiagnostic = TunnelDiagnostic(
+            stage: 'service',
+            errorCode: 'TUNNEL_SERVICE_STOPPED',
+            errorText: _serviceStoppedMessage(logs.service.isEmpty ? 'STOPPED' : logs.service),
+            serviceState: logs.service,
+            logSummary: logs.log,
+          );
+          _fail('TUNNEL_SERVICE_STOPPED', tunnelDiagnostic!.errorText);
+        }
+      } else if (now.difference(started) > _handshakeTimeout) {
+        final logs = await _collectLogs();
+        final guard = beforeTimeoutTeardown;
+        if (guard != null) {
+          try {
+            await guard();
+          } catch (_) {}
+          if (generation != _generation) return;
+        }
+        tunnelDiagnostic = TunnelDiagnostic(
+          stage: 'handshake',
+          errorCode: 'HANDSHAKE_TIMEOUT',
+          errorText: '线路握手超时，请重试或更换线路',
+          serviceState: logs.service,
+          logSummary: logs.log,
+        );
+        await _teardownQuiet();
         if (generation + 1 == _generation) {
           _fail('HANDSHAKE_TIMEOUT', '线路握手超时，请重试或更换线路');
         }

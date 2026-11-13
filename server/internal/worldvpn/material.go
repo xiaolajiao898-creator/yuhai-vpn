@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/netip"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -355,6 +356,63 @@ var places = []struct{ needle, country, region string }{
 	{"los angeles", "US", "AMERICAS"},
 	{"canada", "CA", "AMERICAS"},
 	{"brazil", "BR", "AMERICAS"},
+	{"malaysia", "MY", "ASIA"},
+	{"thailand", "TH", "ASIA"},
+	{"vietnam", "VN", "ASIA"},
+	{"philippines", "PH", "ASIA"},
+	{"indonesia", "ID", "ASIA"},
+}
+
+// 旧客户端只探测列表前 20 条。上游经常把同一个国家排在一起，前 20 条会全是德国。
+// 这里按国家轮流抽出，并把新加坡、日本、香港等靠前，让旧客户端也能抽到亚洲线路。
+var preferredCountryRank = map[string]int{
+	"SG": 0, "HK": 1, "JP": 2, "TW": 3, "KR": 4, "MY": 5,
+	"TH": 6, "VN": 7, "PH": 8, "AU": 9, "ID": 10,
+}
+
+func countryRank(code string) int {
+	if n, ok := preferredCountryRank[code]; ok {
+		return n
+	}
+	return 100
+}
+
+func orderLines(lines []Line) []Line {
+	if len(lines) < 2 {
+		return lines
+	}
+	groups := map[string][]Line{}
+	var countries []string
+	for _, line := range lines {
+		if _, ok := groups[line.CountryCode]; !ok {
+			countries = append(countries, line.CountryCode)
+		}
+		groups[line.CountryCode] = append(groups[line.CountryCode], line)
+	}
+	sort.SliceStable(countries, func(i, j int) bool {
+		ri, rj := countryRank(countries[i]), countryRank(countries[j])
+		if ri != rj {
+			return ri < rj
+		}
+		return countries[i] < countries[j]
+	})
+	out := make([]Line, 0, len(lines))
+	for {
+		added := false
+		for _, code := range countries {
+			group := groups[code]
+			if len(group) == 0 {
+				continue
+			}
+			out = append(out, group[0])
+			groups[code] = group[1:]
+			added = true
+		}
+		if !added {
+			break
+		}
+	}
+	return out
 }
 
 // ProbePort 只给客户端做 TCP 延迟参考。listServers 不返回端口；真正的 Endpoint 以配置文件为准。

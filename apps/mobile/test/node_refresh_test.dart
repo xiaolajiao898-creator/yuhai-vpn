@@ -143,7 +143,7 @@ void main() {
             .id,
         'demo');
   });
-  test('测速最多20条、并发4条，只测可用线路', () async {
+  test('测速按国家抽样、并发4条，只测可用线路', () async {
     final nodes = [
       NodeItem.fromJson(row(available: false)),
       ...List.generate(25, (i) => NodeItem.fromJson(row(id: '${i + 1}')))
@@ -159,9 +159,9 @@ void main() {
       active--;
       return 25;
     }, isCurrent: () => true);
-    expect(calls, 20);
-    expect(results.length, 20);
-    expect(peak, 4);
+    expect(calls, 3);
+    expect(results.length, 3);
+    expect(peak, 3);
     expect(active, 0);
   });
   test('取消不再调度剩余线路，超时和负延迟不能显示成功', () async {
@@ -182,7 +182,7 @@ void main() {
       c.complete(12);
     }
     expect(await operation, isEmpty);
-    expect(calls, 4);
+    expect(calls, 3);
     final never = Completer<int?>();
     final timeout = await probeNodes([nodes.first], (_, __) => never.future,
         isCurrent: () => true, timeout: const Duration(milliseconds: 10));
@@ -210,7 +210,7 @@ void main() {
     await tester.pumpWidget(UncontrolledProviderScope(
         container: container, child: const MaterialApp(home: NodesPage())));
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('延迟检测（最多20条）'));
+    await tester.tap(find.byTooltip('延迟检测（按地区抽样）'));
     await tester.pump();
     expect(engine.pending.length, 1);
     list = [NodeItem.fromJson(row(available: false))];
@@ -256,5 +256,35 @@ void main() {
     final closed = reads;
     await tester.pump(const Duration(seconds: 31));
     expect(reads, closed);
+  });
+
+  test('按国家分散抽样，附近国家排在前面', () {
+    NodeItem line(String id, String country) => NodeItem(
+          id: id,
+          name: id,
+          countryCode: country,
+          city: '',
+          region: 'ASIA',
+          available: true,
+          isRecommended: false,
+          probeHost: 'node.invalid',
+          probePort: 443,
+          protocols: const ['WIREGUARD'],
+        );
+    final nodes = [
+      for (var i = 0; i < 20; i++) line('de$i', 'DE'),
+      line('sg1', 'SG'),
+      line('jp1', 'JP'),
+      line('hk1', 'HK'),
+      line('sg2', 'SG'),
+    ];
+    final picked = selectProbeTargets(nodes,
+        preferCountries: const ['SG', 'HK', 'JP', 'MY']);
+    expect(picked.first.countryCode, 'SG');
+    expect(picked.map((n) => n.countryCode).toSet(), containsAll(['SG', 'JP', 'HK', 'DE']));
+    expect(picked.where((n) => n.countryCode == 'DE').length, 3);
+    expect(picked.where((n) => n.countryCode == 'SG').length, 2);
+    expect(nearbyCountryCodes(const Duration(hours: 8)).take(3),
+        ['SG', 'HK', 'JP']);
   });
 }

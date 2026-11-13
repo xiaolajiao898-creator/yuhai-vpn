@@ -29,6 +29,19 @@ paths:
       responses:
         '201': { description: 已发布 }
         default: { $ref: '#/components/responses/Error' }
+  /connect-diagnostics:
+    get:
+      operationId: listConnectDiagnostics
+      x-admin-level: L0
+      summary: 查看客户端连接失败时上报的诊断。日志已去掉私钥。
+      parameters:
+        - { name: user_id, in: query, schema: { type: string } }
+        - { name: device_id, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer } }
+        - { name: page_size, in: query, schema: { type: integer } }
+      responses:
+        '200': { description: 诊断列表 }
+        default: { $ref: '#/components/responses/Error' }
   /app/releases/{id}/current:
     post:
       operationId: rollbackAppRelease

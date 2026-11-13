@@ -22,6 +22,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/connect-diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 查看客户端连接失败时上报的诊断。日志已去掉私钥。 */
+        get: operations["listConnectDiagnostics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/app/releases/{id}/current": {
         parameters: {
             query?: never;
@@ -2760,6 +2777,30 @@ export interface operations {
         responses: {
             /** @description 已发布 */
             201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listConnectDiagnostics: {
+        parameters: {
+            query?: {
+                user_id?: string;
+                device_id?: string;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 诊断列表 */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

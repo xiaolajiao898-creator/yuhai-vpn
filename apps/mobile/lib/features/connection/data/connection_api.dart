@@ -94,6 +94,28 @@ extension WorldVPNConnectionApi on ConnectionApi {
     await client.call('POST', '/v1/connect/worldvpn/release',
         expectedSession: session, json: const {}, sign: true);
   }
+
+  /// 连接失败时把阶段、错误原文和服务日志摘要交给服务端。调用方要先去掉私钥。
+  Future<void> reportTunnelDiagnostic(
+    Session session, {
+    required String stage,
+    required String errorCode,
+    required String errorText,
+    required String serviceState,
+    required String logSummary,
+  }) async {
+    await client.call('POST', '/v1/connect/diagnostics',
+        expectedSession: session,
+        json: {
+          'stage': stage,
+          'error_code': errorCode,
+          'error_text': errorText,
+          'service_state': serviceState,
+          'log_summary': logSummary,
+        },
+        sign: true,
+        timeout: const Duration(seconds: 8));
+  }
 }
 
 bool isConnectTimeout(DioException error) =>
