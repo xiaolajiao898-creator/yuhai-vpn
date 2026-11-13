@@ -181,7 +181,7 @@ func TestClientWireGuardRoundTrip(t *testing.T) {
 	if err != nil || m.PrivateKey != testKey(3) || m.Endpoint != "203.0.113.10:51820" {
 		t.Fatalf("%+v %v", m, err)
 	}
-	if _, err := c.GetWireGuardConfig(context.Background(), "broken", "1"); err == nil || !strings.Contains(err.Error(), "缺少 config") {
+	if _, err := c.GetWireGuardConfig(context.Background(), "broken", "1"); err == nil || !strings.Contains(err.Error(), "缺少 wireguard_config") {
 		t.Fatalf("missing config: %v", err)
 	}
 	// empty wireguard id still posts getWireGuardConfig; the handler above only matches exact path.
@@ -369,6 +369,74 @@ func jsonClient(t *testing.T, body any) (*Client, *string) {
 	t.Cleanup(srv.Close)
 	c := NewClient(Settings{BaseURL: srv.URL, Username: "reseller-user", Password: "reseller-secret", Sandbox: true})
 	return c, &got
+}
+
+func TestProductionWireGuardResponses(t *testing.T) {
+	cfg := "[Interface]\nPrivateKey = " + testKey(3) + "\nAddress = 10.8.0.2/24\nDNS = 1.1.1.1, 8.8.8.8\n\n[Peer]\nPublicKey = " + testKey(4) + "\nEndpoint = 203.0.113.10:51820\nAllowedIPs = 0.0.0.0/0, ::/0\nPersistentKeepalive = 25\n"
+	var gotGet string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body := string(b)
+		switch strings.TrimPrefix(r.URL.Path, "/") {
+		case "addWireGuardPeer":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": "success", "action": "addWireGuardPeer", "config_id": 17,
+			})
+		case "getWireGuardConfig":
+			gotGet = body
+			if !strings.Contains(body, "wireguardId=17") {
+				_ = json.NewEncoder(w).Encode(map[string]any{"result": "error", "message": "Missing required parameters"})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": "success", "action": "getWireGuardConfig", "wireguard_config": cfg,
+			})
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"result": "error", "action": "addWireGuardPeer",
+				"message": "You have reached the maximum limit of 1 WireGuard configurations for your account type (dialup).",
+			})
+		}
+	}))
+	defer srv.Close()
+	c := NewClient(Settings{BaseURL: srv.URL, Username: "reseller-user", Password: "reseller-secret", Sandbox: true})
+	peer, err := c.AddWireGuardPeer(context.Background(), "trial-user", 43)
+	if err != nil || peer.WireGuardID != "17" || peer.ClientIP != "" {
+		t.Fatalf("add %+v %v", peer, err)
+	}
+	m, err := c.GetWireGuardConfig(context.Background(), "trial-user", peer.WireGuardID)
+	if err != nil || m.Address != "10.8.0.2/32" || m.MTU != 1280 || m.Endpoint != "203.0.113.10:51820" || len(m.DNS) != 2 {
+		t.Fatalf("config %+v %v body=%s", m, err, gotGet)
+	}
+	if _, err := c.GetWireGuardConfig(context.Background(), "trial-user", ""); err == nil || !strings.Contains(err.Error(), "Missing required parameters") {
+		t.Fatalf("missing id: %v", err)
+	}
+	c.BaseURL = srv.URL
+	limitSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"result":  "error",
+			"message": "You have reached the maximum limit of 1 WireGuard configurations for your account type (dialup).",
+		})
+	}))
+	defer limitSrv.Close()
+	c.BaseURL = limitSrv.URL
+	_, err = c.AddWireGuardPeer(context.Background(), "trial-user", 43)
+	n, ok := upstreamPeerLimit(err)
+	if !ok || n != 1 || !strings.Contains(err.Error(), "maximum limit of 1") {
+		t.Fatalf("limit: %v %d %v", err, n, ok)
+	}
+}
+
+func TestSweepConfigs(t *testing.T) {
+	api := &fakeAPI{foundIDs: map[string]bool{"2": true, "5": true}, material: wireGuardMaterial{Address: "10.8.0.2/32"}}
+	hits, err := SweepConfigs(context.Background(), api, "trial-user", 1, 6, false, true)
+	if err != nil || len(hits) != 2 || hits[0].ID != "2" || hits[1].ID != "5" || hits[0].Deleted || api.peerDels != 0 {
+		t.Fatalf("dry-run %+v dels=%d %v", hits, api.peerDels, err)
+	}
+	hits, err = SweepConfigs(context.Background(), api, "trial-user", 1, 6, true, true)
+	if err != nil || len(hits) != 2 || !hits[0].Deleted || !hits[1].Deleted || len(api.deletedPeers) != 2 {
+		t.Fatalf("delete %+v peers=%v %v", hits, api.deletedPeers, err)
+	}
 }
 
 func TestMonthsAndSettings(t *testing.T) {

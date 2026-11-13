@@ -4,9 +4,11 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yuhai-vpn/server/internal/clock"
@@ -85,6 +87,8 @@ type Store interface {
 	DevicePeer(ctx context.Context, userID, deviceID int64) (openPeer, bool, error)
 	InsertPeer(ctx context.Context, p openPeer) error
 	RequestRelease(ctx context.Context, userID, deviceID int64) (openPeer, bool, error)
+	DeviceLimit(ctx context.Context, userID int64) (int, error)
+	OpenPeers(ctx context.Context, userID int64) ([]openPeer, error)
 }
 
 // Service 把宇海的开通、线路和连接对上批发 API。
@@ -94,6 +98,28 @@ type Service struct {
 	Store    Store
 	Clock    clock.Clock
 	Pepper   []byte
+
+	cacheMu       sync.Mutex
+	cachedServers []serverLine
+	cachedSandbox bool
+	hasCache      bool
+}
+
+const trialPeerLimitMessage = "试用仅支持 1 台设备同时在线，请先在另一台设备断开"
+
+type requestIDKey struct{}
+
+// WithRequestID 把网关的 request_id 放进上下文，连接失败日志只带这个编号。
+func WithRequestID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+func requestIDFrom(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	return id
 }
 
 func (s *Service) now() time.Time {
@@ -327,7 +353,15 @@ func (s *Service) Lines(ctx context.Context, userID int64) ([]Line, error) {
 	}
 	servers, err := s.API.ListServers(ctx)
 	if err != nil {
-		return nil, httpx.NewError(httpx.ErrNodeUnavailable, "批发线路暂时不可用")
+		if cached, ok := s.cachedLines(); ok {
+			s.warnUpstream(ctx, "worldvpn lines upstream", "listServers", err)
+			servers = cached
+		} else {
+			s.warnUpstream(ctx, "worldvpn lines upstream", "listServers", err)
+			return nil, httpx.NewError(httpx.ErrNodeUnavailable, "批发线路暂时不可用")
+		}
+	} else {
+		s.storeLines(servers)
 	}
 	access, err := s.Store.LineAccess(ctx, userID, s.now(), s.Settings.Sandbox)
 	if err != nil {
@@ -386,33 +420,27 @@ func (s *Service) Connect(ctx context.Context, userID, deviceID int64, lineID st
 		return out, err
 	} else if found {
 		if err := s.API.DeleteWireGuardPeer(ctx, acc.Username, existing.WireGuardID, existing.Sandbox); err != nil && !alreadyGone(err) {
-			return out, httpx.NewError(httpx.ErrNodeUnavailable, "上一条线路还没释放")
-		}
-		if err := s.Store.MarkPeerReleased(ctx, existing.ID); err != nil {
+			s.warnUpstream(ctx, "worldvpn connect upstream", "deleteWireGuardPeer", err, acc.Username, acc.Password)
+			if _, _, relErr := s.Store.RequestRelease(ctx, userID, deviceID); relErr != nil {
+				return out, relErr
+			}
+		} else if err := s.Store.MarkPeerReleased(ctx, existing.ID); err != nil {
 			return out, err
 		}
+	}
+	capN, err := s.peerCap(ctx, acc)
+	if err != nil {
+		return out, err
 	}
 	n, err := s.Store.ActivePeers(ctx, userID, deviceID)
 	if err != nil {
 		return out, err
 	}
-	if n >= MaxActivePeersPerUser {
-		return out, httpx.NewError(httpx.ErrDeviceLimit, "同时在线设备已达 3 台上限")
+	if n >= capN {
+		return out, peerLimitError(acc.Source, capN)
 	}
-	created, err := s.API.AddWireGuardPeer(ctx, acc.Username, serverID)
+	material, err := s.openPeer(ctx, acc, userID, deviceID, serverID, false)
 	if err != nil {
-		return out, httpx.NewError(httpx.ErrNodeUnavailable, "批发线路暂时不可用")
-	}
-	material, err := s.API.GetWireGuardConfig(ctx, acc.Username, created.WireGuardID)
-	if err != nil {
-		_ = s.API.DeleteWireGuardPeer(ctx, acc.Username, created.WireGuardID, s.Settings.Sandbox)
-		return out, httpx.NewError(httpx.ErrNodeUnavailable, "批发线路暂时不可用")
-	}
-	if err := s.Store.InsertPeer(ctx, openPeer{
-		UserID: userID, DeviceID: deviceID, ServerID: serverID,
-		WireGuardID: created.WireGuardID, Sandbox: s.Settings.Sandbox,
-	}); err != nil {
-		_ = s.API.DeleteWireGuardPeer(ctx, acc.Username, created.WireGuardID, s.Settings.Sandbox)
 		return out, err
 	}
 	exp := now.Add(materialLifetime).UTC().Truncate(time.Second)
@@ -482,6 +510,144 @@ func parseLineID(id string) (int64, error) {
 		return 0, httpx.NewError(httpx.ErrBadRequest, "线路编号无效")
 	}
 	return n, nil
+}
+
+func (s *Service) openPeer(ctx context.Context, acc account, userID, deviceID, serverID int64, retried bool) (wireGuardMaterial, error) {
+	created, err := s.API.AddWireGuardPeer(ctx, acc.Username, serverID)
+	if err != nil {
+		if n, ok := upstreamPeerLimit(err); ok {
+			s.warnUpstream(ctx, "worldvpn connect upstream", "addWireGuardPeer", err, acc.Username, acc.Password)
+			if !retried && s.releaseStuck(ctx, acc) {
+				return s.openPeer(ctx, acc, userID, deviceID, serverID, true)
+			}
+			return wireGuardMaterial{}, peerLimitError(acc.Source, n)
+		}
+		s.warnUpstream(ctx, "worldvpn connect upstream", "addWireGuardPeer", err, acc.Username, acc.Password)
+		return wireGuardMaterial{}, httpx.NewError(httpx.ErrNodeUnavailable, "批发线路暂时不可用")
+	}
+	if created.WireGuardID == "" {
+		return wireGuardMaterial{}, httpx.NewError(httpx.ErrNodeUnavailable, "批发线路暂时不可用")
+	}
+	material, err := s.API.GetWireGuardConfig(ctx, acc.Username, created.WireGuardID)
+	if err != nil {
+		s.warnUpstream(ctx, "worldvpn connect upstream", "getWireGuardConfig", err, acc.Username, acc.Password)
+		s.abandonUpstreamPeer(ctx, acc, userID, deviceID, serverID, created.WireGuardID)
+		return wireGuardMaterial{}, httpx.NewError(httpx.ErrNodeUnavailable, "批发线路暂时不可用")
+	}
+	if err := s.Store.InsertPeer(ctx, openPeer{
+		UserID: userID, DeviceID: deviceID, ServerID: serverID,
+		WireGuardID: created.WireGuardID, Sandbox: s.Settings.Sandbox,
+	}); err != nil {
+		s.abandonUpstreamPeer(ctx, acc, userID, deviceID, serverID, created.WireGuardID)
+		return wireGuardMaterial{}, err
+	}
+	return material, nil
+}
+
+func (s *Service) abandonUpstreamPeer(ctx context.Context, acc account, userID, deviceID, serverID int64, wireguardID string) {
+	if wireguardID == "" {
+		return
+	}
+	if err := s.API.DeleteWireGuardPeer(ctx, acc.Username, wireguardID, s.Settings.Sandbox); err != nil && !alreadyGone(err) {
+		s.warnUpstream(ctx, "worldvpn connect upstream", "deleteWireGuardPeer", err, acc.Username, acc.Password)
+		if insErr := s.Store.InsertPeer(ctx, openPeer{
+			UserID: userID, DeviceID: deviceID, ServerID: serverID,
+			WireGuardID: wireguardID, Sandbox: s.Settings.Sandbox, Releasing: true,
+		}); insErr != nil {
+			s.warnUpstream(ctx, "worldvpn connect upstream", "insertPeer", insErr)
+		}
+	}
+}
+
+func (s *Service) releaseStuck(ctx context.Context, acc account) bool {
+	peers, err := s.Store.OpenPeers(ctx, acc.UserID)
+	if err != nil || len(peers) == 0 {
+		return false
+	}
+	released := false
+	for _, p := range peers {
+		if !p.Releasing {
+			continue
+		}
+		if err := s.API.DeleteWireGuardPeer(ctx, acc.Username, p.WireGuardID, p.Sandbox); err != nil && !alreadyGone(err) {
+			s.warnUpstream(ctx, "worldvpn connect upstream", "deleteWireGuardPeer", err, acc.Username, acc.Password)
+			continue
+		}
+		if err := s.Store.MarkPeerReleased(ctx, p.ID); err != nil {
+			continue
+		}
+		released = true
+	}
+	return released
+}
+
+func (s *Service) peerCap(ctx context.Context, acc account) (int, error) {
+	if acc.Source == "TRIAL" {
+		return 1, nil
+	}
+	return s.Store.DeviceLimit(ctx, acc.UserID)
+}
+
+func peerLimitError(source string, n int) error {
+	if source == "TRIAL" {
+		return httpx.NewError(httpx.ErrDeviceLimit, trialPeerLimitMessage)
+	}
+	if n <= 0 {
+		n = MaxActivePeersPerUser
+	}
+	return httpx.NewError(httpx.ErrDeviceLimit, "同时在线设备已达 "+itoa(int64(n))+" 台上限")
+}
+
+var upstreamLimitPattern = regexp.MustCompile(`(?i)maximum limit of\s+(\d+)`)
+
+func upstreamPeerLimit(err error) (int, bool) {
+	var api *APIError
+	if !errors.As(err, &api) {
+		return 0, false
+	}
+	match := upstreamLimitPattern.FindStringSubmatch(api.Message)
+	if match == nil {
+		return 0, false
+	}
+	n, convErr := strconv.Atoi(match[1])
+	if convErr != nil || n <= 0 {
+		return 0, false
+	}
+	return n, true
+}
+
+func (s *Service) storeLines(servers []serverLine) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	s.cachedServers = append([]serverLine(nil), servers...)
+	s.cachedSandbox = s.Settings.Sandbox
+	s.hasCache = true
+}
+
+func (s *Service) cachedLines() ([]serverLine, bool) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if !s.hasCache || s.cachedSandbox != s.Settings.Sandbox {
+		return nil, false
+	}
+	return append([]serverLine(nil), s.cachedServers...), true
+}
+
+func (s *Service) warnUpstream(ctx context.Context, logMsg, action string, err error, secrets ...string) {
+	msg := "上游请求失败"
+	var api *APIError
+	if errors.As(err, &api) && api.Message != "" {
+		msg = api.Message
+	}
+	for _, secret := range append([]string{s.Settings.Username, s.Settings.Password}, secrets...) {
+		if secret != "" {
+			msg = strings.ReplaceAll(msg, secret, "[redacted]")
+		}
+	}
+	if len(msg) > 200 {
+		msg = msg[:200]
+	}
+	slog.WarnContext(ctx, logMsg, "action", action, "msg", msg, "request_id", requestIDFrom(ctx))
 }
 
 func alreadyExists(err error) bool {

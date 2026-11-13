@@ -2,6 +2,7 @@ package worldvpn
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -166,17 +167,13 @@ func (c *Client) AddWireGuardPeer(ctx context.Context, username string, serverID
 	if err != nil {
 		return peerCreated{}, err
 	}
-	id, err := requiredString(body, "wireguardId")
-	if err != nil {
-		if n, ok := asID(body["wireguardId"]); ok {
-			id = itoa(n)
-		} else {
-			return peerCreated{}, err
-		}
+	id, ok := peerConfigID(body)
+	if !ok {
+		return peerCreated{}, &APIError{Action: actionOr(body, "addWireGuardPeer"), Message: "缺少 config_id"}
 	}
-	ip, err := requiredString(body, "clientIp")
-	if err != nil {
-		return peerCreated{}, err
+	ip, _ := flexString(body["clientIp"])
+	if ip == "" {
+		ip, _ = flexString(firstFolded(body, "client_ip"))
 	}
 	server, _ := body["server"].(map[string]any)
 	name, _ := server["name"].(string)
@@ -194,7 +191,7 @@ func (c *Client) GetWireGuardConfig(ctx context.Context, username, wireguardID s
 	if err != nil {
 		return wireGuardMaterial{}, err
 	}
-	text, err := requiredString(body, "config")
+	text, err := wireGuardConfigText(body)
 	if err != nil {
 		return wireGuardMaterial{}, err
 	}
@@ -306,6 +303,78 @@ func requiredString(body map[string]any, key string) (string, error) {
 
 func itoa(n int64) string {
 	return fmt.Sprintf("%d", n)
+}
+
+func peerConfigID(body map[string]any) (string, bool) {
+	keys := []string{"config_id", "wireguardId", "wireguard_id", "id"}
+	if id, ok := idByKeys(body, keys); ok {
+		return id, true
+	}
+	folded := make(map[string]any, len(body))
+	for k, v := range body {
+		folded[strings.ToLower(k)] = v
+	}
+	return idByKeys(folded, []string{"config_id", "wireguardid", "wireguard_id", "id"})
+}
+
+func idByKeys(body map[string]any, keys []string) (string, bool) {
+	for _, key := range keys {
+		v, ok := body[key]
+		if !ok || v == nil {
+			continue
+		}
+		if id, ok := asID(v); ok {
+			return itoa(id), true
+		}
+	}
+	return "", false
+}
+
+func firstFolded(body map[string]any, key string) any {
+	want := strings.ToLower(key)
+	for k, v := range body {
+		if strings.ToLower(k) == want {
+			return v
+		}
+	}
+	return nil
+}
+
+func wireGuardConfigText(body map[string]any) (string, error) {
+	if s, ok := configTextByKeys(body, []string{"wireguard_config", "config", "configuration"}); ok {
+		return s, nil
+	}
+	if s, ok := configTextByKeys(body, []string{"wireguard_config_base64", "config_base64", "configBase64"}); ok {
+		return s, nil
+	}
+	return "", &APIError{Action: actionOr(body, "getWireGuardConfig"), Message: "缺少 wireguard_config"}
+}
+
+func configTextByKeys(body map[string]any, keys []string) (string, bool) {
+	if s := lookupScalar(body, keys); s != "" {
+		if text, ok := decodeConfigText(s); ok {
+			return text, true
+		}
+	}
+	return "", false
+}
+
+func decodeConfigText(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if strings.Contains(strings.ToLower(s), "[interface]") {
+		return s, true
+	}
+	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding} {
+		raw, err := enc.DecodeString(s)
+		if err != nil || len(raw) == 0 || len(raw) > 1<<20 {
+			continue
+		}
+		text := strings.TrimSpace(string(raw))
+		if strings.Contains(strings.ToLower(text), "[interface]") {
+			return text, true
+		}
+	}
+	return "", false
 }
 
 // 文档（https://www.worldvpn.net/worldvpn-api）写的是 vpnUsername / vpnPassword。

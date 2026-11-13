@@ -17,7 +17,7 @@ package worldvpn
 //   - 旧文案（vpnkeys.com 镜像）写的是按用户套餐：budget 3 条、unlimited 5 条，
 //     也是按 VPN 用户而不是按批发登录全局计数。
 //
-// mode=test 不会在真实节点建 peer，所以无法靠沙箱把第 4 条打到限额上做实证。
-// 上线前要用一个真实 vpnUsername 确认：第 4 次 addWireGuardPeer 拒绝的是这个
-// 用户，而不是整个批发账号下的第 4 条。在此之前代码按每个用户 3 条执行。
+// 2026-11-13 实测：试用（dialup）账号上游拒绝第 2 条，原文是
+// "maximum limit of 1 WireGuard configurations for your account type (dialup)"。
+// 试用在连接时按 1 条执行。付费按订阅里的 device_limit，读不到时用这里的 3。
 const MaxActivePeersPerUser = 3

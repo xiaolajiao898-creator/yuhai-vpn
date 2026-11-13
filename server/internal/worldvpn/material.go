@@ -92,11 +92,12 @@ func parseWireGuardConfig(text string) (wireGuardMaterial, error) {
 	if m.PrivateKey == m.ServerPublicKey || !wgKey(m.PrivateKey) || !wgKey(m.ServerPublicKey) {
 		return wireGuardMaterial{}, errConfig
 	}
-	prefix, err := netip.ParsePrefix(m.Address)
-	if err != nil || !prefix.IsValid() || prefix.Bits() != 32 || !prefix.Addr().Is4() || !prefix.Addr().IsPrivate() {
+	// 上游把 Address 写成 10.x.x.x/24。客户端只接受 /32，这里收成 <ip>/32。
+	addr, bits, ok := parseWGAddress(m.Address)
+	if !ok || bits < 8 || bits > 32 || !addr.Is4() || !addr.IsPrivate() {
 		return wireGuardMaterial{}, errConfig
 	}
-	m.Address = prefix.String()
+	m.Address = netip.PrefixFrom(addr, 32).String()
 	host, port, err := net.SplitHostPort(m.Endpoint)
 	if err != nil || !validEndpointHost(host) {
 		return wireGuardMaterial{}, errConfig
@@ -121,6 +122,23 @@ func parseWireGuardConfig(text string) (wireGuardMaterial, error) {
 }
 
 var errConfig = &APIError{Action: "getWireGuardConfig", Message: "配置内容不完整"}
+
+func parseWGAddress(raw string) (netip.Addr, int, bool) {
+	raw = strings.TrimSpace(strings.Split(raw, ",")[0])
+	addrPart, bitsPart, ok := strings.Cut(raw, "/")
+	if !ok {
+		return netip.Addr{}, 0, false
+	}
+	addr, err := netip.ParseAddr(strings.TrimSpace(addrPart))
+	if err != nil || !addr.IsValid() {
+		return netip.Addr{}, 0, false
+	}
+	bits, err := strconv.Atoi(strings.TrimSpace(bitsPart))
+	if err != nil {
+		return netip.Addr{}, 0, false
+	}
+	return addr, bits, true
+}
 
 func splitDNS(raw string) []string {
 	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == ';' })
