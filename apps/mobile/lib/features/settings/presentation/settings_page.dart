@@ -7,6 +7,8 @@ import '../../../app/providers.dart';
 import '../../../app/router.dart';
 import '../../../app/theme/tokens.dart';
 import '../../../core/support_config.dart';
+import '../../connection/presentation/connection_controller.dart';
+import '../../update/update_flow.dart';
 import '../../account/presentation/support_sheet.dart';
 import '../../account/data/account_api.dart';
 import '../../home/data/me_api.dart';
@@ -125,6 +127,12 @@ class SettingsPage extends ConsumerWidget {
                       icon: Icons.language_outlined,
                       title: '语言',
                       subtitle: '简体中文'),
+                  const Divider(height: 1),
+                  SettingsRow(
+                      icon: Icons.system_update_alt,
+                      title: '检测更新',
+                      subtitle: '查看是否有新的安装包',
+                      onTap: () => checkForUpdate(context, engine: ref.read(vpnEngineProvider), manual: true)),
                   const Divider(height: 1),
                   SettingsRow(
                       icon: Icons.info_outline,

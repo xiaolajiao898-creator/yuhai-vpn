@@ -5,11 +5,8 @@
   var ua = navigator.userAgent || '';
   var android = /Android/i.test(ua);
   var windows = /Windows NT/i.test(ua);
-  var direct = android
-    ? '/download/yuhai-vpn-candidate-0928.apk'
-    : windows
-      ? '/download/YuhaiVPN-Windows-x64-candidate.exe'
-      : '';
+  var platform = android ? 'android' : windows ? 'windows' : '';
+  var direct = platform ? '/download/latest/' + platform : '';
   if (direct) {
     var primary = document.getElementById('primary-download');
     var navDl = document.getElementById('nav-download');
@@ -18,6 +15,19 @@
       primary.textContent = android ? '下载安卓版' : '下载 Windows 版';
     }
     if (navDl) navDl.href = direct;
+    fetch('https://api.yhvpn.io/v1/app/latest?platform=' + platform)
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (body) {
+        var data = body && (body.data || body);
+        if (!data || !data.version) return;
+        var mb = data.size ? Math.max(1, Math.round(data.size / 1048576)) + ' MB' : '';
+        var text = data.version + (mb ? ' · ' + mb : '');
+        var meta = document.getElementById('dl-' + platform + '-meta');
+        if (meta) meta.textContent = text;
+        var hash = document.getElementById('h-' + platform);
+        if (hash && data.sha256) hash.textContent = data.sha256;
+      })
+      .catch(function () {});
   }
   var mq = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   var reduce = !!(mq && mq.matches);

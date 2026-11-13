@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/platform/platform_name.dart';
 import '../features/nodes/data/node_selection.dart';
+import '../features/connection/presentation/connection_controller.dart';
+import '../features/update/update_flow.dart';
 import 'desktop_frame.dart';
 import 'router.dart';
 import 'theme/theme.dart';
@@ -26,7 +28,10 @@ class YuhaiApp extends ConsumerWidget {
         value: SystemUiOverlayStyle.dark,
         child: DesktopFrame(
           enabled: !kIsWeb && isDesktop,
-          child: child ?? const SizedBox.shrink(),
+          child: UpdateScheduler(
+            engine: ref.watch(vpnEngineProvider),
+            child: child ?? const SizedBox.shrink(),
+          ),
         ),
       ),
     );

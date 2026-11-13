@@ -23,6 +23,8 @@ class MainActivity : FlutterFragmentActivity() {
             override fun onCancel(arguments: Any?) { channel.cancelSink(mine); mine = null }
         })
         // 敏感页面（账户密钥备份）期间禁止截屏/录屏，并在最近任务里隐藏缩略图。
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "yuhai/update")
+            .setMethodCallHandler(UpdateInstaller(this))
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "yuhai/window").setMethodCallHandler { call, result ->
             when (call.method) {
                 "setSecure" -> {

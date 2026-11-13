@@ -4,6 +4,41 @@
  */
 
 export interface paths {
+    "/app/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 查看已发布的安装包，含哪一份是当前下载 */
+        get: operations["listAppReleases"];
+        put?: never;
+        /** 构建流水线用 Authorization Bearer 令牌发布，并把它设为当前下载。不走管理员会话。 */
+        post: operations["publishAppRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/app/releases/{id}/current": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 把某一份已发布的安装包重新设为当前下载 */
+        post: operations["rollbackAppRelease"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -2693,6 +2728,67 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    listAppReleases: {
+        parameters: {
+            query?: {
+                platform?: "windows" | "android";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 安装包列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    publishAppRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已发布 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    rollbackAppRelease: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已切回 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
     adminLogin: {
         parameters: {
             query?: never;

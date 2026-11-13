@@ -1,0 +1,97 @@
+name: publish-release
+
+# 不在普通 push 或 pull request 上发布。只有打版本标签，或有人在受保护环境里手动批准，才会把安装包登记为当前下载。
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: windows 或 android
+        required: true
+        type: choice
+        options: [windows, android]
+      version:
+        description: 例如 1.1.0
+        required: true
+        type: string
+      build:
+        description: 构建号
+        required: true
+        type: string
+      url:
+        description: https://yhvpn.io 或 https://api.yhvpn.io 上的安装包地址
+        required: true
+        type: string
+      sha256:
+        description: 安装包 SHA-256
+        required: true
+        type: string
+      size:
+        description: 字节数
+        required: true
+        type: string
+      min_supported_build:
+        description: 低于这个构建号必须升级
+        required: true
+        type: string
+        default: "1"
+      notes:
+        description: 更新说明
+        required: false
+        type: string
+        default: ""
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish current download
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Publish to the admin API
+        env:
+          APP_RELEASE_TOKEN: ${{ secrets.APP_RELEASE_TOKEN }}
+          RELEASE_API: ${{ secrets.APP_RELEASE_API }}
+          PLATFORM: ${{ inputs.platform }}
+          VERSION: ${{ inputs.version }}
+          BUILD: ${{ inputs.build }}
+          URL: ${{ inputs.url }}
+          SHA256: ${{ inputs.sha256 }}
+          SIZE: ${{ inputs.size }}
+          MIN_BUILD: ${{ inputs.min_supported_build }}
+          NOTES: ${{ inputs.notes }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APP_RELEASE_TOKEN}" ] || [ -z "${RELEASE_API}" ]; then
+            echo "APP_RELEASE_TOKEN and APP_RELEASE_API must be GitHub secrets"
+            exit 1
+          fi
+          case "${RELEASE_API}" in
+            https://api.yhvpn.io|https://api.yhvpn.io/*|https://admin.yhvpn.io|https://admin.yhvpn.io/*) ;;
+            *) echo "release API host is not allowed"; exit 1 ;;
+          esac
+          python3 - <<'PY'
+          import json, os, urllib.request
+          body = {
+            "platform": os.environ["PLATFORM"],
+            "version": os.environ["VERSION"],
+            "build": int(os.environ["BUILD"]),
+            "url": os.environ["URL"],
+            "sha256": os.environ["SHA256"],
+            "size": int(os.environ["SIZE"]),
+            "min_supported_build": int(os.environ["MIN_BUILD"] or "1"),
+            "notes": os.environ.get("NOTES") or "",
+          }
+          req = urllib.request.Request(
+            os.environ["RELEASE_API"].rstrip("/") + "/admin/v1/app/releases",
+            data=json.dumps(body).encode(),
+            headers={"Authorization": "Bearer " + os.environ["APP_RELEASE_TOKEN"], "Content-Type": "application/json"},
+            method="POST",
+          )
+          with urllib.request.urlopen(req) as res:
+            print(res.status)
+            print(res.read().decode()[:200])
+          PY

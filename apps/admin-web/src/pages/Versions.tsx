@@ -7,6 +7,7 @@ import type {Approval, Page, ReviewSource} from '../api/review';
 import {sameVersionFields, VersionWriteError, type AppVersion, type PreparedWrite, type SaveDraft, type VersionFields, type VersionQuery, type VersionSource} from '../api/versions';
 import {boundedTotal} from './review-model';
 import {draftProblem, emptyDraft, normalizeDraft, platformLabels, versionBlock, versionStatusLabels} from './versions-model';
+import {AppReleases} from './AppReleases';
 
 type SaveConfirmation = {kind:'save'; payload:SaveDraft; previous?:AppVersion; prepared:PreparedWrite<AppVersion>};
 type PublishConfirmation = {kind:'publish'; version:AppVersion; reason:string; prepared:PreparedWrite<Approval>};
@@ -135,6 +136,7 @@ export function VersionsPage({source,reviews,session,demo=false}:{source:Version
   const publishBlock=detail?versionBlock(detail,session,'publish'):'';
   const pending=detail?.pending_approval_id??detail?.approval_id;
   return <>
+    <AppReleases/>
     <div className="page-intro"><div><div className="eyebrow">APP RELEASES</div><h1>版本管理</h1><p>准备版本资料，让每次更新都有清楚的来路。</p></div><div className="version-top-actions"><Button icon={<ReloadOutlined/>} loading={listBusy} onClick={()=>setRefresh(v=>v+1)}>刷新</Button><Button type="primary" icon={<PlusOutlined/>} disabled={!canDraft||!!recovery||busy} onClick={()=>open('new')}>新建草稿</Button></div></div>
     <div className="version-guide"><FileProtectOutlined/><div><strong>草稿 → 发布申请 → 双人审批</strong><p>填写已有安装包的 HTTPS 域名链接和校验信息。这里管理版本资料，不上传或托管安装包。</p></div></div>
     {recovery&&!selected&&<Alert className="spaced" type="warning" showIcon message="上一笔操作的结果尚待核实" description="不会自动重新提交，请先查询最新资料。" action={<Button onClick={()=>setSelected(recoverySelection)}>核实结果</Button>}/>}
