@@ -291,7 +291,8 @@ class _GalleryApi extends PreviewApi {
       bool sign = false,
       String? idempotencyKey,
       bool retrying = false,
-      Session? expectedSession}) async {
+      Session? expectedSession,
+      Duration? timeout}) async {
     final now = DateTime.now().toUtc();
     String at(int days) => now.add(Duration(days: days)).toIso8601String();
     if (method == 'GET' && path == '/v1/me') {
