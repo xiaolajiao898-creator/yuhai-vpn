@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -188,6 +189,186 @@ func TestClientWireGuardRoundTrip(t *testing.T) {
 	if err := c.DeleteWireGuardPeer(context.Background(), "yh1", "123", true); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestResponseFixtures(t *testing.T) {
+	type accountCall struct {
+		file    string
+		user    string
+		pass    string
+		request []string
+		call    func(*Client) (vpnAccount, error)
+	}
+	accounts := []accountCall{
+		{
+			file: "testdata/get_trial_documented.json", user: "sampleUsername", pass: "samplePassword",
+			request: []string{"email=trial-user%40users.invalid"},
+			call: func(c *Client) (vpnAccount, error) {
+				return c.GetTrial(context.Background(), "trial-user@users.invalid")
+			},
+		},
+		{
+			file: "testdata/get_trial_username.json", user: "sampleUsername", pass: "samplePassword",
+			call: func(c *Client) (vpnAccount, error) {
+				return c.GetTrial(context.Background(), "trial-user@users.invalid")
+			},
+		},
+		{
+			file: "testdata/get_trial_nested_username.json", user: "sampleUsername", pass: "samplePassword",
+			call: func(c *Client) (vpnAccount, error) {
+				return c.GetTrial(context.Background(), "trial-user@users.invalid")
+			},
+		},
+		{
+			file: "testdata/add_vpn_documented.json", user: "sampleUsername", pass: "samplePassword",
+			request: []string{"vpnUsername=yh8302571644", "vpnPassword=client-pass", "period=1"},
+			call: func(c *Client) (vpnAccount, error) {
+				return c.AddVPN(context.Background(), "yh8302571644", "client-pass", 1)
+			},
+		},
+		{
+			file: "testdata/add_vpn_username.json", user: "sampleUsername", pass: "samplePassword",
+			call: func(c *Client) (vpnAccount, error) {
+				return c.AddVPN(context.Background(), "yh8302571644", "client-pass", 1)
+			},
+		},
+		{
+			file: "testdata/add_vpn_both_pairs.json", user: "sampleUsername", pass: "samplePassword",
+			call: func(c *Client) (vpnAccount, error) {
+				return c.AddVPN(context.Background(), "yh8302571644", "client-pass", 1)
+			},
+		},
+	}
+	for _, tc := range accounts {
+		t.Run(tc.file, func(t *testing.T) {
+			c, got := fixtureClient(t, tc.file)
+			acc, err := tc.call(c)
+			if err != nil || acc.Username != tc.user || acc.Password != tc.pass {
+				t.Fatalf("account %+v %v", acc, err)
+			}
+			for _, want := range tc.request {
+				if !strings.Contains(*got, want) {
+					t.Fatalf("request missing %s: %s", want, *got)
+				}
+			}
+		})
+	}
+
+	lists := []struct {
+		file string
+		want [][3]string
+	}{
+		{"testdata/get_accounts_documented.json", [][3]string{{"1", "demotestingvpn", "2026-07-19"}, {"89", "sampleUsername", "2026-12-01"}}},
+		{"testdata/get_accounts_string_and_number.json", [][3]string{{"1", "demotestingvpn", "2026-07-19"}, {"2", "sampleUsername", "1784419200"}, {"15", "later-user", "2026-08-01 00:00:00"}}},
+		{"testdata/get_accounts_objects.json", [][3]string{{"15", "demotestingvpn", "2026-07-19"}, {"16", "sampleUsername", "2026-08-01"}}},
+		{"testdata/get_accounts_php_map.json", [][3]string{{"1", "demotestingvpn", "2026-07-19"}, {"2", "later-user", "2026-08-01"}}},
+		{"testdata/get_accounts_encoded.json", [][3]string{{"43", "demotestingvpn", "2026-07-19"}}},
+	}
+	for _, tc := range lists {
+		t.Run(tc.file, func(t *testing.T) {
+			c, _ := fixtureClient(t, tc.file)
+			rows, err := c.GetAccounts(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != len(tc.want) {
+				t.Fatalf("rows %+v", rows)
+			}
+			for i := range tc.want {
+				if rows[i] != tc.want[i] {
+					t.Fatalf("row %d %+v", i, rows)
+				}
+				for _, cell := range rows[i] {
+					if strings.Contains(cell, "samplePassword") {
+						t.Fatalf("password leaked into account row %+v", rows[i])
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestCredentialFieldVariants(t *testing.T) {
+	cases := []struct {
+		name string
+		body map[string]any
+		user string
+		pass string
+		err  string
+	}{
+		{"case folded", map[string]any{"status": "success", "Username": "sampleUsername", "Password": "samplePassword"}, "sampleUsername", "samplePassword", ""},
+		{"mixed pair", map[string]any{"result": "success", "vpnUsername": "sampleUsername", "password": "samplePassword"}, "sampleUsername", "samplePassword", ""},
+		{"numeric password", map[string]any{"status": "success", "username": "sampleUsername", "password": json.Number("48291")}, "sampleUsername", "48291", ""},
+		{"password only", map[string]any{"status": "success", "password": "samplePassword"}, "", "", "缺少 vpnUsername"},
+		{"user only", map[string]any{"status": "success", "username": "sampleUsername"}, "", "", "缺少 vpnPassword"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := jsonClient(t, tc.body)
+			acc, err := c.GetTrial(context.Background(), "trial-user@users.invalid")
+			if tc.err != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.err) {
+					t.Fatalf("got %+v %v", acc, err)
+				}
+				return
+			}
+			if err != nil || acc.Username != tc.user || acc.Password != tc.pass {
+				t.Fatalf("got %+v %v", acc, err)
+			}
+		})
+	}
+}
+
+func TestGetAccountsUseNumberAndPositionalObject(t *testing.T) {
+	raw, err := os.ReadFile("testdata/get_accounts_documented.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.UseNumber()
+	var body map[string]any
+	if err := dec.Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := parseAccounts(body["accounts"])
+	if err != nil || len(rows) != 2 || rows[0] != [3]string{"1", "demotestingvpn", "2026-07-19"} || rows[1][0] != "89" {
+		t.Fatalf("%+v %v", rows, err)
+	}
+	rows, err = parseAccounts(map[string]any{"0": json.Number("7"), "1": "demotestingvpn", "2": "2026-07-19"})
+	if err != nil || len(rows) != 1 || rows[0] != [3]string{"7", "demotestingvpn", "2026-07-19"} {
+		t.Fatalf("positional %+v %v", rows, err)
+	}
+	if _, err := parseAccounts([]any{[]any{"not-an-id", "demotestingvpn", "2026-07-19"}}); err == nil || !strings.Contains(err.Error(), "账号编号不对") {
+		t.Fatal(err)
+	}
+}
+
+func fixtureClient(t *testing.T, file string) (*Client, *string) {
+	t.Helper()
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jsonClient(t, json.RawMessage(raw))
+}
+
+func jsonClient(t *testing.T, body any) (*Client, *string) {
+	t.Helper()
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got = string(b)
+		w.Header().Set("Content-Type", "application/json")
+		switch doc := body.(type) {
+		case json.RawMessage:
+			_, _ = w.Write(doc)
+		default:
+			_ = json.NewEncoder(w).Encode(doc)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	c := NewClient(Settings{BaseURL: srv.URL, Username: "reseller-user", Password: "reseller-secret", Sandbox: true})
+	return c, &got
 }
 
 func TestMonthsAndSettings(t *testing.T) {
