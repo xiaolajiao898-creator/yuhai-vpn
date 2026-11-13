@@ -1,0 +1,6 @@
+{
+  "action": "createVPN",
+  "result": "success",
+  "username": "sampleUsername",
+  "password": "samplePassword"
+}
