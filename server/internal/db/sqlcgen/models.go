@@ -305,6 +305,22 @@ type ApiIdempotency struct {
 	CreatedAt   time.Time
 }
 
+type AppRelease struct {
+	ID                int64
+	Platform          string
+	Version           string
+	Build             int32
+	Url               string
+	Sha256            string
+	SizeBytes         int64
+	ReleasedAt        time.Time
+	MinSupportedBuild int32
+	Notes             string
+	CertSha256        pgtype.Text
+	IsCurrent         bool
+	CreatedAt         time.Time
+}
+
 type AppVersion struct {
 	ID               int64
 	Platform         string
